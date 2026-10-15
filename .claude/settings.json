@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "deny": [
+      "Write(./.env)",
+      "Write(./.env.*)",
+      "Edit(./.env)",
+      "Edit(./.env.*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/guard.py"
+          }
+        ]
+      }
+    ]
+  }
+}

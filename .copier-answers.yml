@@ -1,0 +1,55 @@
+# 建仓时的模板来源与全部回答，由 copier 自动写入 —— **请勿手工编辑**。
+#
+# 为什么需要它：平台仓的模板会持续修 bug（如 2026-07-30 新增的 tag 版本门禁）。没有本文件时，
+# 模板改动只对**将来新建**的仓生效，已建好的仓永远吃不到 —— 那等于每修一次模板都要靠人肉通知
+# 各仓 owner 手工贴代码。有了本文件，本仓就能把「当初是用什么参数建的」交还给 copier，
+# 一条命令重新渲染出最新模板：
+#
+#     git status                 # 必须干净：下面这条会覆盖模板管辖的文件
+#     uvx copier copy --trust --overwrite --defaults -x 'src/**' -x 'tests/**' -x pyproject.toml -x uv.lock -x CLAUDE.md -x AGENTS.md -x README.md -x 'docs/**' <平台仓路径>/templates/module .
+#     git diff                   # 只剩 .gitlab-ci.yml：把你自己加的 job 合回去
+#
+# 上面那条**必须写成一行**：拆成多行用 `\` 续行是 bash 写法，PowerShell 不认 `\`，会把它当成
+# 一个字面参数传进去并报 "Expected at least 2 positional arguments, got ['\\']"（Windows 上必踩）。
+#
+# **在本业务仓目录下执行**（不是在平台仓）：平台仓只是模板的来源，末尾的 `.` 才是操作目标。
+# 用 `uvx copier` 而不是 `uv run copier`：copier 是**平台仓**的开发依赖，本仓环境里没有，
+# `uv run copier` 会报 "Failed to spawn: copier / program not found"，还会顺手给本仓建 .venv。
+# uvx 拉不到 copier（内网镜像不通）时退回 `uv run --project <平台仓路径> copier copy …` ——
+# CWD 仍是本仓，--project 只决定「去哪找 copier 这个程序」。
+# 上面带了 `--defaults`：它对**有默认值**的问题取默认值不问，而下面记录的答案正好补齐了
+# 没有默认值的那些（module_code 等），所以能全程不问。反之，**还没有本文件**的仓第一次同步
+# 要么去掉 `--defaults` 让它逐项问，要么用 `--data module_code=… --data package_name=…` 给全。
+#
+# **那串 `-x` 一个都不能省**，尤其 `src/**` 与 `tests/**`：`--overwrite` 会把**模板生成过的每一个
+# 文件**整份换成模板的样子 —— 包括 src/<你的包>/module.py 与 tests/test_module.py，也就是你的模块
+# 主文件和测试。你**已经提交**的定制照样会被冲掉（工作区干净只保证这件事能在 git diff 里被看见，
+# 不保证不发生）。实测不加 -x 时，业务依赖、自定义 CI job、CLAUDE.md 规则、module.py 的全部业务
+# 逻辑、tests 里的用例统统消失。判据：**模板生成过、而你后来改过的文件都要排除**；你新增的文件
+# （模板里没有的）不受影响。被排除的文件不会更新，所以 SDK 依赖下界需手工改一行 —— 有意的取舍。
+#
+# **要显式写出 `<平台仓路径>`**：下面的 `_src_path` 记的是**建仓那个人机器上的**平台仓路径，
+# 换台机器多半不存在。显式给源即可绕开，且 copier 会顺带把 `_src_path` 更新成你这次用的路径。
+# （若 `_src_path` 恰好在你本机成立，`uvx copier recopy --trust --overwrite --defaults .`
+#   是等价的简写 —— 但它同样不带 `-x`，会覆盖下面说的那些文件，慎用。）
+# `--defaults` 让 copier 复用下面记录的答案、不再逐项追问；`--trust` 是模板含 _message_* 钩子所需。
+#
+# 覆盖范围：模板生成过的文件（.gitlab-ci.yml / pyproject.toml / README.md / CLAUDE.md / .githooks/
+# 等）都在管辖内，上面那串 `-x` 保护了其中最常被定制的几个，剩下的 .gitlab-ci.yml 需要看 diff 合并。
+# 你自己**新增**的文件（src/ 下的业务代码、docs/2_landed/ 的落盘文档、tests/ 里新写的用例）
+# 不在模板管辖内，不受影响 —— 实测确认过。
+#
+# 用 copy/recopy 而非 `copier update`：update 需要模板源的 git 版本号（`_commit`），而平台仓模板
+# 位于 `<平台仓>/templates/module` 这个**子目录**、不是 git 仓库根，copier 取不到版本号（故下方
+# 没有 `_commit` 行）。copy/recopy 只需要 `_src_path` + 答案，在本布局下可用。代价是没有三方合并，
+# 得靠 git diff 人工挑 —— 这也是上面强调「干净工作区」的原因。
+_src_path: D:\Projects\AIProjects\DataForge2\templates\module
+description: 只读查询国内、巴西、海外的制程质量问题。可以按时间、加工厂、机型、物料、问题类型、状态、跟进部门或单号查问题单；点明某一域只查该域，没点明时三个域分别查再汇总。也可以打开一张单看处理进度、原因和改善措施，按机型、工厂、问题类型或时间段做汇总，或用缺陷现象描述查找类似问题。
+distribution_name: forge-module-factory-issue
+gitlab_url: http://code.paxsz.com
+module_code: FACTORY_ISSUE
+module_name: 制程问题查询助手
+package_name: factory_issue_module
+profiles: structured-query,semantic-retrieval,governance-etl,stats-sandbox,analysis-report
+sdk_registry_project_id: '195'
+

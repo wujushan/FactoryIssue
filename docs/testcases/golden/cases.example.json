@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "自动化问答用例集样例（跑法与断言原则见 docs/dev/10-automated-testing.md）。",
+    "复制本文件为 cases.json 后按你的业务改写；expect 里的每一项都是可选的，",
+    "只写这条用例真正关心的那几项 —— 一条用例只回答一个问题，失败时才知道坏在哪一层。",
+    "预期值按『口径』写不按『快照』写：测试库数据会变，硬编行数的用例一周后就是假失败。"
+  ],
+  "cases": [
+    {
+      "id": "factory_issue-001",
+      "query": "把这里换成一个真实业务问题",
+      "target": "FACTORY_ISSUE",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "tables": {
+          "count": 1,
+          "columns": ["业务列名A", "业务列名B"],
+          "min_rows": 1
+        },
+        "answer_contains": ["某个必然出现的业务词"],
+        "answer_not_contains": ["dbo.", "_id"],
+        "answer_min_length": 40
+      },
+      "note": "口径：写清这条题目的统计口径；参考 SQL 放同目录 factory_issue-001.sql"
+    },
+    {
+      "id": "factory_issue-routing-001",
+      "query": "用一句最自然的用户问法，不带 target",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true
+      },
+      "note": "路由用例：不带 target，只断言意图被路由到本模块。数据正确性不在这条里断言。"
+    }
+  ]
+}

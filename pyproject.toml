@@ -1,0 +1,160 @@
+[project]
+name = "forge-module-factory-issue"
+version = "0.1.0"
+description = "制程问题查询助手：只读查询国内、巴西、海外的制程质量问题。可以按时间、加工厂、机型、物料、问题类型、状态、跟进部门或单号查问题单；点明某一域只查该域，没点明时三个域分别查再汇总。也可以打开一张单看处理进度、原因和改善措施，按机型、工厂、问题类型或时间段做汇总，或用缺陷现象描述查找类似问题。"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # 下界钉**建仓时最新一批 SDK**（平台每批发版时跟着抬），而不是「最低能跑的那版」：
+    # docs/dev 是随模板快照进业务仓的，文档教的写法在新版才有、wheel 下界却停在旧版 =
+    # 业务方照着文档写就 AttributeError（如 docs/dev/02、03 教的 `ctx.knowledge.citations(...)`
+    # 最早要 core ≥0.1.4）。存量仓不受此影响——它们各有自己的 pyproject，升级见 docs/dev/01。
+    # core ≥0.1.9：`from forge_core import FileRef`（ctx.files 导出文件的返回类型，docs/dev/02 教了它）。
+    # core ≥0.1.11：`HandwrittenSqlNotAllowed`（MySQL 方言禁手写 SQL 抛的错误类，docs/dev/02 教了它的
+    # code 与 retryable 语义；要在模块里 catch 它就得有这个符号）。
+    # core ≥0.2.0：`from forge_core.exports import ExportTaskBinding, ExportTaskSpec` 与
+    # `ForgeModule.export_tasks()`（后台导出任务）、`ctx.workspace` 的端口与 Workspace* 错误类
+    # （会话工作区）——docs/dev/02 两节都教了。
+    # core ≥0.3.0：`from forge_core.config_files import ConfigFileSpec`（`manifest.config_files`
+    # 声明）与 `ForgeModule.validate_config()`、`ctx.config` 的端口（模块自管配置文件）——
+    # docs/dev/02「自管配置文件」教了它们。
+    # core ≥0.3.1：`ctx.stats.run(..., return_frames=True)` 的端口签名（统计沙箱数据帧通道）——
+    # docs/dev/02、04、07 教了它。实际行为由平台决定（见下方 platform ≥0.3.1），core 只带类型面。
+    # core ≥0.3.2：`from forge_core.testing import ContractBus, assert_capability`（能力调用契约测试，
+    # docs/dev/02「测试模式」教了它）。这一条对模板自身是 **ImportError 级**：模板自带的
+    # tests/test_contracts.py 顶层就 import 它——低于 0.3.2 不是「用例 skip」，而是 pytest 收集即报错、
+    # 整个 test job 红（哪怕本模块根本不调别人的能力）。
+    # core ≥0.3.3：`manifest.collection_fields`（权限协议 v1.3 集合字段登记，docs/dev/02、04 教了它）。
+    # 低于它不报错——ModuleManifest 不拒绝未知字段，登记被静默丢弃，本地看不出它没生效。
+    # core ≥0.3.4：`ctx.user.name` / `ctx.user.department`（平台注入的只读姓名/部门）与
+    # `ContractBus.context(user_name=, department=)`——docs/dev/02 教了它们。低于它读这两个属性即
+    # AttributeError。
+    "paxsz-forge-core>=0.3.4",
+]
+
+[project.entry-points."forge.modules"]
+FACTORY_ISSUE = "factory_issue_module.module:FactoryIssueModule"
+
+[dependency-groups]
+# 传递依赖必须显式直接声明（explicit index 下的硬规则）：
+# 下方 [tool.uv.sources] 的内网源路由只对**直接依赖**生效，对「依赖的依赖」不生效。
+# 于是一个 paxsz-forge-* 若只作为另一个 paxsz-forge-* 的传递依赖出现（如 paxsz-forge-platform
+# 传递依赖 paxsz-forge-core / paxsz-forge-data / paxsz-forge-sandbox），它会漏走内网源、被 uv 拿去默认公网源解析而 404。
+# 规则：把本模块所有 paxsz-forge-* 依赖的**传递闭包**都补成直接依赖。当前闭包 =
+#   paxsz-forge-core（[project] 运行依赖）+ paxsz-forge-data + paxsz-forge-sandbox + paxsz-forge-platform。
+# 未来任何 paxsz-forge-* 新增/改动传递依赖，或本模块新增某个 paxsz-forge-*，都按此把新出现的补到直接依赖里。
+dev = [
+    # 同上：下界钉**建仓时最新一批 SDK**。以下记的是各能力**最早**出现在哪版，供存量仓判断
+    # 「我这版缺什么、值不值得升」，不是这里该写的下界：
+    # - platform/data ≥0.1.6 抬的是**可观测性完整性**（不是 ImportError 级）：`forge dev serve`
+    #   起的本地平台从那版起才有阶段起点标记（卡住的 SQL/LLM 调用能定位）、按模块编码过滤
+    #   （`grep 'module=<你的编码>'`）与异步日志 sink。配旧版装得上也跑得动，只是排查时手上没这些。
+    # - platform ≥0.1.9 才有可用的 `forge release`：0.1.8 首次带上它，但在**带密码的 SSH 密钥**下
+    #   会以一句 permission denied 静默失败（git 的密码提示被吞掉），且失败后残留本地 tag 让版本号
+    #   在重试中虚涨 —— 0.1.9 修掉了这些。低于 0.1.8 则根本没有该命令（argparse「invalid choice」），
+    #   那时按 docs/dev/08 的手工步骤走即可，功能上不缺什么。
+    # - platform ≥0.1.11 才注入 `ctx.files`（导出文件 + /f/{token} 下载）。低于它，`forge dev serve`
+    #   起的本地平台里 ctx.files 恒为 None，照 docs/dev/02 写的导出代码在本地一跑就 AttributeError
+    #   —— 而同一份代码部署到平台上是好的，属最难查的那类版本错配。
+    # - platform ≥0.1.13 的 `forge dev serve` 才认 data_sources.json 里的 `type: "mysql"`。低于它
+    #   本地起平台直接 ConfigError「未知数据源类型」——而同一份配置部署到平台上是好的（同上那类错配）。
+    # - platform ≥0.1.14 的 `forge dev serve` 才收客户端定制参数 `ext_param`。低于它，本地发的
+    #   ext_param 会被入口原样丢掉、`request.inputs` 恒为空字典 —— 又是一例「本地看着没生效、
+    #   部署上去却是好的」。**读取通道本身不挑版本**：`ModuleRequest.inputs` 自 M0 就在
+    #   paxsz-forge-core 里，本条只关乎本地 harness 发不发得出。
+    # - platform ≥0.2.0 的 `forge dev serve` 才注入 `ctx.workspace`、才会在本进程后台代跑
+    #   `ctx.files.submit_export` 提交的导出任务。低于它，本地 ctx.workspace 恒为 None、提交导出
+    #   即 AttributeError —— 又是「部署上去是好的、本地跑不通」那类错配。
+    # - platform ≥0.3.0 的 `forge dev serve` 才注入 `ctx.config`（模块自管配置）。低于它本地
+    #   ctx.config 恒为 None，照 docs/dev/02 写的读取代码一跑就 AttributeError（同上那类错配）。
+    #   ⚠️ 即便装了 ≥0.3.0，**本地读到的也永远是空**：dev harness 无平台库（进程内存储、重启即清），
+    #   轻量 dev console 也没有上传面。本地验的是「读不到时走不走得通兜底分支」——那本就是
+    #   `ctx.config` 的常态之一（声明了但还没上传）；真实内容要在平台的 Console 上传后才有。
+    # - platform ≥0.3.1 的 `forge dev serve` 才接 `ctx.stats.run(..., return_frames=True)`（统计沙箱
+    #   数据帧通道，从 `outcome.frames` 拿明细帧）。低于它，本地一传这个参数就 TypeError——又是
+    #   「部署上去是好的、本地跑不通」那类错配。
+    # - platform ≥0.3.2 才有 `forge capabilities pull|export`（拉取 / 导出能力签名快照）与
+    #   `forge dev serve --capability-stubs`（被调方以本地桩在线）。低于它两者都是 argparse 报错
+    #   （invalid choice / unrecognized arguments）；模板自带的 `contracts-check` CI job 跑的正是
+    #   `forge capabilities pull --check`，低于它这个 job 一跑就红。
+    # - platform ≥0.3.3 才把 `manifest.collection_fields` 交给 ctx.data（权限协议 v1.3）。低于它，
+    #   `forge dev serve` 本地取数时用了集合操作符的规则一律按「集合字段未登记」中断，线上却正常。
+    "paxsz-forge-platform>=0.3.3",  # dev harness + 轻量 dev console + forge release：uv run forge dev serve
+    # data ≥0.1.10：绑定参数会把 DataFrame 里取出来的 numpy 标量转回原生类型。低于它，
+    # 拿 `df["id"].max()` 这种值去查 SQL Server 会报 `Invalid parameter type … (HY105)`，
+    # 而同一个值写回 mart（PG）却不报错 —— 典型症状是「治理 job 首轮成功、第二轮起必炸」。
+    # data ≥0.1.12：MySQL 连接器与 `[mysql]` extra（docs/dev/02 教了两段式表名 `db.table` 与
+    # 该方言禁手写 SQL）。低于它，`kind="mysql"` 的源在本地根本构造不出连接器。
+    # data ≥0.2.0：导出任务里的流式取数 `ctx.data.iter_fetch` / `iter_raw`（docs/dev/02 教了）。
+    # data ≥0.3.0：权限协议 v1.3 的行列权限编译（子表字段引用 / inherit_parent / 集合操作符，
+    # docs/dev/04 教了）。低于它，本地按 v1.2 语义编译，同一棵权限树本地与线上取到的行不一样。
+    "paxsz-forge-data>=0.3.0",     # DataScopeFilter / 数据源接入 / ctx.knowledge.citations（按 profile 需要）
+    # sandbox ≥0.2.0：`run_script(..., return_frames=True)` 与 `SandboxOutcome.frames`（docs/dev/02 教了）；
+    # 且 platform ≥0.3.1 本身就要求它（ctx.stats 每次调用都传新参数）。
+    "paxsz-forge-sandbox>=0.2.0",    # paxsz-forge-platform 的传递依赖：explicit 索引下须直接声明才走内网源（沙箱数字处理）
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# 发布包名（distribution_name = forge-module-*）与源码包名（package_name）不同名，
+# Hatchling 无法从 [project].name 反推包目录 —— 必须显式指向 src/ 下的实际包，否则 `uv sync` 构建失败。
+[tool.hatch.build.targets.wheel]
+packages = ["src/factory_issue_module"]
+
+# 业务语义权威层 docs/2_landed（库/表/字段描述、业务规则）随 wheel 分发、落在**包内** _landed_docs/，
+# 供平台 Admin Console「文档」页读取（平台靠 entry point 定位安装目录 + 该子目录，见平台决策
+# docs/decisions/2026-07-19-业务仓docs打包与console浏览.md）。仿 paxsz-forge-platform 用
+# force-include 打 console_dist 的做法。**只打 2_landed**：其余 docs（1_user_input 原始输入 /
+# dev SDK 快照 / decisions / testcases）是开发期材料，不进 wheel。force-include 源路径 docs/2_landed
+# 恒存在（模板自带 README），不会构建失败。
+[tool.hatch.build.targets.wheel.force-include]
+"docs/2_landed" = "factory_issue_module/_landed_docs"
+
+# 内网 GitLab Package Registry（forge SDK 的安装源）。
+# `name`（下方的 "dataforge-sdk"）是 **uv 的 index 名**——一个纯本地标识，只出现在两处、须彼此一致：
+#   1) 本文件 [[tool.uv.index]] 的 name；
+#   2) 鉴权环境变量名 UV_INDEX_<index名大写、'-'换'_'>_USERNAME / _PASSWORD → UV_INDEX_DATAFORGE_SDK_USERNAME / _PASSWORD。
+# 它**不出现在 GitLab 上**（GitLab 只认 url 里的项目 ID 与 Deploy Token 的用户名/口令）。
+# url 协议按内网实际——**内网无 https 用 http://**，别改成 https 否则连不上。
+#
+# 路由（关键）：本 index 标 `explicit = true` → 只服务 [tool.uv.sources] 里显式钉到它的 paxsz-forge-*；
+# 其余依赖（pytest / httpx 等公网包）一律走默认源（外网 PyPI 或其镜像），**绝不查内网 registry**。
+# 原因：内网 GitLab 只发布了 paxsz-forge-*，公网包在此必然 404；不钉死路由的话 uv 会先查内网再回落，
+# 既多一圈无谓请求、又可能因内网不可达/鉴权异常而卡住。**新增 paxsz-forge-* 依赖时，记得在 sources 补上对应行。**
+#
+# CI：凭据走 group 级 CI/CD 变量、组内自动继承，本仓无需配置（平台侧一次性配，见平台部署手册 §1.4）。
+# 本地：开发者自行 export 同名两个变量（group 变量只到 CI、不到本地机器），或用 scripts/create_module.py 代跑时按提示输入。
+[[tool.uv.index]]
+name = "dataforge-sdk"
+url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple"
+explicit = true
+
+# paxsz-forge-* 只从内网 registry 取；其它包走默认源。钉一次即可，未用到的行 uv 会忽略（无警告）。
+[tool.uv.sources]
+paxsz-forge-core = { index = "dataforge-sdk" }
+paxsz-forge-data = { index = "dataforge-sdk" }
+paxsz-forge-sandbox = { index = "dataforge-sdk" }
+paxsz-forge-governance = { index = "dataforge-sdk" }
+paxsz-forge-platform = { index = "dataforge-sdk" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E4/E7/E9 + F 是 ruff 的默认集，显式写出来是因为一旦指定 select 就不再有默认值。
+# UP（pyupgrade）：本仓 target 是 py312，而 `from typing import AsyncIterator` 这类别名自 3.9 起
+# 已废弃、应改从 collections.abc 导入。默认集不含 UP，这类写法会一路混进代码直到某天有人开了
+# 检查才集中爆出来（2026-07-31 真发生过）。开在这里，让它们在写下的那一刻就被拦住。
+select = ["E4", "E7", "E9", "F", "UP"]
+# UP047（non-pep695-generic-function）要求改用 PEP 695 的 `def f[T]()` 语法 —— 那是风格取舍、
+# 不是废弃修复，也无法安全自动改写，不值得为它引入一种新语法。与平台仓配置保持一致。
+ignore = ["UP047"]

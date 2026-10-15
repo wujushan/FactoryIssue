@@ -1,0 +1,367 @@
+# 制程问题查询助手（forge-module-factory-issue）CI/CD —— 内网自托管 GitLab CE，shell runner + uv
+#
+# 分支模型镜像平台仓（复用其**分支管理方式**，非内容）：
+#   - main / develop 均禁直接 push，只经 MR 合并（分支保护在 GitLab 侧一次性配置，见平台仓
+#     docs/新建业务模块仓指引.md 的「每仓一次性 API 配置块」）。
+#   - main 只接受来自 develop 的 MR      —— guard-main-source 强制。
+#   - develop 只接受来自 main 以外分支的 MR —— guard-develop-source 强制（禁止把 main 回并进 develop）。
+#   - 两条 guard + 仓库设置「Pipelines must succeed」共同阻断非法 MR（CE 无原生「限制 MR 源分支」开关）。
+#
+# 发布与部署分工（founding document「发布独立，部署装配」）：
+#   - 本仓 CI 只负责**发布**：打 `vX.Y.Z` tag → 发 wheel 到本模块仓 Package Registry。
+#   - 发布前有两道 tag 门禁（guard 阶段，任一红灯则 publish 与平台装配触发都不跑）：
+#     guard-tag-version —— tag 版本必须 == pyproject.toml 版本；
+#     guard-tag-on-main —— 正式 tag（无预发布后缀）指向的 commit 必须已在 main 上。
+#   - 「模块发布 → 平台测试/正式运行环境自动更新」是**装配驱动**：本仓 publish 成功后 curl 平台
+#     trigger API，由平台侧装配清单 + 触发链路装配（决策：Push 触发 + 测试自动 / 正式 gated）。
+#     预发布 tag（aN/bN/rcN/.devN）→ 平台**测试环境自动装配**；正式 tag（X.Y.Z）→ 平台**正式环境**
+#     （平台侧 manual 一键确认）。本仓不直接往平台运行环境部署。设计见平台仓
+#     docs/decisions/2026-07-08-平台装配清单与触发链路.md 与 docs/装配与触发链路指引.md。
+#
+# runner：项目级共享 shell runner（**非 group runner**），**每仓需手动启用**——在
+#   Settings → CI/CD → Runners → Project Runners 启用 df2-test67-shell（tag `dataforge-test`，本 CI 全部 job 用它）
+#   与 df2-prod68-shell（tag `dataforge-prod`，一致性/未来预留）。跳过则 MR 流水线因无匹配 runner 卡住。
+# SDK 拉包鉴权：UV_INDEX_DATAFORGE_SDK_USERNAME/_PASSWORD（Deploy Token）走 **group 级 CI/CD 变量、组内自动继承**，
+#   本仓无需配置（平台侧一次性配，见平台部署手册 deploy/CICD部署指南.md §1.4）；uv sync 解析 paxsz-forge-core 等即从平台仓 Registry 取包。
+#   ⚠️ 这两个变量在 group 侧**不能勾 Protect variable**——feature 分支 MR 流水线跑在未受保护源分支上，勾了就拿不到 →
+#   uv sync 拉 paxsz-forge-* 报 401 Unauthorized。下方 .mr-check 的 before_script 会在 uv sync 前预检并给出定位提示。
+# G1 收口数据源冒烟（g1-datasource-check）：MR 上跑 `forge data check`，据 db_description 验证 info/erp 可达 +
+#   声明的表/字段真实存在。凭据（FORGE_DATA_SOURCES_PATH 文件变量 + FORGE_DS_INFO/ERP_PASSWORD）同走 group 级变量、
+#   用**元数据专用低权账号**，本仓无需配置、开发者不接触账号（平台侧一次性配，见 §1.4）。**advisory**：默认不阻断 MR。
+
+stages:
+  - guard
+  - check
+  - publish
+
+variables:
+  UV_LINK_MODE: copy
+
+# 只在 MR（跑门禁）与版本 tag（发 wheel）上建流水线；分支 push 不建（合并前 MR 已门禁、部署走装配侧）。
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+((a|b|rc)\d+)?(\.dev\d+)?$/'
+    - when: never
+
+# ───────── 源分支门禁（仅在 MR 上运行）─────────
+guard-main-source:
+  stage: guard
+  tags: [dataforge-test]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+  script:
+    - |
+      if [ "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" != "develop" ]; then
+        echo "✗ main 只接受来自 develop 的 MR；当前源分支：$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+        exit 1
+      fi
+      echo "✓ 源分支为 develop，放行"
+
+guard-develop-source:
+  stage: guard
+  tags: [dataforge-test]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"'
+  script:
+    - |
+      if [ "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" = "main" ]; then
+        echo "✗ develop 不接受来自 main 的 MR（禁止把 main 回并进 develop）"
+        exit 1
+      fi
+      echo "✓ 源分支非 main，放行"
+
+# ───────── 发布门禁一：tag 版本 == pyproject 版本（仅在版本 tag 上运行）─────────
+# 为什么必须有：wheel 的版本号**只由 pyproject.toml 决定**，tag 只是「你声明要发哪个版本」。
+# 两者漂移时的真实故障（2026-07-30 业务仓实测，两人各踩一种）：
+#   ① tag v0.0.1a1 + pyproject 0.1.0 → 发出去的是 0.1.0，而 trigger 告诉平台去装 0.0.1a1
+#      → 平台装配找不到该版本而红灯（平台侧红得对，但错因在这里，业务方无从定位）；
+#   ② tag v0.1.0a1 + pyproject 0.1.0，且 0.1.0 已被①发上去 → `uv publish --check-url` 判定
+#      「版本已存在」而**幂等跳过**，publish **绿灯却什么都没发** —— 比①更难查。
+# 判据是**严格字符串相等**：tag 正则已把 tag 侧钉死为 PEP 440 规范形式，故要求 pyproject 也写
+#   规范形式（`0.1.0a1`，不是 `0.1.0-alpha1` / `0.1.0.a1`）。`uv version <ver>` 写入的即规范形式，
+#   正常流程恒等；手写非规范形式会被本闸拦下，属**有意的严格**（消除它需在 runner 上引入
+#   packaging 做归一化，代价大于收益）。
+# 零依赖（grep 而非 `uv version --short`）：本闸跑在 SDK 拉包凭据预检之前，任何需要联网的读法
+#   都会以「401」的面目失败，比原 bug 还难懂。这里只读文本，不 sync、不联网。
+# 与平台仓 `.gitlab-ci.yml` 的 publish-sdk 校验闸同构（那边 2026-07-11 已修同类 bug）。
+guard-tag-version:
+  stage: guard
+  tags: [dataforge-test]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+((a|b|rc)\d+)?(\.dev\d+)?$/'
+  script:
+    - |
+      set -e
+      VER="${CI_COMMIT_TAG#v}"
+      PKGVER="$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"(.*)".*/\1/')"
+      echo "tag 声明的版本：${VER}"
+      echo "pyproject.toml 版本：${PKGVER}"
+      if [ "$VER" = "$PKGVER" ]; then
+        echo "✓ 版本一致，放行发布"
+        exit 0
+      fi
+      echo "✗ tag 版本(${VER}) ≠ pyproject.toml 版本(${PKGVER}) —— 已阻止发布，未触发平台装配。"
+      echo
+      echo "  wheel 的版本号只由 pyproject.toml 决定，tag 只是「声明要发哪个版本」。不一致时"
+      echo "  发出去的包与平台要装的版本对不上，平台装配必然失败；若 ${PKGVER} 在 Registry 已存在，"
+      echo "  publish 还会「幂等跳过」而显示绿灯 —— 看着发成功了，其实什么都没发。"
+      echo
+      echo "  第一步，删掉这个错 tag："
+      echo "       git tag -d ${CI_COMMIT_TAG} && git push origin :refs/tags/${CI_COMMIT_TAG}"
+      echo
+      echo "  然后按你真正想做的事二选一（版本号交给命令算，别再手写）："
+      echo "  A) 想发一个测试包 → 基线取 pyproject 的 ${PKGVER}，序号自动接续："
+      echo "       uv run forge release --alpha        # 或 --beta / --rc / --dev"
+      echo "  B) 想发正式版 ${PKGVER} → 正式 tag 必须打在 main 上："
+      echo "       git switch main && git pull && uv run forge release ${PKGVER}"
+      echo
+      echo "  若你认为 ${VER} 这个版本号才是对的：换基线属于「要进下一个正式版」的决定，"
+      echo "  请先经 MR 把 pyproject.toml 的 version 改成对应正式版号，再回来发。"
+      echo "  完整发版流程见 docs/dev/08-release-and-assembly.md"
+      exit 1
+
+# ───────── 发布门禁二：正式 tag 必须打在 main 上（仅在无后缀的正式 tag 上运行）─────────
+# 正式版（`vX.Y.Z`，无 aN/bN/rcN/.devN）会被平台装进**正式环境**，因此其代码必须已经过
+#   develop → main 的 MR 审核。没有这道闸时，任意分支（甚至只存在于本地、只靠 tag 推上来的
+#   游离 commit）都能发出正式包并叩响平台正式装配的门 —— 平台侧那道 manual 确认只审「装不装」，
+#   审不了「这坨代码有没有过 review」。
+# 只管正式 tag：预发布 tag 按 docs/dev/08 §一本就允许打在本地 bump commit 上（只推 tag 不推分支），
+#   那是刻意的快速通道，不受本闸约束。
+# GIT_DEPTH: 0 —— merge-base 需要完整历史，GitLab 默认浅克隆会把「在 main 上」误判成「不在」。
+guard-tag-on-main:
+  stage: guard
+  tags: [dataforge-test]
+  variables:
+    GIT_DEPTH: 0
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+  script:
+    - |
+      set -e
+      VER="${CI_COMMIT_TAG#v}"
+      # 显式 refspec：tag 流水线的 clone 是 detached HEAD，默认可能没取到 main 分支引用
+      git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+      if git merge-base --is-ancestor "$CI_COMMIT_SHA" refs/remotes/origin/main; then
+        echo "✓ 正式 tag 指向的 commit 已在 main 上，放行发布"
+        exit 0
+      fi
+      echo "✗ 正式 tag ${CI_COMMIT_TAG} 指向的 commit 不在 main 上 —— 已阻止发布，未触发平台装配。"
+      echo
+      echo "  正式版会被装进平台**正式环境**，故其代码必须已经过 develop → main 的 MR 审核。"
+      echo "  当前 tag 指向的 commit（${CI_COMMIT_SHA}）在 main 的历史之外。"
+      echo
+      echo "  正确做法（docs/dev/08-release-and-assembly.md §二）："
+      echo "    1) 把 bump 到 ${VER} 的提交经 MR 合入 main；"
+      echo "    2) git switch main && git pull；"
+      echo "    3) 在 main 的那个 commit 上打 tag：uv run forge release ${VER}"
+      echo
+      echo "  只是想在测试环境验一版？改发预发布版（如 ${VER}rc1），它不受本闸约束、且自动装配到"
+      echo "  平台测试环境。"
+      exit 1
+
+# ───────── 合并门禁（MR 上运行；guard 不过则 needs 依赖使 check 不起跑）─────────
+.mr-check:
+  stage: check
+  tags: [dataforge-test]
+  needs:
+    - job: guard-main-source
+      optional: true
+    - job: guard-develop-source
+      optional: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  # 预检 SDK 拉包凭据：group 级变量若被误勾「Protect variable」，feature 分支 MR 流水线拿不到 →
+  # uv sync 拉 paxsz-forge-* 会以 401 Unauthorized 失败（错误在下载 wheel 那步、难一眼看出是凭据问题）。
+  # 这里在 uv sync 前打印是否拿到，缺失即 fail-fast 给出可执行定位（只打印 set/MISSING，绝不回显值）。
+  before_script:
+    - |
+      if [ -n "${UV_INDEX_DATAFORGE_SDK_USERNAME:-}" ]; then U=set; else U=MISSING; fi
+      if [ -n "${UV_INDEX_DATAFORGE_SDK_PASSWORD:-}" ]; then P=set; else P=MISSING; fi
+      echo "SDK 拉包凭据（拉 paxsz-forge-* 用）：UV_INDEX_DATAFORGE_SDK_USERNAME=$U / _PASSWORD=$P"
+      if [ "$U" != set ] || [ "$P" != set ]; then
+        echo "✗ SDK 拉包凭据缺失，uv sync 拉 paxsz-forge-* 会因 401 Unauthorized 失败。"
+        echo "  最常见原因：group 级变量 UV_INDEX_DATAFORGE_SDK_* 被勾了「Protect variable」，"
+        echo "  而本 MR 流水线跑在未受保护的源分支上、拿不到 Protected 变量（develop→main 的 MR 反而能拿到）。"
+        echo "  修复：平台侧把这两个变量取消勾 Protect variable（保留 Masked）。见平台仓 deploy/CICD部署指南.md §1.4。"
+        exit 1
+      fi
+      echo "✓ SDK 拉包凭据已注入。"
+
+lint:
+  extends: .mr-check
+  script:
+    - uv sync --all-groups
+    - uv run ruff check src tests
+
+test:
+  extends: .mr-check
+  script:
+    - uv sync --all-groups
+    - uv run pytest -q
+  # 注：**问答准确性**的回归不在这里（这里只有不打网络的单测）——它要打真实模型与真实测试数据，
+  # 见下方 qa-regression（手动触发，docs/dev/10-automated-testing.md）。
+
+# ───────── 能力签名漂移检查（MR 上运行；仓里有 tests/contracts/*.json 才跑）─────────
+# 调用了别的模块的能力（manifest.capability_deps）时，对方的签名快照提交在 tests/contracts/。本 job 用
+#   `forge capabilities pull --check` 把它和**平台测试环境上**对方当前的签名比对：签名变了 / 你引用的能力
+#   没了 / 快照被手改过 → 红灯；只有说明文字不同 → 警告、不红。修法：本地 `uv run forge capabilities pull`，
+#   改代码跟上，再连同新快照一起提交（docs/dev/06「capabilities」）。只比对签名、不取任何业务数据。
+# 凭据与 qa-regression 同一对：FORGE_TEST_BASE_URL + FORGE_TEST_API_KEY（key 授权你自己的模块即可，
+#   你依赖的模块自动在可达范围内）。没拿到就干净跳过（休眠安全，不是失败）。
+#   ⚠️ key 按 docs/dev/10 勾了 Protect variable 时，feature 分支的 MR 流水线拿不到它、本 job 会跳过；
+#   develop → main 的 MR（源分支受保护）照常检查。
+contracts-check:
+  extends: .mr-check
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      exists:
+        - tests/contracts/*.json
+  script:
+    - |
+      if [ -z "${FORGE_TEST_BASE_URL:-}" ] || [ -z "${FORGE_TEST_API_KEY:-}" ]; then
+        echo "未拿到 FORGE_TEST_BASE_URL / FORGE_TEST_API_KEY，跳过能力签名漂移检查。"
+        echo "已在 CI/CD Variables 配置却仍跳过：多半是勾了 Protect variable，feature 分支的 MR 拿不到，"
+        echo "属正常——develop → main 的 MR 会照常检查。见 docs/dev/10-automated-testing.md §6。"
+        exit 0
+      fi
+      uv sync --all-groups
+      uv run forge capabilities pull --check
+
+# ───────── 问答准确性回归（手动触发；打平台 /test 通道 + 真实测试数据）─────────
+# 为什么是 manual 而不是每次 push 都跑：它打真实本地模型与真实库，一条用例几秒到几十秒，
+#   且结果受测试库数据变化影响 —— 挂成必过门禁只会训练出「红了就重跑」。
+# 建议时机：**发预发布 tag、平台测试环境自动装配完成之后**手点一次（发版流程见 docs/dev/08）。
+# 凭据：FORGE_TEST_API_KEY 配成本仓 CI/CD Variables（Masked + Protected），由平台管理员在
+#   Admin Console「测试」页签发、按模块限定、带有效期。**不要写进本文件**。
+# 休眠安全：变量没配就干净跳过（不是失败）——新仓在 G3 产出用例集之前本就没得跑。
+qa-regression:
+  stage: check
+  tags: [dataforge-test]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: manual
+      allow_failure: true
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+((a|b|rc)\d+)?(\.dev\d+)?$/'
+      when: manual
+      allow_failure: true
+  script:
+    - |
+      if [ -z "${FORGE_TEST_BASE_URL:-}" ] || [ -z "${FORGE_TEST_API_KEY:-}" ]; then
+        echo "未配置 FORGE_TEST_BASE_URL / FORGE_TEST_API_KEY，跳过问答准确性回归。"
+        echo "配置后即可在真实测试数据上全量跑 docs/testcases/golden/cases.json；"
+        echo "api-key 由平台管理员在 Admin Console「测试」页签发，见 docs/dev/10-automated-testing.md。"
+        exit 0
+      fi
+      if [ ! -f docs/testcases/golden/cases.json ]; then
+        echo "还没有 docs/testcases/golden/cases.json（G3 用例集未产出），跳过。"
+        echo "起步：把 golden/cases.example.json 复制成 cases.json 按业务改写。"
+        exit 0
+      fi
+      uv sync --all-groups
+      uv run python scripts/qa_test.py docs/testcases/golden/cases.json --trace
+
+# ───────── G1 收口：数据源连通性 + information_schema 表/字段存在性（advisory，仅内网）─────────
+# 据 docs/2_landed/db_description 验证 info/erp 可达 + 声明的表/字段真实存在。
+# 凭据走 group 级变量（§1.4），用元数据专用低权账号，开发者不接触。
+# advisory：--strict 报出问题、allow_failure 不阻断 MR（有问题显橙色告警）。要 promote 为门禁 → 去掉 allow_failure。
+# 休眠安全：无 db_description 或未配 FORGE_DATA_SOURCES_PATH（group 变量未设）→ 干净跳过。
+g1-datasource-check:
+  extends: .mr-check
+  allow_failure: true
+  script:
+    - |
+      if [ ! -d docs/2_landed/db_description ]; then
+        echo "无 docs/2_landed/db_description（G1 未产出表描述），跳过数据源冒烟。"; exit 0
+      fi
+      if [ -z "${FORGE_DATA_SOURCES_PATH:-}" ]; then
+        echo "未配置 FORGE_DATA_SOURCES_PATH（group 级变量未设），跳过数据源冒烟（advisory）。"
+        echo "配置后即在 MR 上验证 info/erp 可达 + 声明表/字段存在，见平台部署手册 §1.4。"; exit 0
+      fi
+      uv sync --all-groups
+      uv run forge data check --strict
+
+# ───────── 发布：vX.Y.Z tag → 发 wheel 到本模块仓 Package Registry ─────────
+# 版本段正则与平台仓 paxsz-forge-*-sdk-v 的版本部分一致（本仓用 v 前缀、每仓一个 wheel），放行预发布 aN/bN/rcN 与开发版 .devN。
+# --check-url：已存在版本跳过，重复运行幂等。发布用内建 CI_JOB_TOKEN（作用域即本项目 Registry）。
+#
+# needs 两道 tag 门禁：任一红灯 → 本 job 不起跑 → trigger-platform-assembly（needs: publish）也不跑，
+#   即「不发包、更不触发平台装配」。guard-tag-on-main 只存在于正式 tag 流水线，故 optional: true
+#   （预发布 tag 的流水线里没有它，不能让 needs 因其缺席而报错）。
+publish:
+  stage: publish
+  tags: [dataforge-test]
+  needs:
+    - job: guard-tag-version
+    - job: guard-tag-on-main
+      optional: true
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+((a|b|rc)\d+)?(\.dev\d+)?$/'
+  script:
+    - uv build
+    # 打印实际产物名：wheel 文件名里的版本号就是「真正发出去的版本」，日志里留一眼可查的证据
+    - ls -l dist/
+    - >-
+      uv publish
+      --publish-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
+      --check-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi/simple"
+      --username gitlab-ci-token
+      --password "${CI_JOB_TOKEN}"
+
+# ───────── 发布成功 → 触发平台装配（Push 触发 + 测试自动 / 正式 gated）─────────
+# 预发布 tag（aN/bN/rcN/.devN）→ 平台测试环境自动装配；正式 tag（X.Y.Z）→ 平台正式环境（平台侧 manual gated）。
+# 平台仓项目 ID = SDK Registry 所在项目（即本仓 [[tool.uv.index]] 指向的平台仓，复用 sdk_registry_project_id）。
+# 触发凭据 PLATFORM_ASSEMBLY_TRIGGER_TOKEN 走 **group 级 CI/CD 变量、组内共用**（平台侧一次性配，见平台部署手册
+#   deploy/CICD部署指南.md §1.4）；本仓无需配置，未配置则本 job 跳过（休眠安全）。
+trigger-platform-assembly:
+  stage: publish
+  tags: [dataforge-test]
+  needs: ["publish"]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+((a|b|rc)\d+)?(\.dev\d+)?$/'
+  variables:
+    PLATFORM_BASE: "http://code.paxsz.com"   # 带协议（内网 http://），与拉包 index 同源
+    PLATFORM_PROJECT_ID: "195"
+    MODULE_DIST: "forge-module-factory-issue"
+  script:
+    - |
+      if [ -z "${PLATFORM_ASSEMBLY_TRIGGER_TOKEN:-}" ]; then
+        echo "未配置 PLATFORM_ASSEMBLY_TRIGGER_TOKEN（group 级变量），跳过平台装配触发。"
+        echo "配置后模块发版即自动装配到平台运行环境，见平台仓 docs/装配与触发链路指引.md。"
+        exit 0
+      fi
+      VER="${CI_COMMIT_TAG#v}"
+      case "$VER" in
+        *a*|*b*|*rc*|*dev*) ENV=test; REF=develop ;;   # 预发布 → 平台测试环境（自动）
+        *)                  ENV=prod; REF=main ;;      # 正式版   → 平台正式环境（manual gated）
+      esac
+      # 触发出去的流水线跑在**平台仓**，没有自己的 commit：平台的流水线列表只能显示平台 ref（main/develop）
+      # 最新那条提交标题，于是各业务仓的装配触发在那里长得一模一样、认不出谁是谁。故本仓一并上报四个
+      # 「自报家门」变量：
+      #   PIPELINE_NAME_SUFFIX  平台侧流水线名的**后缀**（以空格开头）。平台的 workflow:name 是
+      #                       `${MODULE_NAME}${PIPELINE_NAME_SUFFIX}`——模块名由平台用它自己收到的
+      #                       MODULE_NAME 拼，本仓只补后半截；这样存量仓不上报时名字仍是模块名，
+      #                       而不是一串空洞的占位符（平台 workflow:name 不做嵌套展开，见平台仓注释）。
+      #   SOURCE_PROJECT / SOURCE_PIPELINE_URL / SOURCE_TAG
+      #                       结构化溯源，平台 assembly-note-* job 打印，可点回本仓这条发布流水线。
+      # 平台侧对这四个变量全是 best-effort：不传照样装配（旧模板生成的存量仓即如此），只是看不出来源。
+      # 后缀是自由文本，用 --form-string 而非 -F 传：-F 会把值里的 `@`/`<`/`;type=` 当语法，
+      # --form-string 一律按字面值发送（其余几个值只含 [A-Za-z0-9-_/.]，沿用 -F 即可）。
+      # 后缀以「空格 + 间隔号」起头而不是单个空格：万一哪层（GitLab 侧或代理）把变量值首尾空白剃掉，
+      # 名字也只是变成 `<分发名>· 0.1.0 …`，仍读得通；只靠空格分隔的话会粘成 `<分发名>0.1.0`。
+      PNAME_SUFFIX=" · ${VER} → ${ENV}（来自 ${CI_PROJECT_PATH} #${CI_PIPELINE_ID}）"
+      echo "触发平台 ${ENV} 环境装配：${MODULE_DIST}==${VER}"
+      echo "平台流水线将命名为：${MODULE_DIST}${PNAME_SUFFIX}"
+      curl -fsS -X POST \
+        -F "token=${PLATFORM_ASSEMBLY_TRIGGER_TOKEN}" \
+        -F "ref=${REF}" \
+        -F "variables[ASSEMBLY_TRIGGER]=true" \
+        -F "variables[TARGET_ENV]=${ENV}" \
+        -F "variables[MODULE_NAME]=${MODULE_DIST}" \
+        -F "variables[MODULE_VERSION]=${VER}" \
+        --form-string "variables[PIPELINE_NAME_SUFFIX]=${PNAME_SUFFIX}" \
+        -F "variables[SOURCE_PROJECT]=${CI_PROJECT_PATH}" \
+        -F "variables[SOURCE_PIPELINE_URL]=${CI_PIPELINE_URL}" \
+        -F "variables[SOURCE_TAG]=${CI_COMMIT_TAG}" \
+        "${PLATFORM_BASE}/api/v4/projects/${PLATFORM_PROJECT_ID}/trigger/pipeline"
+

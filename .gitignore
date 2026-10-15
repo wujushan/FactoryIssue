@@ -1,0 +1,41 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+
+## 环境配置永不入库
+.env
+.env.*
+!.env.example
+
+## 运行态数据永不入库：`forge dev serve` 会往这里写每轮问答的审计归档
+## （runtime/audit/**：prompt 全文与 SQL 原文），开 FORGE_LOG_LEVEL=debug 时还有
+## 原始报文（runtime/logs/**）。**都含真实业务数据**，提交进仓库就是把它带出内网边界。
+runtime/
+
+## Codex home（open-vscode-codex.ps1 设置的 CODEX_HOME 落点，仅本地）
+.codex-home
+
+## 编辑器 / AI 编码助手的**本地**配置：个人偏好、会话产物，还可能夹带 MCP 凭据，一律不入库。
+## 例外：模板自带的 .claude/settings.json 与 .claude/hooks/ 是**团队共享**的写保护守卫
+## （G1 闸门 + 禁改 .env），建仓首个 commit 就靠它们进仓，故在此显式放行；.claude 下其余
+## 内容（settings.local.json、各人自己的 commands/agents/skills）才是本地物。
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+
+## VS Code 及其派生编辑器（Cursor / Windsurf 等）的工作区配置与本地历史
+.vscode/
+*.code-workspace
+.history/
+
+## Cursor 专有目录：.cursor/mcp.json 常含 MCP 服务凭据、.cursor/environment.json 是本地
+## 后台 agent 配置，都不该进仓；但 .cursor/rules/ 下的规则文件与 CLAUDE.md / AGENTS.md 同类，
+## 是**团队共享的项目级规则源**，显式放行入库。
+## 同理 .cursorrules / .cursorignore / .cursorindexingignore 是项目级约定，刻意不在此列。
+.cursor/*
+!.cursor/rules/

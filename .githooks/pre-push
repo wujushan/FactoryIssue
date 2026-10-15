@@ -1,0 +1,84 @@
+#!/bin/sh
+# 业务模块仓 pre-push 钩子：把 CI 的 tag 版本门禁提前到本地（决策 2026-07-30）。
+#
+# 为什么存在：wheel 的版本号只由 pyproject.toml 决定，tag 只是「声明要发哪个版本」。两者不一致时
+# CI 的 guard-tag-version 会拦下，但那时 tag 已经推到远端了 —— 修起来要先删远端 tag，比较麻烦。
+# 本钩子在 `git push` 真正发出去之前就比一遍，让最常见的错（bump 忘了做）在本地一秒钟就止损。
+#
+# **本钩子会拦 push**（与平台仓那个只警告的 pre-push 不同）：这里判的是「tag 与 pyproject 是否
+# 一致」，这是个**客观的对错**，没有「暂时不一致是正常中间状态」一说 —— 不像平台仓的「改了还没
+# bump」在功能分支上天天发生。误拦的唯一出口是 `git push --no-verify`，但真到那一步你八成是在
+# 绕开一个真 bug。只拦 `v*` tag 的推送，普通分支 push 一律放行、零打扰。
+#
+# 分发方式：本文件在仓内（版本化、随 git pull 自动更新），每个 clone 一次性执行
+#   python scripts/install_hooks.py          （等价于 git config core.hooksPath .githooks）
+# git 刻意不允许仓库在 clone 时自动装钩子（那等于 clone 即执行任意代码），故这一步无法省。
+#
+# 注意：本钩子是**本地 opt-in 且可绕过**的提醒，不是保障。没装钩子的机器不受任何保护 ——
+# 真正 fail-closed 的那道闸在 CI（.gitlab-ci.yml 的 guard-tag-version / guard-tag-on-main）。
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -f "$repo_root/pyproject.toml" ] || exit 0
+
+fail=0
+
+# stdin 每行：<local ref> <local sha> <remote ref> <remote sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # 只管版本 tag 的推送；分支 push、删除 tag（local_sha 全 0）一律放行
+    case "$remote_ref" in
+        refs/tags/v*) ;;
+        *) continue ;;
+    esac
+    case "$local_sha" in
+        *[!0]*) ;;
+        *) continue ;;   # 全 0 = 删除该 tag，无需校验
+    esac
+
+    tag="${remote_ref#refs/tags/}"
+    ver="${tag#v}"
+
+    # 版本号格式：与 CI workflow.rules / guard-tag-version 的正则同源（PEP 440 规范形式）
+    if ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.dev[0-9]+)?$'; then
+        echo "✗ tag $tag 不是合法的版本 tag 格式。" >&2
+        echo "  须为 v + PEP 440 规范形式：v0.1.0 / v0.1.0a1 / v0.1.0rc1 / v0.1.0.dev1" >&2
+        echo "  （不是 v0.1.0-alpha1 / v0.1.0.a1；格式不符的 tag 推上去 CI 压根不会建流水线）" >&2
+        fail=1
+        continue
+    fi
+
+    # 读**该 tag 指向的那个 commit** 的 pyproject（而非工作区当前内容）—— 发出去的就是它
+    pkgver=$(git show "$local_sha:pyproject.toml" 2>/dev/null \
+             | grep -m1 '^version' | sed -E 's/.*"(.*)".*/\1/')
+    if [ -z "$pkgver" ]; then
+        echo "⚠ 读不到 $tag 指向 commit 的 pyproject.toml 版本，跳过本地校验（CI 仍会把关）。" >&2
+        continue
+    fi
+
+    if [ "$ver" != "$pkgver" ]; then
+        echo "✗ 已阻止推送 tag $tag：版本不一致。" >&2
+        echo "    tag 声明的版本    ：$ver" >&2
+        echo "    该 commit 的 pyproject：$pkgver" >&2
+        echo >&2
+        echo "  推上去的后果：发出的 wheel 是 $pkgver，而平台被告知去装 $ver，装配必然失败；" >&2
+        echo "  若 $pkgver 已在 Registry 存在，CI 的 publish 还会「幂等跳过」而显示绿灯。" >&2
+        echo >&2
+        echo "  修复（先删掉这个 tag，再让命令去算版本号 —— 别手写）：" >&2
+        echo "      git tag -d $tag" >&2
+        echo "      uv run forge release --alpha     # 基线取 pyproject 的 $pkgver，序号自动接续" >&2
+        echo >&2
+        echo "  若要发的是正式版 $pkgver：git switch main && git pull && uv run forge release $pkgver" >&2
+        echo "  若你认为 $ver 才是对的版本号：换基线要经 MR 改 pyproject.toml 的 version。" >&2
+        fail=1
+    else
+        echo "✓ tag $tag 与 pyproject 版本一致（$ver）"
+    fi
+done
+
+if [ "$fail" -ne 0 ]; then
+    echo >&2
+    echo "  发版流程见 docs/dev/08-release-and-assembly.md" >&2
+    echo "  确有理由绕过：git push --no-verify（CI 侧的门禁仍会拦，那道绕不过）" >&2
+    exit 1
+fi
+
+exit 0
