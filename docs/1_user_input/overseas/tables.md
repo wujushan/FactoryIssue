@@ -76,10 +76,6 @@
 | ConfirmDate          | datetime | 效果确认时间。                                                                                                                                                                 |
 | IsDelete             | bit      | 是否删除。0/false=否；1/true=是（逻辑删除）。                                                                                                                                          |
 | IQCOpinion           | int      | IQC意见。枚举：2是退回仓库，3是继续使用。                                                                                                                                                 |
-| OtherOnline          | varchar  | 其他在线。JSON，结构同 ZCTracking_OtherOrder（Factory 等），内嵌本列、不落 ZCTracking_OtherOrder 表。Factory 码同 Factory2。【关联】无物理外键。                                                           |
-| StockList            | varchar  | 库存。JSON，结构同 ZCTracking_Stock，内嵌本列、不落 ZCTracking_Stock 表。【关联】无物理外键。                                                                                                      |
-| OReturnOrderNo       | nvarchar | 在线退货单号。                                                                                                                                                                 |
-| SReturnOrderNo       | nvarchar | 在库退货单号。                                                                                                                                                                 |
 | IsDesignChange       | int      | 是否设计变更。枚举：0=否；1=是。                                                                                                                                                      |
 | DesignUser           | int      | 设计变更责任人。【关联】Info.dbo.Employee.ID。                                                                                                                                       |
 | DesignDate           | datetime | 设计更改预计完成时间。                                                                                                                                                             |

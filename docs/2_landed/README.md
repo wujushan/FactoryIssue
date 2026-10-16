@@ -19,6 +19,20 @@
 | `privileges.md` | 可选（有权限管控要求时） | 本业务需要的行级/列级权限管控机制描述 |
 | `glossary.md` | 可选（有业务术语时） | 业务术语表，一行一术语：**规范词 / 别称 / 口径定义**（对应 `GlossaryTerm` 的 term/aliases/definition），供线上助手做术语理解与归一。**是 `manifest.glossary` 的唯一信源**，改此文件须同步 manifest（`module.py` 已留槽位）——沿用 `db_description ↔ field_mappings` 的「文档信源 + manifest 机器读」范式。有业务术语时才新建（缺省不建，不占 G1 闸门） |
 
+## 本模块的文件布局
+
+本模块分国内、巴西、海外三个域，`business_description` 按「总述 + 各域」拆开：
+
+| 文件 | 内容 |
+|---|---|
+| `business_description.md` | 总述：定位、三域边界、跨域规则、共用说法、常用场景、澄清项、分析维度、数据量声明 |
+| `domestic/business_description.md` | 国内口径与表关联 |
+| `brazil/business_description.md` | 巴西口径与表关联 |
+| `overseas/business_description.md` | 海外口径与表关联 |
+| `link_rules.md` | 制程单跳转链接、附件预览链接的生成规则 |
+| `db_description/` | 27 张表的字段说明（三域共用的基础表只写一份） |
+| `dirty_data.md` / `glossary.md` / `privileges.md` | 脏数据与特殊解析 / 术语表 / 权限管控 |
+
 ## 原则
 
 - **自包含、不外引**：不得以 `docs/1_user_input/`、未入库的本机参考目录（如某些仓的 `references/`）或其他目录的文档作为信源或出处——**链接与纯文本提及都不行**，表文件也不写「出处」段。有用的信息（字段定义、口径算式、需要逐字遵循的原文，例如本地模型提示词原文）必须**复制落盘**进本目录；复制的是口径、结构与原文，**不复制真实业务数据行**（本目录入库并随 wheel 分发）。日后发现信息有误**直接改本目录**，不回溯原始素材。素材来源需要说明时用文字描述（如「业务方 2026-10-10 书面答复」），不写路径。
