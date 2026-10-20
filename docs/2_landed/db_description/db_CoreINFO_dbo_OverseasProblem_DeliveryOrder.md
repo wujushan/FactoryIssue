@@ -16,7 +16,7 @@
 | PO | varchar | PO | 采购订单号 | — |
 | OrderNumber | varchar | 发货单号 | — | — |
 | Date | varchar | 发货日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
-| PN | varchar | PN | 发货单自己的 PN 编号，按原文展示，不经 PN 主数据翻译 | — |
+| PN | varchar | PN | PN 编码，与主表 PN 同一套，且都等于本单主表某段 PN。经 PN 主数据得到 PN 名称，展示为「PN 名称 PN 编码」 | `info.dbo.NewProduct.PartNumber` → `Name` |
 | DeliveryVersion | varchar | 发货版本 | — | — |
 | ProdVersion | varchar | 生产版本 | — | — |
 | Quantity | int | 订单数量 | — | — |

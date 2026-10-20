@@ -20,7 +20,7 @@
 | Factory2 | varchar | 国内工厂 | 国内工厂码。只在用户明说「国内工厂」时作筛选条件 | `paxbase.dbo.PaxFactory.FactoryID` → `FactoryName` |
 | ProductType | varchar | （内部字段，不返回） | 大机型 ID，逗号分隔 | `info.dbo.ProductName.ID` → `ProductName`（显示名「大机型」；一单多个时去重，用「、」连接） |
 | Series | varchar | 系列 | 选 PN 时随大机型带出的系列文本。只展示原文，不作查询条件，不另关联 | — |
-| PNList | varchar | （内部字段，不返回） | PN 编号，逗号分隔。不展示，但按 PN 筛选时参与匹配：编码按段精确匹配，名称包含匹配 | 各段 `= info.dbo.NewProduct.PartNumber` → `Name`（显示名「PN」；多段时去重，用「、」连接） |
+| PNList | varchar | PN | PN 编码，逗号分隔。每段经 PN 主数据得到 PN 名称，展示为「PN 名称 PN 编码」，多段时去重，用「、」连接。按 PN 筛选时编码按段精确匹配，名称包含匹配 | 各段 `= info.dbo.NewProduct.PartNumber` → `Name` |
 | InvInfo | varchar | 物料 | JSON 数组，见下方「JSON 列结构」。不关联存货档案与供应商表 | — |
 | hasCheckedPhenomenon | varchar | 已选问题现象 | JSON 数组，见下方「JSON 列结构」 | 元素 `Key`>0 → `CoreINFO.dbo.AfterSaleIssueClassPhenomenon.ID` |
 | ImpactQty | int | 影响数量 | — | — |
@@ -82,7 +82,7 @@
 
 | 键 | 用户可见显示名 | 含义 |
 |---|---|---|
-| PN | 料号 | 物料编码，与国内、巴西的料号同一套。与主表 `PNList` 的 PN 不是同一套编号 |
+| PN | 料号 | 物料编码，与国内、巴西的料号同一套。键名虽叫 PN，与主表 `PNList` 的 PN 不是同一套编号 |
 | materialDesc | 描述 | 整段展示，不拆成物料名称和规格型号 |
 | supplier | 供应商编号 | 与 `tbIQCvendor.ferpcode` 同义，写在元素内 |
 | supplierName | 供应商名称 | 展示用这里的名称，不另查供应商表 |

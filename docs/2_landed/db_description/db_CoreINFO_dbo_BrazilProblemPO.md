@@ -3,7 +3,7 @@
 - **数据源别名（source）**：info
 - **物理表名（table）**：CoreINFO.dbo.BrazilProblemPO
 - **所属域**：巴西
-- **用途**：问题单与发货侧申请单的关联，用于解析 PN：`RequestID` → `Brazil_RequestList.PartNumber` → `NewProduct.Name`（展示为「PN」，一单多个合并为「PN 列表」）。一张单可关联多条。
+- **用途**：问题单与发货侧申请单的关联，用于解析 PN：`RequestID` → `Brazil_RequestList.PartNumber`（PN 编码）→ `NewProduct.Name`（PN 名称）。展示为「PN 名称 PN 编码」，一单多个合并为「PN 列表」。一张单可关联多条。
 - **数据产生方**：INFO 系统巴西制程问题页面录入。
 
 ## 字段

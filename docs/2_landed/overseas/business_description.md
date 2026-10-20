@@ -37,12 +37,12 @@
 | IQC 意见 | 退回仓库，或继续使用 |
 | 物料 | 物料 JSON 里的料号、描述、供应商编号、供应商名称，逐条列出。料号与 PN 不是同一套编号。按料号筛：任一条的料号命中即算；按物料名称筛：任一条的描述包含即算 |
 | 大机型 | 大机型 ID 各段 → 产品名称，一单多个时去重，用「、」连接。用户说「机型」时按大机型查，不按 PN；跨域按机型汇总时与国内机型、巴西大机型同名合并 |
-| PN | 主表 PN 各段 → PN 主数据名称，展示名仍叫「PN」，多段时去重，用「、」连接。按 PN 筛时 PN 编码按段精确匹配、PN 名称包含匹配，任一命中即算。发货单上的 PN 用发货单自己的编号 |
+| PN | 主表 PN 各段是 PN 编码，经 PN 主数据得到 PN 名称；每段展示为「PN 名称 PN 编码」，与国内、巴西一致，多段时去重，用「、」连接。按 PN 筛时 PN 编码按段精确匹配、PN 名称包含匹配，任一命中即算。发货单上的 PN 与主表同一套编码，且都等于本单主表某段 PN |
 | 系列 | 只展示单上已有文字 |
 | 版本 | 主表上的版本；发货单另有发货版本、生产版本，三者不是同一项 |
 | 已选问题现象 | 一单可有多条，标准现象和手填现象混在一起，按展平规则连成一段文字 |
 | 可能问题原因 | 每条标准现象各自的候选原因清单；本单已写的原因看「问题原因」 |
-| 涉及发货单 | 多行列表（序号、PO、发货单号、发货日期、PN、发货版本、生产版本、订单数量、备注），按发货单号升序；另给订单数量合计 |
+| 涉及发货单 | 多行列表（序号、PO、发货单号、发货日期、PN、发货版本、生产版本、订单数量、备注），按发货单号升序；PN 同样展示为「PN 名称 PN 编码」；另给订单数量合计 |
 | 附件 | 填单附件与步骤附件，未删除的以文档名称打开预览 |
 | 处理步骤 | 完整处理过程给该单全部记录，按 ID 升序；看某一环节时同一环节名称只留最新一条（ID 最大）。步骤上的预防措施与主表改善措施是两列 |
 | 设计变更 | 是否设计变更、设计变更责任人、设计更改预计完成时间、设计变更确认结果 |
@@ -56,7 +56,7 @@
 | 处理步骤 | `OverseasProblem_StepLog.ProblemId = 主表.Id` |
 | 涉及发货单 | `OverseasProblem_DeliveryOrder.ProblemId = 主表.Id` |
 | 大机型 | `ProductType` 各段 `= ProductName.ID` → `ProductName` |
-| PN | `PNList` 各段 `= NewProduct.PartNumber` → `Name` |
+| PN | `PNList` 各段 `= NewProduct.PartNumber` → `Name`；发货单 `PN = NewProduct.PartNumber` → `Name` |
 | 国内工厂 | `Factory2 = PaxFactory.FactoryID` → `FactoryName`（国内工厂表在 ERP 实例，与问题单不在同一实例） |
 | 已选现象 → 可能原因 | `hasCheckedPhenomenon[].Key`（大于 0）`= AfterSaleIssueClassPhenomenon.ID`；`AfterSaleIssueClassPhenomenonReason.PhenomenonID = 现象 ID` |
 | 人员 | `AddUser`、`ConfirmUser`、`DesignUser` `= Employee.ID`；`RUser` 各段 `= Employee.ID`；步骤 `AddUser`、`MemberList` 各段 `= Employee.ID` |

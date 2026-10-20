@@ -8,7 +8,7 @@
 
 ## G 流程进度（新会话续接入口，随开发实时更新）
 
-- [x] **G1 业务逻辑梳理与落盘**：2026-10-20 完成（首轮 10-19，当天全局复核后再次清零）。口径在 `docs/2_landed/`（29 张表：28 张 `info`、1 张 `erp`），歧义清单 `docs/open-questions.md` 已全部关闭，决策过程见 `docs/decisions/`，内网探测见 `docs/probes/`。
+- [x] **G1 业务逻辑梳理与落盘**：2026-10-20 完成（首轮 10-19，当天全局复核后清零；随后按管理页面补定 PN 口径 G21）。口径在 `docs/2_landed/`（29 张表：28 张 `info`、1 张 `erp`），歧义清单 `docs/open-questions.md` 已全部关闭，决策过程见 `docs/decisions/`，内网探测见 `docs/probes/`。
   - **带入后续阶段**：
     - G2：类似问题怎么比对（关键词还是语义检索）、富文本清洗放在哪、要不要建 `forge_mart_factory_issue`；如建 mart，每张单要带所属域、可按域过滤，CAR 报告正文不进检索文本；海外附件只能从单上登记的 ID 取。确认平台 `data_sources.json` 已登记 `info`、`erp`。
     - 权限：给权限平台配待办任务表的固定行规则前，先跑探测 C8；`docs/platform-feedback/` 两份待平台答复，实现前三种出错情形只靠权限平台承诺兜住（业务方已接受）。
