@@ -39,3 +39,7 @@ runtime/
 ## 同理 .cursorrules / .cursorignore / .cursorindexingignore 是项目级约定，刻意不在此列。
 .cursor/*
 !.cursor/rules/
+
+## 本地原始材料含真实业务标识，不纳入版本库
+docs/1_user_input/C10探测结果.md
+docs/1_user_input/customer_issues_permissions.json

@@ -1,0 +1,3 @@
+[submodule "docs/1_user_input/dataprivilegecontrolprotocol"]
+	path = docs/1_user_input/dataprivilegecontrolprotocol
+	url = git@code.paxsz.com:AI/dataprivilegecontrolprotocol.git
