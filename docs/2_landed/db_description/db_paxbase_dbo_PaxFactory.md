@@ -12,4 +12,4 @@
 | 字段 | 类型 | 用户可见显示名 | 含义与取值 | 关联 |
 |---|---|---|---|---|
 | FactoryID | varchar(50) | （内部字段，不返回） | 国内工厂码 | 国内 `ZCTracking_ProblemList.Factory`、`ZCTracking_OtherOrder.Factory`；海外 `OverseasProblemDetail.Factory2` |
-| FactoryName | nvarchar(100) | 加工厂（国内主表）/ 工厂（国内订单）/ 国内工厂（海外） | 国内工厂名称 | 国内 `ZCTracking_XBOrders.Factory`（小板订单直接存名称） |
+| FactoryName | nvarchar(100) | 加工厂（国内主表）/ 订单工厂（国内小板订单、其他在线订单）/ 国内工厂（海外） | 国内工厂名称 | 国内 `ZCTracking_XBOrders.Factory`（小板订单直接存名称） |

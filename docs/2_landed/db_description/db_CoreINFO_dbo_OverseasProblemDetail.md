@@ -17,10 +17,10 @@
 | OldProblemType | int | 原问题类型 | 改分类前的类型，枚举同 `ProblemType` | — |
 | ProblemRemark | varchar | 其他问题说明 | 问题类型为「其他」时填写 | — |
 | Factory | varchar | 加工厂 | 海外工厂名称，直接存名称，不关联国内工厂主数据。写法统一，取值是可枚举的闭集；按工厂筛选用包含或名称相近匹配，不要求精确相等 | — |
-| Factory2 | varchar | 国内工厂 | 国内工厂码 | `paxbase.dbo.PaxFactory.FactoryID` → `FactoryName` |
-| ProductType | varchar | （内部字段，不返回） | 大机型 ID，逗号分隔 | `info.dbo.ProductName.ID` → `ProductName`（显示名「大机型」） |
+| Factory2 | varchar | 国内工厂 | 国内工厂码。只在用户明说「国内工厂」时作筛选条件 | `paxbase.dbo.PaxFactory.FactoryID` → `FactoryName` |
+| ProductType | varchar | （内部字段，不返回） | 大机型 ID，逗号分隔 | `info.dbo.ProductName.ID` → `ProductName`（显示名「大机型」；一单多个时去重，用「、」连接） |
 | Series | varchar | 系列 | 选 PN 时随大机型带出的系列文本。只展示原文，不作查询条件，不另关联 | — |
-| PNList | varchar | （内部字段，不返回） | PN 编号，逗号分隔。不展示，但按 PN 筛选时编码与名称都参与匹配 | 各段 `= info.dbo.NewProduct.PartNumber` → `Name`（显示名「PN」；多段用逗号拼接） |
+| PNList | varchar | （内部字段，不返回） | PN 编号，逗号分隔。不展示，但按 PN 筛选时参与匹配：编码按段精确匹配，名称包含匹配 | 各段 `= info.dbo.NewProduct.PartNumber` → `Name`（显示名「PN」；多段时去重，用「、」连接） |
 | InvInfo | varchar | 物料 | JSON 数组，见下方「JSON 列结构」。不关联存货档案与供应商表 | — |
 | hasCheckedPhenomenon | varchar | 已选问题现象 | JSON 数组，见下方「JSON 列结构」 | 元素 `Key`>0 → `CoreINFO.dbo.AfterSaleIssueClassPhenomenon.ID` |
 | ImpactQty | int | 影响数量 | — | — |
@@ -29,7 +29,7 @@
 | ProblemLevel | varchar | 问题等级 | A+ / A / B / C；NULL 或空写「未填」 | — |
 | FoundDate | varchar | 现场发现日期 | 也叫发现日期；文本存日期，格式 `YYYY-MM-DD` | — |
 | Station | varchar | 发现工位 | — | — |
-| Version | varchar | 版本 | — | — |
+| Version | varchar | 版本 | 主表上的版本；发货单另有发货版本、生产版本，不是同一项 | — |
 | IsStop | int | 是否停线 | 0=否，1=是。停线重启后仍为 1。「曾经停线」看本列为 1 | — |
 | StopState | int | 停线状态 | 1=停线中，2=已经重启，其他值或 0=没有停线。「停线中」看本列为 1 | — |
 | StopDate | varchar | 停线日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
@@ -41,11 +41,11 @@
 | Prevention | nvarchar | 预防对策 | 预防对策、工厂制程制定的对策 | — |
 | Remark | varchar | 备注 | — | — |
 | Status | int | 状态 | 见下方「状态枚举」 | — |
-| MemberList | varchar | （内部字段，不返回） | 当前处理人 ID，逗号分隔 | `info.dbo.Employee.ID` |
-| MemberListName | varchar | 当前处理人 | 问题单流转到最新节点时的处理人姓名，与 `MemberList` 对应。直接展示，不另查人员表，也不用处理步骤上的成员代替 | — |
+| MemberList | varchar | （内部字段，不返回） | 当前责任人 ID，逗号分隔 | `info.dbo.Employee.ID` |
+| MemberListName | varchar | 当前责任人 | 问题单流转到最新节点时的处理人姓名，与 `MemberList` 对应。直接展示，不另查人员表，也不用处理步骤上的成员代替。已完成的单为空（业务方 2026-10-20 内网计数） | — |
 | RDepartment | int | 问题跟进部门 | 空或一个部门 ID。填单时先选部门，再选该部门下的人员 | `info.dbo.Department.ID` |
 | RUser | nvarchar | 问题跟进人 | 空，或一个 / 多个员工 ID，逗号分隔，如 `4535,4527`；多人都属于问题跟进部门所指的那一个部门 | `info.dbo.Employee.ID` |
-| RConfirm | int | 跟进人是否确认 | 0 或空=否，大于 0=是 | — |
+| RConfirm | int | 跟进人是否确认 | 0 或空=否（不重新走流程），大于 0=是 | — |
 | RCompleteTime | datetime | 计划完成时间 | 问题跟进人计划完成时间 | — |
 | IQCOpinion | int | IQC 意见 | 2=退回仓库，3=继续使用 | — |
 | IsDesignChange | int | 是否设计变更 | 0=否，1=是 | — |
@@ -56,9 +56,9 @@
 | ConfirmUser | int | 效果确认人 | 员工 ID | `info.dbo.Employee.ID` |
 | ConfirmDate | datetime | 效果确认时间 | — | — |
 | DocId | varchar | （内部字段，不返回） | 填单附件 ID，逗号分隔 | `info.dbo.DocumentList.ID` |
-| AddUser | int | 创建人 | 员工 ID | `info.dbo.Employee.ID` |
+| AddUser | int | 填单人 | 员工 ID；源系统也称「创建人」 | `info.dbo.Employee.ID` |
 | AddDate | datetime | 建单时间 | — | — |
-| IsDelete | bit | （内部字段，不返回） | 软删标记：0=未删除，1=已删除；默认只查未删除 | — |
+| IsDelete | bit | （内部字段，不返回） | 软删标记：0=未删除，1=已删除；只查为 0 的单，与源系统一致 | — |
 
 本域不使用源表的 `OtherOnline`（其他在线）、`StockList`（库存）、`OReturnOrderNo`（在线退货单号）、`SReturnOrderNo`（在库退货单号）。
 

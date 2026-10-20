@@ -15,7 +15,7 @@
 | OrderNumber | varchar | 问题编号 | `BR` + 年 2 位 + 月 2 位 + 当月 3 位序号，如 BR2404001 | — |
 | ClaimNumber | varchar | 投诉单号 | 自由文本，无固定编码规则。多数以 `CLAIM` 开头（如 `CLAIM 014.04/2024`、`CLAIM-019/24`），但不绝对；可空 | — |
 | BrazilFactory | varchar | 加工厂 | 巴西工厂**名称**（不是 ID），可逗号多值，如 `CA,TT`。已有取值如 TT、CA、TR | `info.dbo.Brazil_Factory.FactoryName`（按段匹配） |
-| ProductIDAll | varchar | （内部字段，不返回） | 大机型 ID，空 / 单值 / 逗号分隔多值，可能带空格或无效 ID | `info.dbo.ProductName.ID` → `ProductName`（显示名「机型名称列表」）、`Series` |
+| ProductIDAll | varchar | （内部字段，不返回） | 大机型 ID，空 / 单值 / 逗号分隔多值，逐段去首尾空格。对不上的段不显示，全部对不上显示「未识别机型」 | `info.dbo.ProductName.ID` → `ProductName`（显示名「大机型」，一单多个时去重合并）、`Series`（显示名「系列」） |
 | ProblemType | varchar | 问题类型 | 文本：设计问题、结构问题、生产问题、制程优化、硬件问题、物料问题、其他。「其他」可写成 `其他\|备注`，此时问题类型显示「其他」，`\|` 后的文字显示为「其他问题备注说明」。只有待提交（草稿）可为空 | — |
 | IsStopLine | varchar | 是否停线 | 是 / 否，默认否。曾发生停线即为「是」，重启后不改回「否」 | — |
 | StopDate | varchar | 停线日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
@@ -38,7 +38,7 @@
 | SupplementMemo | nvarchar | 补料备注 | 富文本 | — |
 | SupplementUserID | int | 补料人 | 员工 ID | `info.dbo.Employee.ID` |
 | SupplementDate | datetime | 补料日期 | — | — |
-| IsCost | int | 是否涉及费用 | 1=是，2=否；0 为删除状态的测试数据，按无效值处理 | — |
+| IsCost | int | 是否涉及费用 | 1=是，2=否；0 为删除状态的测试数据，按无效值处理。只在用户明说「是否涉及费用」时作筛选条件；「涉及费用的单」按费用明细认定，见费用表 | — |
 | ActorUserID | int | 初始责任人 | 员工 ID | `info.dbo.Employee.ID` |
 | Memo | nvarchar | 备注 | 富文本 | — |
 | AddUserID | int | 填单人 | 员工 ID | `info.dbo.Employee.ID` |

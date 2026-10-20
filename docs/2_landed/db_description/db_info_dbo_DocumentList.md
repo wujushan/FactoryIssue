@@ -16,7 +16,7 @@
 | DocumentRealName | nvarchar | 文件名 | 含后缀的全称 | — |
 | DocumentExtension | nvarchar | 文件类型 | 扩展名 | — |
 | DocumentPath | nvarchar | （内部字段，不返回） | 存储路径 | — |
-| frecid | int | （内部字段，不返回） | 业务记录 ID，含义随 `BusinessType` 而定 | 巴西 8D：`BrazilProblemProcess.ID` |
+| frecid | int | （内部字段，不返回） | 业务记录 ID，含义随 `BusinessType` 而定 | 巴西 8D：`BrazilProblemProcess.ID`；海外：`OverseasProblemDetail.Id` |
 | BusinessType | varchar | （内部字段，不返回） | 业务名称 | — |
 | AddDate | datetime | 上传时间 | — | — |
 | EffectFlag | int | （内部字段，不返回） | 删除标志：0=有效，1=已删除 | — |
@@ -33,3 +33,5 @@
 | 巴西 8D 报告 | `BusinessType = '巴西制程问题单8D报告'`，且 `frecid` 属于该单处理过程表的全部 `ID`，且 `EffectFlag = 0` |
 
 国内、巴西除上表外的其他附件不在查询范围。
+
+海外附件只能从单上登记的文档 ID 出发取，不能只按业务记录 ID 反查。`frecid` 是全公司各业务共用的编号，按海外单 `Id` 反查会撞上 200 多种其他业务的文档（业务方 2026-10-20 内网计数）。单上登记的海外附件，业务记录 ID 都等于海外主表 Id、都未删除；业务名称是「海外制程问题」（填单附件）、「海外制程问题SQE跟进附件」与「海外制程问题工厂分析附件」（步骤附件）。

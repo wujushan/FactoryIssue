@@ -8,16 +8,20 @@
 
 ## G 流程进度（新会话续接入口，随开发实时更新）
 
-- [ ] **G1 业务逻辑梳理与落盘**：`docs/2_landed/`（业务口径唯一信源）——必备 `db_description/db_[database]_[schema]_[table].md`（字段权威源，一表一文件，每张表**必填 `source`=所属实例/数据源别名，原始表只能是 info/erp**，模块源数据可横跨两实例 INFO+ERP）+ `business_description.md`（须**明确声明涉及的数据量**：涉及多少张表、每张表约多少行——影响 G2 治理决策与取数/沙箱策略），可选 `dirty_data.md`/`privileges.md`；`docs/open-questions.md` 歧义清单清零（或显式放行：创建 `docs/.g1-cleared`）。业务梳理只梳字段/逻辑，不做技术决策。**收尾冒烟（advisory）**：开 MR 时 CI 的 `g1-datasource-check` 自动据 db_description 验证 info/erp 可达 + 声明表/字段真实存在（内网 runner、元数据低权账号，你不接触数据库账号；未配则跳过）
-  - **完成（2026-10-16）**：三域材料与旧版已确认口径梳理落盘——`db_description/` 27 张表（26 张 `info`、国内工厂 1 张 `erp`）、`business_description.md`（总述，含统计口径说明、跨域归并、关键词搜索与类似问题、数据量）+ `domestic/`/`brazil/`/`overseas/` 各域口径、`link_rules.md`、`dirty_data.md`、`glossary.md`、`privileges.md`。`docs/open-questions.md` 原 39 条全部关闭。取舍与口径变更见 `docs/decisions/2026-10-16-*.md`。
-  - **复核（2026-10-16）**：修正巴西表数（14 张）、补落 B7（巴西只按主表料号查物料）与 O6（海外其他在线、库存、退货单号不在范围）、统一 PN / 大机型显示名、补主数据表关联。新增 3 条待确认：**G14**（机型 / PN 各域查哪列、跨域按机型合并）、**O8**（海外加工厂筛选方式）已答复并落盘；**D9**（生产订单、小板订单是否真按物料标识区分）仍待内网计数，确认后 G1 再关闭。
-  - **下一步（G2）**：数据画像与治理 / 向量化决策，重点是类似问题怎么比对（关键词还是语义检索）、富文本清洗放在哪、要不要建 `forge_mart_factory_issue`；另需确认平台 `data_sources.json` 已登记 `info`、`erp`。`manifest.glossary` 在 G4b 编码时按 `glossary.md` 同步。
+- [x] **G1 业务逻辑梳理与落盘**：2026-10-20 完成（首轮 10-19，当天全局复核后再次清零）。口径在 `docs/2_landed/`（29 张表：28 张 `info`、1 张 `erp`），歧义清单 `docs/open-questions.md` 已全部关闭，决策过程见 `docs/decisions/`，内网探测见 `docs/probes/`。
+  - **带入后续阶段**：
+    - G2：类似问题怎么比对（关键词还是语义检索）、富文本清洗放在哪、要不要建 `forge_mart_factory_issue`；如建 mart，每张单要带所属域、可按域过滤，CAR 报告正文不进检索文本；海外附件只能从单上登记的 ID 取。确认平台 `data_sources.json` 已登记 `info`、`erp`。
+    - 权限：给权限平台配待办任务表的固定行规则前，先跑探测 C8；`docs/platform-feedback/` 两份待平台答复，实现前三种出错情形只靠权限平台承诺兜住（业务方已接受）。
+    - G3：权限分支在自动化测试通道验不到，要构造权限数据的单元测试，加四类真实账号人工验收。
+    - G4a：每轮开头用 `ctx.data.describe()` 判域；`manifest.glossary` 按 `glossary.md` 同步。
+    - G6：按 `privileges.md`「上线前核对」逐条核对。
 - [ ] **G2 数据现状勘察与治理决策**：数据画像（内网执行，聚合统计特征，外传前人工审核）→ 治理必要性评估报告 → 决策落盘 `docs/decisions/`。**判定是否需要治理/向量化**：原始结构化取数一律直连 info/erp（只读热备副本），仅当需数据治理或非结构化字段向量化时才建 `forge_mart_<模块编码>` 产物库并启用 `governance-etl`/`semantic-retrieval`（模板见 `docs/decisions/README.md`）。**建 mart 就必须在决策里写死两件事**：① 权限承载列清单（缺列平台直接拒绝启动，返工要重建表 + 重跑 embedding）；② 受列级管控字段的处置（列级权限当前不作用于检索路径）。**评审必须在申请建库之前**——建库是运维当场传口令、跑完即走的动作
 - [ ] **G3 测试案例集**：种子问题集 → 编程助手扩展 → `docs/testcases/`（每条附参考 SQL/预期工具调用；自动化 golden 集 + 人工测试手册双产物）。golden 集用 `scripts/qa_test.py` 经平台 `/test` 通道在真实测试数据上跑，格式与断言原则见 [docs/dev/10](docs/dev/10-automated-testing.md)
 - [ ] **G4a 技术设计定稿**：落 `docs/decisions/YYYY-MM-DD-模块技术设计.md`（模板见 `docs/decisions/README.md`）——manifest 草案 + **`field_mappings` 逐列锚定**（协议权限字段 → 物理列；缺失 fail-closed 拒查、锚错列即越权，这是最该被人看一眼的地方）+ `handle()` 编排与事件序列 + SQL/沙箱边界 + 错误与降级。纯 `structured-query` 模块几十行足够；带 `governance-etl`/`semantic-retrieval`/`analysis-report` 的必须独立成文
 - [ ] **G4b 编码实现**：照 G4a 的设计写 manifest（intents/keywords/dependencies/**data_sources**/field_mappings）+ tools + 流式事件；**偏离设计要回改 G4a 文档**，别让代码与设计各说各话。data_sources 别名须与 G1 各表 `source` 并集一致、且平台侧 data_sources.json 已登记（否则平台拒绝启动）。**回给用户的内容按 [docs/dev/09 答案呈现规范](docs/dev/09-answer-presentation.md) 自检**：无意义字段（自增 ID 等）不返回、表名/字段名不外露、数据之外给合理分析、寒暄（「你好」「你能做什么」）报本板块能力与常用场景
 - [ ] **G5 评测与对拍**：golden 集达标（`uv run python scripts/qa_test.py docs/testcases/golden/cases.json`，接真实测试数据）+ 数字口径对拍 + 人工测试手册验收
 - [ ] **G6 发布**：tag 触发 CI 发 wheel → 平台装配仓 bump 版本 → 部署
+  - **发布前必做**：按 `docs/2_landed/privileges.md`「上线前核对」，用权限平台准备的四类真实账号逐条核对权限配置（自动化测试通道不验权限）。
 
 ## 落盘文档目录规范（谁能改）
 

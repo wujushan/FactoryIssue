@@ -19,7 +19,7 @@
 |---|---|---|---|---|
 | ID | int | （内部字段，不返回） | 自增主键 | `info.dbo.DocumentList.frecid`（8D） |
 | ProblemID | int | （内部字段，不返回） | 所属问题单 | `CoreINFO.dbo.BrazilProblemList.ID` |
-| ProblemType | varchar | 问题类型 | 与主表独立冗余，取值同主表 | — |
+| ProblemType | varchar | 处理过程问题类型 | 与主表独立冗余，取值与 `其他\|备注` 写法同主表。只在看处理过程明细时展示；筛选、统计、跨域归并只用主表问题类型 | — |
 | DisposeResult | nvarchar | SQE 跟进结果 | — | — |
 | PlanCompleteDate | varchar | 计划完成日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
 | ReasonAnalysis | nvarchar | 原因分析 | — | — |

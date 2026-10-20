@@ -30,7 +30,7 @@
 | `brazil/business_description.md` | 巴西口径与表关联 |
 | `overseas/business_description.md` | 海外口径与表关联 |
 | `link_rules.md` | 制程单跳转链接、附件预览链接的生成规则 |
-| `db_description/` | 27 张表的字段说明（三域共用的基础表只写一份） |
+| `db_description/` | 29 张表的字段说明（三域共用的基础表只写一份） |
 | `dirty_data.md` / `glossary.md` / `privileges.md` | 脏数据与特殊解析 / 术语表 / 权限管控 |
 
 ## 原则

@@ -3,7 +3,7 @@
 - **数据源别名（source）**：info
 - **物理表名（table）**：CoreINFO.dbo.ZCTracking_XBOrders
 - **所属域**：国内
-- **用途**：中间产物（小板等）生产任务订单。主表「物料标识」为「物料」时关联本表。
+- **用途**：中间产物（小板等）生产任务订单。主表「物料标识」为「物料」时关联本表；整机单没有小板订单。
 - **数据产生方**：INFO 系统制程问题页面录入。
 
 ## 字段
@@ -18,5 +18,5 @@
 | Qty | decimal | 订单数量 | — | — |
 | InQty | decimal | 入库数量 | — | — |
 | NoQty | decimal | 未入库数量 | — | — |
-| Factory | nvarchar | 工厂 | 存工厂**名称**（不是工厂码，与主表、其他在线订单不同） | `paxbase.dbo.PaxFactory.FactoryName` |
+| Factory | nvarchar | 订单工厂 | 存工厂**名称**（不是工厂码，与主表、其他在线订单不同） | `paxbase.dbo.PaxFactory.FactoryName` |
 | Description | nvarchar | 描述 | — | — |

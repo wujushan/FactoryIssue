@@ -3,8 +3,9 @@
 - **数据源别名（source）**：info
 - **物理表名（table）**：CoreINFO.dbo.ZCTracking_ProblemOrders
 - **所属域**：国内
-- **用途**：问题单关联的整机生产订单及数量。一张单可关联多张订单。
+- **用途**：问题单关联的整机生产订单及数量。一张单可关联多张订单。只挂在主表「物料标识」为空（NULL 或空串）的单上，「物料」单没有生产订单。
 - **数据产生方**：INFO 系统制程问题页面录入。
+- **列类型**：按 information_schema（业务方 2026-10-20 内网元数据），字符串长度为声明的字符数。
 
 ## 字段
 
@@ -12,11 +13,11 @@
 |---|---|---|---|---|
 | ID | int | （内部字段，不返回） | 主键 | — |
 | ProblemId | int | （内部字段，不返回） | 所属问题单 | `CoreINFO.dbo.ZCTracking_ProblemList.ID` |
-| OrderNumber | nvarchar | 生产订单号 | — | — |
-| PartNumber | nvarchar | PN | — | — |
-| PartName | nvarchar | PN 名称 | — | — |
+| OrderNumber | nvarchar(125) | 生产订单号 | — | — |
+| PartNumber | nvarchar(60) | PN | — | — |
+| PartName | nvarchar(60) | PN 名称 | — | — |
 | IssueDate | datetime | 发料日期 | — | — |
 | OrderQty | int | 订单数量 | — | — |
 | ReceiptQty | int | 入库数量 | — | — |
 | OnlineQty | int | 在线数量 | — | — |
-| Version | nvarchar | 订单版本 | — | — |
+| Version | nvarchar(250) | 订单版本 | — | — |
