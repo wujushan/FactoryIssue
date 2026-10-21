@@ -59,7 +59,7 @@
 | IQCStatus | int | IQC 状态 | 复用主状态的码值与文案，常见 6=IQC确认、7=填写退货单号；物料退货流程用，与主状态并行，是独立的一列。IQC 流程走完后清空。业务方 2026-10-20 内网计数：未删除的单只出现过空与 6 | — |
 | IQCMemberList | nvarchar(525) | （内部字段，不返回） | IQC 成员 ID，逗号分隔 | `info.dbo.Employee.ID` |
 | IQCMemberListName | nvarchar(525) | IQC 成员 | IQC 成员姓名，逗号分隔 | — |
-| CAR | nvarchar(50) | CAR 编号 | 纠正预防措施单编号，与 CAR 报告 ID 总是同时有值或同时为空。只在物料问题上展示；其他类型的单即使有值也不展示（与源系统管理页面一致） | — |
+| CAR | nvarchar(50) | CAR 编号 | 纠正预防措施单编号，形如 `CAR` + 9 位数字，一单一个、互不重复；与 CAR 报告 ID 总是同时有值或同时为空。只在物料问题上展示；其他类型的单即使有值也不展示（与源系统管理页面一致）。可按它查单，见国内业务描述「按 CAR 编号查单」 | — |
 | CARID | int | （内部字段，不返回） | CAR 报告 ID，可空。问题类型为物料问题且本列有值，才算该单关联了 CAR 报告：展示 CAR 编号、生成 CAR 报告链接、统计关联数都以此为准；其他类型即使有值也按未关联处理。个别 ID 在报告表里查不到，见 `dirty_data.md`「其他」 | `info.dbo.tbIQCreportOut.fid`；CAR 报告链接参数 |
 | OReturnOrderNo | nvarchar(525) | 在线退货单号 | — | — |
 | SReturnOrderNo | nvarchar(525) | 在库退货单号 | — | — |
