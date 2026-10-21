@@ -102,7 +102,9 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
 - **声明**：`profiles` 含 `stats-sandbox`——**就这一步**（这是最轻的 profile）。
 - **依赖**：`paxsz-forge-sandbox`（运行依赖）。
 - **代码**：`outcome = await ctx.stats.run(script, {"rows": df})`（`script` 可由 LLM 生成，数字在受限子进程内算）；
-  出图 `yield Event.chart(**ctx.stats.to_chart(outcome, chart_type="bar", x_key="...", series_keys=[...]))`。
+  出图 `yield Event.chart(**ctx.stats.to_chart(outcome, chart_type="bar", x_key="...", series_keys=[...]))`；
+  要定制长相（平滑 / 环形 / 堆叠…）加 `style={...}`（echarts option 片段，只准带样式键，见
+  [02 · 事件协议](02-sdk-reference.md#事件协议-forge_coreevents)）。
   **禁**在 `handle()` 里写 `sum/sorted/pandas` 聚合、**禁**让 LLM 直接给数字。
   沙箱产出的是**明细帧**（下钻数据集等要存下来再用的中间表）而非几个数时，用
   `ctx.stats.run(script, datasets, return_frames=True)` 从 `outcome.frames` 拿 DataFrame——**别**把帧拆成 records
@@ -225,6 +227,9 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
     （后者是向量库里唯一能真正下推的形态）。**别默认「跟 `.query()` 一样严」。**
   - **HNSW 近似检索 + 行级过滤 → 权限窄的用户会静默少召回**（安全不受影响）。服务端 pgvector
     >= 0.8.0 时平台自动下发 `hnsw.iterative_scan` 续扫补救；低于此版本只能告警降级。
+    同理，**带业务条件的检索别「全表召回再按编号求交」**（模块侧的后过滤，条件越窄越常为 0）：
+    先经 `ctx.data` 取候选编号，再 `ctx.retrieval.search(..., restrict_ids=ids)`——与行级权限 AND、
+    精确近邻、候选内召回完整（见 [02](02-sdk-reference.md)）。
   - **主子表规则（协议 v1.3）同样经 `row_scope_sql` 流入检索**：若 dataScope 对向量表的条件引用了
     子表字段、或向量表本身是 `inherit_parent` 子表，对应 `EXISTS(...)` 会随行级 WHERE 一并下推——那些子表/父表
     须在同一 mart 别名下真实存在（向量表通常已去规范化、无子表，故一般无感）。见 [04](04-permissions-and-data-access.md)。
@@ -238,6 +243,8 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
   **两条必须用「窄权限账号」实测**（管理员账号两条都测不出来）：① **安全**——无权数据检索不出来；
   ② **召回**——有权数据**捞得全**（同一问题下窄权限账号返回条数应接近 `top_n`，若远少于或为 0，
   即 HNSW 后过滤塌陷，查 pgvector 服务端版本）。向量化字段若受列级管控，G2 决策已给出处置。
+  有带业务条件的检索时再加一条：用**窄条件**（某个机型 / 某个工厂）实测，候选里相关的记录都捞得到——
+  宽条件测不出模块侧求交的塌陷；检索走的是 `restrict_ids`，而不是召回后求交。
 
 ### `governance-etl`（脏数据 / 大数据量需治理） ⚠ 跨 G2 + 需平台侧前置
 

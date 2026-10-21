@@ -102,7 +102,7 @@ X-Forge-Test-Key: fdt_xxxxxxxx.yyyyyyyy
 | `route_reason` | string | 路由依据（`keyword` / `llm` / `explicit_target` …） |
 | `answer` | string | 答案正文（Markdown）。**只含 delta**，表格/图表不在其中 |
 | `tables` | object[] | `{title, columns, rows}`，**结构化断言首选** |
-| `charts` | object[] | `{chart_type, title, x, series, unit}`，数值来自沙箱 |
+| `charts` | object[] | `{chart_type, title, x, series, unit[, style]}`，数值来自沙箱；`style` 只在模块传了时出现 |
 | `citations` | object[] | 引用溯源条目（整轮聚合） |
 | `clarify` | object \| null | 非 null = **本轮没有实质回答**（问题不明确被答前阻断） |
 | `suggestions` | object \| null | 答后追问建议 |

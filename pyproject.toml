@@ -28,7 +28,10 @@ dependencies = [
     # core ≥0.3.4：`ctx.user.name` / `ctx.user.department`（平台注入的只读姓名/部门）与
     # `ContractBus.context(user_name=, department=)`——docs/dev/02 教了它们。低于它读这两个属性即
     # AttributeError。
-    "paxsz-forge-core>=0.3.4",
+    # core ≥0.3.5：`RetrievalPort.search(restrict_ids=...)`、`RETRIEVAL_RESTRICT_MAX_IDS` 与
+    # `RetrievalRestrictTooLarge`（语义检索的候选范围限定，docs/dev/02 教了）。本模块「类似问题」
+    # 带机型 / 工厂 / 时间条件时靠它只在候选单里找；低于它没有这个参数，传了即 TypeError。
+    "paxsz-forge-core>=0.3.5",
 ]
 
 [project.entry-points."forge.modules"]
@@ -87,7 +90,8 @@ dev = [
     # data ≥0.2.0：导出任务里的流式取数 `ctx.data.iter_fetch` / `iter_raw`（docs/dev/02 教了）。
     # data ≥0.3.0：权限协议 v1.3 的行列权限编译（子表字段引用 / inherit_parent / 集合操作符，
     # docs/dev/04 教了）。低于它，本地按 v1.2 语义编译，同一棵权限树本地与线上取到的行不一样。
-    "paxsz-forge-data>=0.3.0",     # DataScopeFilter / 数据源接入 / ctx.knowledge.citations（按 profile 需要）
+    # data ≥0.3.1：`ctx.retrieval.search(restrict_ids=...)` 的实现（与行级权限 AND、限定时精确近邻）。
+    "paxsz-forge-data>=0.3.1",     # DataScopeFilter / 数据源接入 / ctx.knowledge.citations（按 profile 需要）
     # sandbox ≥0.2.0：`run_script(..., return_frames=True)` 与 `SandboxOutcome.frames`（docs/dev/02 教了）；
     # 且 platform ≥0.3.1 本身就要求它（ctx.stats 每次调用都传新参数）。
     "paxsz-forge-sandbox>=0.2.0",    # paxsz-forge-platform 的传递依赖：explicit 索引下须直接声明才走内网源（沙箱数字处理）
