@@ -348,6 +348,8 @@ deploy.sh  systemctl --user restart forge-jobs
 | 回填写入报维度不符 | 推理引擎侧没按 MRL 截断到 1024 | 引擎侧配置；向量表建的是 `vector(1024)` |
 | **某个模块的定时任务一条都不跑，其他模块正常** | 该模块被隔离了（非法 cron / `jobs()` 抛异常） | 看 `job_collect_failed` 日志与 jobs 能力面板的 `module_jobs` 项；改完**重启 `forge-jobs`** |
 | **窄权限用户召回条数远少于 top_n（管理员正常）** | HNSW 后过滤的召回塌陷；服务端 pgvector < 0.8.0 时没有 `iterative_scan` | 升级服务端 pgvector ≥ 0.8.0；验收必须用窄权限账号测召回条数 |
+| **带条件（机型/工厂/时间）的检索经常 0 条，不带条件正常** | 模块「全表召回 top_k → 与候选编号求交」：候选窄时相关的几条排不进全表前 top_k | 改用 `ctx.retrieval.search(..., restrict_ids=候选编号)`（精确近邻，候选内召回完整；需 `paxsz-forge-core ≥ 0.3.5` / `paxsz-forge-data ≥ 0.3.1`）；验收用窄条件测 |
+| `restrict_ids` 传了编号却 0 条 | 编号与向量行 `id` 对不上：向量行 id 是**源表 id 列转 text**，传的却是别的列 / 拼了前缀 | 传 `manifest.vectorize` 的 `id_column` 那一列的值；float / 整串字符串会直接 `TypeError`，不会走到这里 |
 | 换了 embedding 模型后结果变差 | 正常：换模型会触发一次全量重嵌，重嵌完成前新旧向量并存 | 等回填跑完，或手动 `forge jobs run` 催一轮 |
 
 ---

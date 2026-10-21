@@ -17,7 +17,7 @@
 | `tool_call` | `Event.tool_call(tool, arguments=None)` | 工具调用开始（含参数摘要） |
 | `tool_result_meta` | `Event.tool_result_meta(tool, meta=None)` | 工具结果元信息（行数/耗时，**不含大数据体**） |
 | `table` | `Event.table(columns, rows, *, title="")` | 结构化表格产物 |
-| `chart` | `Event.chart(chart_type, series, *, title="", x=None, unit="")` | 图表产物（抽象 spec，数字须来自沙箱；[见下](#表格与图表产出事件别再往正文里抄一遍)） |
+| `chart` | `Event.chart(chart_type, series, *, title="", x=None, unit="", style=None)` | 图表产物（抽象 spec，数字须来自沙箱；`style` 是 echarts 样式直通位，只管长相，见 [02](02-sdk-reference.md#事件协议-forge_coreevents)；[见下](#表格与图表产出事件别再往正文里抄一遍)） |
 | `citation` | `Event.citation(items)` | 引用溯源（知识/检索结果出处） |
 | `clarify` | `Event.clarify(question, options=None, *, recommendations=None, guide_text="")` | 澄清引导（**答前阻断**：意图/参数不明确） |
 | `suggestions` | `Event.suggestions(recommendations, *, guide_text="")` | 追问建议（**答后非阻断**：引导下一步；[见下](#追问建议suggestions)） |
@@ -77,8 +77,8 @@ yield Event.delta("华东领先，环比 +12%。")   # 正文只说结论，不�
 ```
 
 平台会把这两类事件**确定性地投影进落库正文**（`table` → Markdown 表格、`chart` → ` ```echarts `
-代码块），
-让历史回读与 v1（INFO 兼容面）也看得到表和图 —— 位置就在事件到达的那个位置。所以：
+代码块；`chart` 带了 `style` 时，围栏里的 option 已经把样式合并进去，历史回读直接渲染即可），
+让历史回读（`GET /v2/conversations/{id}/messages`）也看得到表和图 —— 位置就在事件到达的那个位置。所以：
 
 - **自己再往 `delta` 里写一份 Markdown 表格 = 用户看到两张表**（实时流一张来自事件、历史里
   两张都在正文）。

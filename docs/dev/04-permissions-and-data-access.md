@@ -641,6 +641,21 @@ for h in hits:
 `hnsw.iterative_scan` 续扫补救（需服务端 pgvector >= 0.8.0）。
 **验收时务必用窄权限账号测「捞得全不全」**，管理员账号测不出这个问题。
 
+### 业务条件 + 语义检索：用 `restrict_ids`，别在模块里求交
+
+同一种塌陷还有一个**模块侧**的版本：问题同时带了机型/工厂/时间等条件时，「全表召回 `top_k` → 与
+`ctx.data` 取到的候选编号求交」就是后过滤——条件越窄、交集越常为 0，`iterative_scan` 也救不了
+（它只作用于 SQL 里的 WHERE）。正确写法是把候选编号交给平台：
+
+```python
+ids = ctx.data.fetch(spec)["issue_no"].tolist()          # 取候选的过程照常受权限约束
+hits = await ctx.retrieval.search(q, source="forge_mart_x", table="issue_vec", restrict_ids=ids)
+```
+
+`restrict_ids` 与行级权限编译进同一个 WHERE（AND）——**只收窄、永不放宽**，编号即使算错也捞不出无权行；
+限定时平台走精确近邻，候选内召回完整。`[]` 直接返回空；去重后超过 5000 个报
+`RetrievalRestrictTooLarge`（不截断）。写法细节见 [02](02-sdk-reference.md)。
+
 ## 知识库检索（`ctx.knowledge`）
 
 **第三条取数路径**（`knowledge-qa` profile）。外部知识库（RAGFlow）里的文档切片同样是数据，
@@ -799,6 +814,8 @@ if outcome.ok:
       把明细全量拉回进程（那既是内存风险，也让更多无关行离开数据库）。
 - [ ] 语义检索走 `ctx.retrieval.search(...)`（权限与审计自动在场），未自己 new `PgVectorIndex`/`EmbeddingClient`；
       向量表已随行落权限承载列，**窄权限账号**实测两条：无权数据检索不出来（安全）+ 有权数据捞得全（召回）。
+- [ ] 带业务条件（机型/工厂/时间…）的语义检索用 `restrict_ids` 传候选编号，**没有在模块里「全表召回再求交」**；
+      编号取自向量化的 `id_column`；接住了 `RetrievalRestrictTooLarge`（超限报错不截断），回落时如实说明结果不保证完整。
 - [ ] 向量化走 `manifest.vectorize` 声明（平台生成回填 + 透传），`jobs()` 里没有自写的向量化 job；
       向量表 DDL 由 `forge vectorize ddl` 生成而非手写。
 - [ ] ETL job（治理同步等）的 SELECT **带上了权限承载列**并原样落进 mart 表——`ctx.etl` 是系统级句柄、

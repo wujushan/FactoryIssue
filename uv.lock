@@ -66,11 +66,11 @@ wheels = [
 
 [[package]]
 name = "certifi"
-version = "2026.10.18"
+version = "2026.10.19"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/7e/eb/a2aa1ac3ea30dd3f30ca57f40232138b6b0040719316ecb85daf61167771/certifi-2026.10.18.tar.gz", hash = "sha256:b9995d97b64d0431a5af837d8ca8cd6238104d1f319f04bd93ea43124d6c861e", size = 135227, upload-time = "2026-10-18T16:21:07.655Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz", hash = "sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae", size = 137598, upload-time = "2026-10-20T02:24:16.604Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/08/ba/95dd616042484f7c83a06974388b37b837732740ee70bc5dc715b5fcd55a/certifi-2026.10.18-py3-none-any.whl", hash = "sha256:73191c47aaa79da394e8fee2dbc2ec827432cab56311122c9e47abf79e390f62", size = 134093, upload-time = "2026-10-18T16:21:06.276Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/51/29046e48f693c54e5b7412216d447a1d8362c9653148d98c02cdf65fa733/certifi-2026.10.19-py3-none-any.whl", hash = "sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b", size = 136464, upload-time = "2026-10-20T02:24:15.072Z" },
 ]
 
 [[package]]
@@ -102,7 +102,7 @@ wheels = [
 
 [[package]]
 name = "fastapi"
-version = "0.146.0"
+version = "0.153.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -112,9 +112,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cd/5b/f3b4277844c3ce66c16f62670cd2a26236489aa97115d04182171ce714a9/fastapi-0.146.0.tar.gz", hash = "sha256:e96047fc353ff43f7fda069c3578a7d94902a762d9aca2e065f7f801abd91a49", size = 471622, upload-time = "2026-10-18T15:19:30.538Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/69/8461d4c25490b5efe65b2178c857273785bd8b42a5555264b6b4f9bf2ed0/fastapi-0.153.0.tar.gz", hash = "sha256:5dbf5dcf6cf86388326c147566077c56a14c55b0f1bef370195da98e724a503f", size = 489663, upload-time = "2026-10-20T13:47:40.029Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/7d/f96d4bd930d52f299583ea55266990480ec0db46d2c498df716a98474e87/fastapi-0.146.0-py3-none-any.whl", hash = "sha256:0eb9985a7d5bb11ce9a962d4b65e0cf1a2e13d6aca2e14da57bc526370e26748", size = 144702, upload-time = "2026-10-18T15:19:29.059Z" },
+    { url = "https://files.pythonhosted.org/packages/93/41/c2c2c10be9068304a522dd64893916b5b21549af084ea942c26388aaa5b0/fastapi-0.153.0-py3-none-any.whl", hash = "sha256:77fbc9f41d2e5cd81f0c0a20482e627f8ebbb9b9005ac7586e415ee69dfea4ec", size = 146107, upload-time = "2026-10-20T13:47:38.295Z" },
 ]
 
 [[package]]
@@ -137,12 +137,12 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "paxsz-forge-core", specifier = ">=0.3.4", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" }]
+requires-dist = [{ name = "paxsz-forge-core", specifier = ">=0.3.5", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" }]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.28" },
-    { name = "paxsz-forge-data", specifier = ">=0.3.0", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" },
+    { name = "paxsz-forge-data", specifier = ">=0.3.1", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" },
     { name = "paxsz-forge-platform", specifier = ">=0.3.3", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" },
     { name = "paxsz-forge-sandbox", specifier = ">=0.2.0", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" },
     { name = "pytest", specifier = ">=8.3" },
@@ -342,21 +342,21 @@ wheels = [
 
 [[package]]
 name = "paxsz-forge-core"
-version = "0.3.4"
+version = "0.3.6"
 source = { registry = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "structlog" },
 ]
-sdist = { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/58db3a07d76753f0a2d4501dfe4d54876c9680a09b4b70b547c932ca926d6406/paxsz_forge_core-0.3.4.tar.gz", hash = "sha256:58db3a07d76753f0a2d4501dfe4d54876c9680a09b4b70b547c932ca926d6406" }
+sdist = { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/b42af1297181188fd0e106a3ff189f2b2066f3ac2c8f6239d859688b4507a17d/paxsz_forge_core-0.3.6.tar.gz", hash = "sha256:b42af1297181188fd0e106a3ff189f2b2066f3ac2c8f6239d859688b4507a17d" }
 wheels = [
-    { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/5dfea4dbed1b4e31fc5e3d92f453b2d3caf2552748508f07cf7943eb7655310e/paxsz_forge_core-0.3.4-py3-none-any.whl", hash = "sha256:5dfea4dbed1b4e31fc5e3d92f453b2d3caf2552748508f07cf7943eb7655310e" },
+    { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/0074487354b6e0480c996d95d1a1d248a3e650c7aff5946cc5d36717d2285078/paxsz_forge_core-0.3.6-py3-none-any.whl", hash = "sha256:0074487354b6e0480c996d95d1a1d248a3e650c7aff5946cc5d36717d2285078" },
 ]
 
 [[package]]
 name = "paxsz-forge-data"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" }
 dependencies = [
     { name = "pandas" },
@@ -364,9 +364,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "structlog" },
 ]
-sdist = { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/d1cb5ab59686425cd580a891038fd8e49d6b5642dc6af60c51336fd52c7b80ce/paxsz_forge_data-0.3.0.tar.gz", hash = "sha256:d1cb5ab59686425cd580a891038fd8e49d6b5642dc6af60c51336fd52c7b80ce" }
+sdist = { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/3a9cf1a221721aab16a5ea8cc1a0e3541ee94f5ab56fec4511ed0150cab1fad8/paxsz_forge_data-0.3.1.tar.gz", hash = "sha256:3a9cf1a221721aab16a5ea8cc1a0e3541ee94f5ab56fec4511ed0150cab1fad8" }
 wheels = [
-    { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/c3f815fc96188d172754d0a39da893f7658a81a4812257dbff982e5af74e37e4/paxsz_forge_data-0.3.0-py3-none-any.whl", hash = "sha256:c3f815fc96188d172754d0a39da893f7658a81a4812257dbff982e5af74e37e4" },
+    { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/163176a8f8db9f3c1f0b7ec3efc4c3b2eda1e3c012f2fce6b9dc91fc25b3237a/paxsz_forge_data-0.3.1-py3-none-any.whl", hash = "sha256:163176a8f8db9f3c1f0b7ec3efc4c3b2eda1e3c012f2fce6b9dc91fc25b3237a" },
 ]
 
 [package.optional-dependencies]
@@ -379,7 +379,7 @@ sqlserver = [
 
 [[package]]
 name = "paxsz-forge-platform"
-version = "0.3.4"
+version = "0.3.6"
 source = { registry = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" }
 dependencies = [
     { name = "alembic" },
@@ -403,9 +403,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "xlsxwriter" },
 ]
-sdist = { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/d85f9c7816176191a9e1cdd9648091b0c470754fbaa6c95e6223b0fe94925e20/paxsz_forge_platform-0.3.4.tar.gz", hash = "sha256:d85f9c7816176191a9e1cdd9648091b0c470754fbaa6c95e6223b0fe94925e20" }
+sdist = { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/6862d16320a5457436f9bec3b4df874c420e0d126322aee66f7659099adf3365/paxsz_forge_platform-0.3.6.tar.gz", hash = "sha256:6862d16320a5457436f9bec3b4df874c420e0d126322aee66f7659099adf3365" }
 wheels = [
-    { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/a7bdaed05f3cdaffa0fb795fc91ea321d087eb8cd2a9d1092937839f0d7a0487/paxsz_forge_platform-0.3.4-py3-none-any.whl", hash = "sha256:a7bdaed05f3cdaffa0fb795fc91ea321d087eb8cd2a9d1092937839f0d7a0487" },
+    { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/5efdacebaae4d7142eaa31b2c3a0acea7eaadc206ebf2159c7d692002e665647/paxsz_forge_platform-0.3.6-py3-none-any.whl", hash = "sha256:5efdacebaae4d7142eaa31b2c3a0acea7eaadc206ebf2159c7d692002e665647" },
 ]
 
 [[package]]
@@ -535,7 +535,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-settings"
-version = "2.16.0"
+version = "2.16.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
@@ -543,9 +543,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2e/3b/a5d2294799b53b448319978cfb5bd139d5a9d45e862af91661614f14c922/pydantic_settings-2.16.0.tar.gz", hash = "sha256:5b6c578049ede4db0e2ef3b4eaa4ad4069cfa9211f83fb38df899dfade50a614", size = 301031, upload-time = "2026-10-14T12:44:09.998Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/05/ca/7817b4bf0c4b15c6a6ab8cdf4cb96c268335a8ca2f525de93b6ebe4c7d28/pydantic_settings-2.16.1.tar.gz", hash = "sha256:aff602a1886338c2df3d1e958e2193a8dc33cec75b91f202e83fd98484b4b0da", size = 303436, upload-time = "2026-10-20T11:37:19.024Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/f4/b987bf8c51e5b19a95fa66d1ee596074141e085d9c2ddf97920803c7029b/pydantic_settings-2.16.0-py3-none-any.whl", hash = "sha256:7e73acf7f61936a15e5a3b6eedaea29f133357faf7272f2607ba479b049dd7f2", size = 80364, upload-time = "2026-10-14T12:44:08.233Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/74/fdf926afe145d8629c4b2ff57f4ea1d64ed7abc4d84d97463b2517a2547e/pydantic_settings-2.16.1-py3-none-any.whl", hash = "sha256:30f5313340da4e8f1b440d1910b92a5bc3ccbb6b4ba70ec2b8395bc921f418f5", size = 80771, upload-time = "2026-10-20T11:37:17.298Z" },
 ]
 
 [[package]]

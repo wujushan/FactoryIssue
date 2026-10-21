@@ -489,7 +489,7 @@ Event.delta(text)                                            # 正文 token 流
 Event.tool_call(tool, arguments=None)                        # 工具调用开始
 Event.tool_result_meta(tool, meta=None)                      # 工具结果元信息（行数/耗时，不含大数据体）
 Event.table(columns, rows, *, title="")                      # 表格产物
-Event.chart(chart_type, series, *, title="", x=None, unit="")  # 图表产物（抽象 spec，数字须来自沙箱）
+Event.chart(chart_type, series, *, title="", x=None, unit="", style=None)  # 图表产物（抽象 spec，数字须来自沙箱；style 为 echarts 样式直通位）
 Event.citation(items)                                        # 引用溯源（items: list[dict]）
 Event.progress(stage, detail="")                             # 阶段进度
 Event.clarify(question, options=None, *, recommendations=None, guide_text="")  # 澄清引导（答前阻断）
@@ -517,6 +517,30 @@ Event.end(*, usage=None, extra=None)                         # 平台补发，�
 `chart` 的 `chart_type` 取 `"line"` / `"bar"` / `"pie"`；`series` 是 `[{"name": str, "data": list}]`，
 `x` 是 `{"name": str, "data": list}`（`pie` 可省）。**别手拼**——用
 `Event.chart(**ctx.stats.to_chart(outcome, ...))`，数字只从沙箱产物搬（红线；用法见 07、09）。
+
+**要定制图的长相**（平滑曲线、面积、堆叠、环形、横向条形、图例位置……）用可选的 `style`：它是一段
+**echarts option 片段**，平台把它深合并进确定性拼好的 option（决策 2026-10-20）。顶层键
+（`legend` / `grid` / `tooltip` / `color` / `dataZoom` / `xAxis` / `yAxis`…）直接合并；`series` 传 dict
+套到每条序列、传 list 按下标对齐：
+
+```python
+# 平滑折线
+ctx.stats.to_chart(outcome, chart_type="line", x_key="月份", series_keys=["台数"],
+                   style={"series": {"smooth": True}})
+# 环形图
+style={"series": {"radius": ["40%", "70%"]}}
+# 堆叠柱 + 柱顶标值 + 图例放底部
+style={"series": {"stack": "total", "label": {"show": True, "position": "top"}}, "legend": {"bottom": 0}}
+# 只给第二条序列画虚线
+style={"series": [{}, {"lineStyle": {"type": "dashed"}}]}
+```
+
+规则：① **只准带样式**——`series[].data` / `series[].type` / `xAxis.data` / `dataset` 这些数据键平台一律
+丢弃（数字只能从 `series` / `x` 来，红线不因此开口子；换 series 类型属于词表扩展，不是样式）；② style
+**不能增删序列**，序列数量只由 spec 决定；③ dict 遇 dict 递归合并，其余（含 list）整体替换——双 Y 轴
+给 `yAxis` 一个 list 即可，但平台写进去的单位名会随之丢，自己补回；④ 不传则 `data` 里没有这个键，
+产出与以前逐字节相同。Console 调试台的预览**不呈现**样式（自绘、无 echarts），只标注「含样式定制」——
+真实效果看 echarts 客户端。
 
 详见 [03 · 事件协议与流式输出](03-events-and-streaming.md)。
 
@@ -956,6 +980,7 @@ async def handle(self, request, ctx):
 async def search(
     query, *, source, table, top_k=50, top_n=10,
     dim=1024, id_col="id", text_col="content", embedding_col="embedding", metadata_col="metadata",
+    restrict_ids=None,
 ) -> list[VectorHit]
 ```
 
@@ -966,6 +991,17 @@ hits = await ctx.retrieval.search("到货有哪些质量问题", source="forge_m
 for h in hits:
     ...  # h.id / h.text / h.score / h.metadata
 ```
+
+**先按业务条件缩小范围再检索**（「L1400 的问题里有没有音频相关的」，需 `paxsz-forge-core ≥ 0.3.5` / `paxsz-forge-data ≥ 0.3.1`）：先经 `ctx.data.fetch()` 取出候选编号，再传 `restrict_ids`——只在这些编号里找。**别「全表召回再按编号求交」**：候选窄时相关的那几条排不进全表前 `top_k`，求交常为 0 且不报错。
+
+```python
+ids = ctx.data.fetch(spec)["issue_no"].tolist()   # 向量行 id = 源表 id 列转 text，直接传
+hits = await ctx.retrieval.search(query, source="forge_mart_x", table="issue_vec", restrict_ids=ids)
+```
+
+- 与行级权限是 **AND**，只收窄不放宽；限定时平台走**精确**近邻，候选内召回完整。
+- `None` = 不限定；`[]` = 直接返回空（不是「不限定」）。元素只认 str / int（float 编号先 `.dropna().astype(int)`），其余 `TypeError`。
+- 去重后超过 `forge_core.module.RETRIEVAL_RESTRICT_MAX_IDS`（5000）抛 `forge_core.errors.RetrievalRestrictTooLarge`，**不截断**——改用不限定的检索，并照实说明结果不保证完整。
 
 红线：行级权限由平台经 `ctx.data.row_scope_sql(source, table)` 编译后**随近邻检索一并下推**——无权向量不出库。**别自己 new `PgVectorIndex` / `EmbeddingClient`、别自己读 env 绕开平台配置**：那样等于绕开权限与审计（检索 SQL 也不会进审计归档）。`ctx.retrieval is None` 说明 profile 没声明或平台没配 embedding 服务，按前者查 [07](07-capability-profiles.md)、后者找平台侧，而不是自己造句柄。
 

@@ -115,6 +115,9 @@ yield Event.delta("延期超过 30 天的项目有 12 个。")
   但提示里别引诱它推测）。
 - **分析文字走 `delta` 流式**（边生成边发），表格/图表走一等事件，正文里不再抄一遍那张表
   （见 [03](03-events-and-streaming.md#表格与图表产出事件别再往正文里抄一遍)）。
+- **图的长相按场景定、但别碰数字**：趋势用平滑折线（`style={"series": {"smooth": True}}`）、占比用环形
+  （`style={"series": {"radius": ["40%", "70%"]}}`）、多序列对比用堆叠柱——`style` 是 echarts option
+  片段，只准带样式键；`series[].data` / `series[].type` / `xAxis.data` 平台一律丢弃（用法见 [02](02-sdk-reference.md)）。
 
 **什么时候别分析**（分析是默认，不是强制）：
 
