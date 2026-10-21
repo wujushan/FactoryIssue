@@ -30,7 +30,7 @@
 | cVenCode | varchar | 供应商编号 | — | `info.dbo.tbIQCvendor.ferpcode`（空值不关联） |
 | ImpactQty | int | 影响数量 | — | — |
 | BadQty | int | 不良数量 | — | — |
-| ProblemDesc | nvarchar | 问题描述 | 富文本 | — |
+| ProblemDesc | nvarchar | 问题描述 | 富文本，可能内嵌图片 | — |
 | IsRequire8D | int | 是否需要回复 8D | 1=是，2=否 | — |
 | IsSupplement | int | 是否需要补料 | 1=是，2=否 | — |
 | SupplementQty | int | 补料数量 | — | — |

@@ -13,9 +13,15 @@
     - G2：类似问题怎么比对（关键词还是语义检索）、富文本清洗放在哪、要不要建 `forge_mart_factory_issue`；如建 mart，每张单要带所属域、可按域过滤，CAR 报告正文不进检索文本；海外附件只能从单上登记的 ID 取。确认平台 `data_sources.json` 已登记 `info`、`erp`。
     - 权限：给权限平台配待办任务表的固定行规则前，先跑探测 C8；`docs/platform-feedback/` 两份待平台答复，实现前三种出错情形只靠权限平台承诺兜住（业务方已接受）。
     - G3：权限分支在自动化测试通道验不到，要构造权限数据的单元测试，加四类真实账号人工验收。
-    - G4a：每轮开头用 `ctx.data.describe()` 判域；`manifest.glossary` 按 `glossary.md` 同步。
+    - G4a：每轮开头用 `ctx.data.describe()` 判域；`manifest.glossary` 按 `glossary.md` 同步；各分析维度的图表样式（`Event.chart` 的 `style`）在设计里定，「加工厂」「跟进部门」的「单数与未结案数」不能直接堆叠（未结案含在单数里，会重复计数），要堆叠就拆成「已结案 / 未结案」两段，否则用并列柱。
     - G6：按 `privileges.md`「上线前核对」逐条核对。
 - [ ] **G2 数据现状勘察与治理决策**：数据画像（内网执行，聚合统计特征，外传前人工审核）→ 治理必要性评估报告 → 决策落盘 `docs/decisions/`。**判定是否需要治理/向量化**：原始结构化取数一律直连 info/erp（只读热备副本），仅当需数据治理或非结构化字段向量化时才建 `forge_mart_<模块编码>` 产物库并启用 `governance-etl`/`semantic-retrieval`（模板见 `docs/decisions/README.md`）。**建 mart 就必须在决策里写死两件事**：① 权限承载列清单（缺列平台直接拒绝启动，返工要重建表 + 重跑 embedding）；② 受列级管控字段的处置（列级权限当前不作用于检索路径）。**评审必须在申请建库之前**——建库是运维当场传口令、跑完即走的动作
+  - **进行中（2026-10-20）**：决策草案 `docs/decisions/2026-10-20-G2数据源与治理决策.md`（结构化直连；文字查找建 `forge_mart_factory_issue`，每域文字表 + 分段表 + 向量表、不设权限承载列；按字段分段向量化；「涉及某现象」走关键词与语义两路）。待：
+    - 画像 `docs/probes/2026-10-20-G2数据画像探测说明.md`：P0、F1–F3、F5 已在正式镜像库 `ai-info` 跑完（清洗必要、三域都是中文、每单都有比对文字；内嵌图片占叙述文字约 98%，单值最长约 4,800 万字）；F6、F7 已在 SQL Server 开发库跑完（两张大表有索引，直连；SQL Server 2019，但 `info` 库兼容级别 100）；F8 已跑（指纹、分页可用；`info` 为当前库时 `TRY_CONVERT` / `STRING_SPLIT` 不可用，G4a 约束），画像全部完成，可以评审；DBA 确认正式库版本与索引一致、平台告知 `info` 连接的默认库（建议 `CoreINFO`），都不阻塞评审；
+    - 业务方答复 `docs/open-questions.md` G22–G24，G24 附同义说法清单（未决期间 guard 拦 src/）；
+    - 平台答复 `docs/platform-feedback/` 的「切块后按业务记录限定与去重」「查询侧缺少任务说明」（都不阻塞）；「候选范围限定」已实现，本仓已升到 core 0.3.6 / data 0.3.1。
+    - 齐了再评审，评审通过才申请建库。
+  - **带入 G3**：检索评测集（非接、音频、花屏等主题问句 + 业务方确认的应命中单），用来定分段规则，见决策「检索评测」。
 - [ ] **G3 测试案例集**：种子问题集 → 编程助手扩展 → `docs/testcases/`（每条附参考 SQL/预期工具调用；自动化 golden 集 + 人工测试手册双产物）。golden 集用 `scripts/qa_test.py` 经平台 `/test` 通道在真实测试数据上跑，格式与断言原则见 [docs/dev/10](docs/dev/10-automated-testing.md)
 - [ ] **G4a 技术设计定稿**：落 `docs/decisions/YYYY-MM-DD-模块技术设计.md`（模板见 `docs/decisions/README.md`）——manifest 草案 + **`field_mappings` 逐列锚定**（协议权限字段 → 物理列；缺失 fail-closed 拒查、锚错列即越权，这是最该被人看一眼的地方）+ `handle()` 编排与事件序列 + SQL/沙箱边界 + 错误与降级。纯 `structured-query` 模块几十行足够；带 `governance-etl`/`semantic-retrieval`/`analysis-report` 的必须独立成文
 - [ ] **G4b 编码实现**：照 G4a 的设计写 manifest（intents/keywords/dependencies/**data_sources**/field_mappings）+ tools + 流式事件；**偏离设计要回改 G4a 文档**，别让代码与设计各说各话。data_sources 别名须与 G1 各表 `source` 并集一致、且平台侧 data_sources.json 已登记（否则平台拒绝启动）。**回给用户的内容按 [docs/dev/09 答案呈现规范](docs/dev/09-answer-presentation.md) 自检**：无意义字段（自增 ID 等）不返回、表名/字段名不外露、数据之外给合理分析、寒暄（「你好」「你能做什么」）报本板块能力与常用场景
