@@ -51,6 +51,8 @@
 
 ## 关联
 
+结构总览见 `table_relations.md`；本节为关联条件的信源，修改时同步该图。
+
 | 看什么 | 怎么关联 |
 |---|---|
 | 处理步骤 | `OverseasProblem_StepLog.ProblemId = 主表.Id` |

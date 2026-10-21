@@ -175,6 +175,8 @@
 
 ## 关联
 
+结构总览见 `table_relations.md`；本节为关联条件的信源，修改时同步该图。
+
 | 看什么 | 怎么关联 |
 |---|---|
 | 机型、系列 | `ZCTracking_ProductNames.ProblemId = 主表.ID`，一张单可多机型 |
