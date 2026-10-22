@@ -17,6 +17,9 @@
 - **info.dbo.DocumentList**：核心业务附件与文库文档主表，包含完整的文档元数据、业务关联字段（BusinessType, frecid）及状态标志。
 - **CoreINFO.dbo.ZCTracking_RiskStream**：该表主要用于记录风险订单的流程状态，包含制程ID、当前步骤（如填写退货/退库信息）、状态、责任人及审计信息（新增人、新增时间）等字段。
 - **info.dbo.tbTask：** 用于存储个人事务及待办任务的核心信息。该表包含任务的基础属性（如ID、标题、描述）、时间管理字段（创建、接受、计划完成、实际完成时间）、状态与进度跟踪（状态、优先级、进度百分比）、人员关联（负责人、创建者）以及流程控制字段（前置/后置任务、并发模式、外协标志等）。此外，还包含附件标记、备注、评估信息等扩展字段，以支持复杂的业务流程管理和任务协作。
+- **CoreINFO.dbo.ZCTracking_CheckReason:** 用于记录制程问题中已选中的原因信息。该表通过 `ProblemId` 关联主问题表，并包含具体的类别、功能现象及问题原因ID，同时记录了数据的创建人和创建时间。
+- **CoreINFO.dbo.ZCTracking_PossibleInvCode:**用于记录制程问题（通过 `ProblemId` 关联）所可能涉及的物料信息，包含物料编码、名称及描述。
+- **CoreINFO.dbo.ZCTracking_ProblemFiveWhy：**用于记录制程问题的 5Why 分析过程。该表通过 `ProblemId` 关联主表 `ZCTracking_ProblemList`，存储具体的分析问题（Question）与对应原因（Reason），并跟踪问答状态（Status）及提问/答复的人员和时间信息。
 
 ## 表名：ZCTracking_ProblemList
 
@@ -31,7 +34,7 @@
 | **Numbers**              | nvarchar(120)  | 单号 (自动生成，如 ZC2109001，其中：ZC为固定前缀；21为年份；09为月份；001是序号，表示当月的001号问题)                                                                                                                                                |
 | **ProblemType**          | int            | 问题类型 (1:硬件问题，2:软件问题，3:物料问题，4:资料问题，5:工厂制程 6:结构问题，7:制程优化)                                                                                                                                                        |
 | **Factory**              | nvarchar(120)  | 关联`PaxFactory.FactoryID`段。                                                                                                                                                                                     |
-| **Status**               | int            | 处理状态流转 (1:指定责任人, 2:责任人确认, 3:工程确认, 4:PMC确认, 5:工厂制程分析, 6:IQC确认, 7:填写退货单号, 8:SQC跟进, 9:设计更改, 10:设计变更后SQE确认, 11:IQC意见, 12:生产角色确认, 13:生产角色驳回, 30:效果确认, 31:结案确认, 32:已完成,36:仅效果确认(预防对策确认已完成)，37 并行阶段:仅预防对策确认(效果确认已完成)) |
+| **Status**               | int            | 处理状态流转 (1:指定责任人, 2:责任人确认, 3:工程确认, 4:PMC确认, 5:工厂制程分析, 6:IQC确认, 7:填写退货单号, 8:SQE跟进, 9:设计更改, 10:设计变更后SQE确认, 11:IQC意见, 12:生产角色确认, 13:生产角色驳回, 30:效果确认, 31:结案确认, 32:已完成,36:仅效果确认(预防对策确认已完成)，37 并行阶段:仅预防对策确认(效果确认已完成)) |
 | **ImpactQty**            | int            | 影响数量                                                                                                                                                                                                           |
 | **BadQty**               | int            | 不良数量                                                                                                                                                                                                           |
 | **Rate**                 | decimal        | 不良率，1代表1%，46.4表示46.4%，100表示百分百或者100%                                                                                                                                                                           |
@@ -340,4 +343,42 @@
 | fname        | varchar      | 任务标题（一句话）。                                         |
 | fuserID      | varchar      | 任务对应人员（单个工号，多人需要每人增加一条记录）。         |
 | fstat        | varchar      | 状态。枚举：326=业务码值 326；完成=完成；已取消=已取消；已完成=已完成；已接受=已接受；已接收=已接收；待接受=待接受；陈莹莹2020.04.02邮件通知张洁凤废弃物料。=陈莹莹2020.04.02邮件通知张洁凤废弃物料。 |
+
+
+
+### 表名：**ZCTracking_CheckReason**
+
+| **序号** | **字段名称**     | **字段类型** | **字段描述** |
+| ------ | ------------ | -------- | -------- |
+| 1      | ID           | int      | ID       |
+| 2      | ProblemId    | int      | 问题id，关联ZCTracking_ProblemList.ID     |
+| 3      | ClassID      | int      | 类别ID     |
+| 4      | PhenomenonID | int      | 功能现象ID   |
+| 5      | ReasonID     | int      | 问题原因ID   |
+| 6      | AddUser      | int      | 新增人      |
+| 7      | AddDate      | datetime | 新增时间     |
+
+### 表名：**ZCTracking_PossibleInvCode**
+
+| **字段名称**  | **字段类型** | **字段描述** |
+| --------- | -------- | -------- |
+| ID        | int      | ID       |
+| ProblemId | int      | 问题ID，关联ZCTracking_ProblemList.ID     |
+| InvCode   | nvarchar | 物料编码     |
+| InvName   | nvarchar | 物料名称     |
+| InvStd    | nvarchar | 物料描述     |
+
+### 表名：**ZCTracking_ProblemFiveWhy**
+
+| **序号** | **字段名称**   | **字段类型**  | **字段描述**                                                      |
+| ------ | ---------- | --------- | ------------------------------------------------------------- |
+| 1      | ID         | int       | 主键ID                                                          |
+| 2      | ProblemId  | int       | 制程问题单ID（关联ZCTracking_ProblemList.ID） |
+| 3      | Question   | nvarchar  | 问题                                                            |
+| 4      | Reason     | nvarchar  | 原因                                                            |
+| 5      | Status     | int       | 状态：0=待答复，1=已答复                                                |
+| 6      | AddUser    | int       | 提问人ID                                                         |
+| 7      | AddDate    | datetime2 | 提问时间                                                          |
+| 8      | UpdateUser | int       | 答复人ID                                                         |
+| 9      | UpdateDate | datetime2 | 答复时间                                                          |
 

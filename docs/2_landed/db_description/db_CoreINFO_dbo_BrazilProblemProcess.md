@@ -61,6 +61,6 @@
 | FinishResult | nvarchar | 结案结果 | 是 / 否 / 空 | — |
 | FinishMemo | nvarchar | 结案备注 | — | — |
 | FinishUserID | int | 结案人 | 员工 ID | `info.dbo.Employee.ID` |
-| FinishDate | datetime | 结案日期 | — | — |
+| FinishDate | datetime | 结案日期 | 已结案的单，最新一条处理过程上的结案日期即该单的「结案时间」（见总述「结案时间与结案周期」） | — |
 
 本域不使用源表的 `OReturnOrderNo`。

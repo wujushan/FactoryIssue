@@ -28,14 +28,14 @@ INFO 实例名写 `info`，ERP 实例名写 `erp`；库、架构、表名照下�
 | `info.CoreINFO.dbo.ZCTracking_ProblemList` | 最外层 | 申请了国内 |
 | `info.CoreINFO.dbo.BrazilProblemList` | 最外层 | 申请了巴西 |
 | `info.CoreINFO.dbo.OverseasProblemDetail` | 最外层 | 申请了海外 |
-| **子表 11 张**（挂在本域主表下，`inherit_parent: true`） | | |
-| `info.CoreINFO.dbo.ZCTracking_ProductNames`、`ZCTracking_ProblemSteplog`、`ZCTracking_ProblemOrders`、`ZCTracking_XBOrders`、`ZCTracking_OtherOrder`、`ZCTracking_RiskStream` | 国内主表下，关联列 `ID` → `ProblemId` | 随国内主表 |
+| **子表 14 张**（挂在本域主表下，`inherit_parent: true`） | | |
+| `info.CoreINFO.dbo.ZCTracking_ProductNames`、`ZCTracking_ProblemSteplog`、`ZCTracking_ProblemOrders`、`ZCTracking_XBOrders`、`ZCTracking_OtherOrder`、`ZCTracking_RiskStream`、`ZCTracking_CheckReason`、`ZCTracking_PossibleInvCode`、`ZCTracking_ProblemFiveWhy` | 国内主表下，关联列 `ID` → `ProblemId` | 随国内主表 |
 | `info.CoreINFO.dbo.BrazilProblemCost`、`BrazilProblemPO`、`BrazilProblemProcess` | 巴西主表下，关联列 `ID` → `ProblemID` | 随巴西主表 |
 | `info.CoreINFO.dbo.OverseasProblem_DeliveryOrder`、`OverseasProblem_StepLog` | 海外主表下，关联列 `Id` → `ProblemId` | 随海外主表 |
-| **各域专用查表 5 张** | | |
+| **各域查表 5 张** | | |
 | `info.info.dbo.Brazil_Factory`、`info.info.dbo.Brazil_RequestList` | 最外层 | 申请了巴西 |
-| `info.CoreINFO.dbo.AfterSaleIssueClass` | 最外层 | 申请了巴西 |
-| `info.CoreINFO.dbo.AfterSaleIssueClassPhenomenon`、`AfterSaleIssueClassPhenomenonReason` | 最外层 | 申请了海外 |
+| `info.CoreINFO.dbo.AfterSaleIssueClass` | 最外层 | 申请了国内或巴西 |
+| `info.CoreINFO.dbo.AfterSaleIssueClassPhenomenon`、`AfterSaleIssueClassPhenomenonReason` | 最外层 | 申请了国内或海外 |
 | **共用主数据 8 张** | | |
 | `info.info.dbo.Employee`、`Department`、`DocumentList`、`Inventory`、`tbIQCvendor`、`ProductName`、`NewProduct`；`erp.paxbase.dbo.PaxFactory` | 最外层 | 申请了任一域；不对个别用户单独拒绝 |
 | **流程待办任务表 1 张** | | |
@@ -43,7 +43,7 @@ INFO 实例名写 `info`，ERP 实例名写 `erp`；库、架构、表名照下�
 | **CAR 报告表 1 张** | | |
 | `info.info.dbo.tbIQCreportOut` | 最外层 | 申请了 CAR 报告 |
 
-共 29 张。补充要求：
+共 32 张。补充要求：
 
 - 关联列必须逐字是物理列名，权限平台把它直接拼进查询，不经映射。
 - 同一张表在权限里只能出现一次，出现在多处时整个查询被拒，所以多域共用的表只能放最外层。
@@ -71,7 +71,7 @@ INFO 实例名写 `info`，ERP 实例名写 `erp`；库、架构、表名照下�
 }
 ```
 
-其余国内子表同处理步骤的写法，其余最外层表同人员表的写法；巴西、海外主表及其子表与专用查表、CAR 报告表不列出。
+其余国内子表同处理步骤的写法，其余最外层表同人员表的写法。问题分类、问题现象、现象可能原因三张查表因申请了国内而列出。巴西、海外主表及其子表、巴西的工厂表与申请单表、CAR 报告表不列出。
 
 ## 域闸门
 
@@ -84,7 +84,7 @@ INFO 实例名写 `info`，ERP 实例名写 `erp`；库、架构、表名照下�
 - 寒暄与「你能做什么」：介绍全部三个域的能力；用户未申请的域注明「申请后可查」，不因未申请而略去。三个域都未申请时同样介绍三域，并提示先申请。这类问题不取数（决策 2026-10-18）。
 - 前置判断与取数时的权限拦截结论应当一致。万一不一致，以拒绝为准；数据安全仍由取数时的拦截保证，前置判断负责少走弯路、把无权的域提前说清楚。
 - 人员、部门、工厂、物料、供应商、文档等主数据表随所在域的查询一起使用，本身不单独作为域闸门。CAR 报告是例外，单独授权，见下节。
-- 用户直接给出单号（ZC / BR / HW 开头）而对该单所属域无权限时，只回答「您没有该域的查看权限」，不透露该单是否存在（决策 2026-10-18）。
+- 用户给出只可能属于一个域的号（ZC / BR / HW 开头的问题编号、CAR 编号、国内订单号）而对该域无权限时，只回答「您没有该域的查看权限」，不透露这个号是否存在（决策 2026-10-18、决策 2026-10-22「按编号查单」）。号可能在几个域时（7 位数字、15 位数字、带连字符的串）只查有权的域，写明无权的域未查。号的认法见总述「按编号查单」。
 - 关键词搜索与类似问题同样只返回有权域的单；任何把三域放在一起的检索结果或派生数据，都必须能区分每张单属于哪个域，以便按域闸门过滤。
 
 ## CAR 报告（国内）

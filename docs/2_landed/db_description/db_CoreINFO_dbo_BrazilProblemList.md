@@ -19,10 +19,10 @@
 | ProblemType | varchar | 问题类型 | 文本：设计问题、结构问题、生产问题、制程优化、硬件问题、物料问题、其他。「其他」可写成 `其他\|备注`，此时问题类型显示「其他」，`\|` 后的文字显示为「其他问题备注说明」。只有待提交（草稿）可为空 | — |
 | IsStopLine | varchar | 是否停线 | 是 / 否，默认否。曾发生停线即为「是」，重启后不改回「否」 | — |
 | StopDate | varchar | 停线日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
-| StopStatus | varchar | 停线状态 | 是否已标记停线重启：`停线重启`=已重启；空或其他取值（如 `停线中`）=未标记重启。没有固定枚举 | — |
+| StopStatus | varchar | 停线状态 | 是否已标记停线重启：`停线重启`=已重启；空或其他取值（如 `停线中`）=未标记重启。没有固定枚举。业务方 2026-10-21 正式镜像计数：未删除的单目前只有空与 `停线重启` 两种写法，是否停线为「是」的单都已标记停线重启 | — |
 | ProblemClass | varchar | （内部字段，不返回） | 停线级别 ID | `CoreINFO.dbo.AfterSaleIssueClass.ID` → `ClassName`（显示名「停线级别」） |
 | ProblemPhenomenon | nvarchar | 问题现象 | JSON 数组，展平规则见下方「问题现象」 | — |
-| ProblemLevel | varchar | 问题等级 | A / B / C / 空（空写「未填」） | — |
+| ProblemLevel | varchar | 问题等级 | A+ / A / B / C，与管理页面一致；空（空串）写「未填」。按等级筛选时按显示文字精确匹配，「A」不含「A+」；各级定义见总述「问题等级」 | — |
 | ProblemDiscoveryDate | varchar | 现场发现日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
 | ProblemDiscoveryStation | varchar | 发现工位 | 自由文本，可空 | — |
 | StatisticsDate | varchar | 统计日期 | 文本存日期，格式 `YYYY-MM-DD` | — |

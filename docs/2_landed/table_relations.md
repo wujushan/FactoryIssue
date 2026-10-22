@@ -1,6 +1,6 @@
 # 表关系总览
 
-本模块 29 张表的结构图：三个域的主表、子表、各域专用查表与共用主数据，以及它们之间靠哪一列关联。
+本模块 32 张表的结构图：三个域的主表、子表、各域专用查表与共用主数据，以及它们之间靠哪一列关联。
 
 - **只画结构，不定口径**：关联的条件、取值转换、关联不上怎么显示，以各域 `business_description.md` 的「关联」一节与 `db_description/` 为准。两边不一致时以各域「关联」一节为准，并回来改本图。
 - **维护**：改了任一域的「关联」一节，或增删表，同步改本文件。
@@ -13,19 +13,23 @@ flowchart LR
   subgraph INFO["INFO 实例（数据源 info）"]
     subgraph DOM["国内"]
       ZC[ZCTracking_ProblemList<br/>国内主表]
-      ZCsub["子表 6 张<br/>机型 / 处理步骤 / 生产订单<br/>小板订单 / 其他在线订单 / 风险订单流程"]
+      ZCsub["子表 9 张<br/>机型 / 处理步骤 / 生产订单<br/>小板订单 / 其他在线订单 / 风险订单流程<br/>已选现象与可能原因 / 可能的问题物料 / 5Why"]
       CAR[tbIQCreportOut<br/>CAR 报告]
       TASK[tbTask<br/>流程待办任务]
     end
     subgraph BR["巴西"]
       BRM[BrazilProblemList<br/>巴西主表]
       BRsub["子表 3 张<br/>处理过程 / 费用 / 关联申请单"]
-      BRx["专用查表 3 张<br/>Brazil_Factory / Brazil_RequestList<br/>AfterSaleIssueClass"]
+      BRx["专用查表 2 张<br/>Brazil_Factory / Brazil_RequestList"]
     end
     subgraph OS["海外"]
       HW[OverseasProblemDetail<br/>海外主表]
       HWsub["子表 2 张<br/>处理步骤 / 涉及发货单"]
-      HWx["专用查表 2 张<br/>AfterSaleIssueClassPhenomenon<br/>AfterSaleIssueClassPhenomenonReason"]
+    end
+    subgraph CFG["问题分类与现象配置（多域共用）"]
+      CLS[AfterSaleIssueClass<br/>问题分类]
+      PHE[AfterSaleIssueClassPhenomenon<br/>问题现象]
+      REA[AfterSaleIssueClassPhenomenonReason<br/>现象可能原因]
     end
     subgraph SHARED["共用主数据（info 实例）"]
       EMP[Employee 人员]
@@ -47,7 +51,10 @@ flowchart LR
   BRM --- BRsub
   BRM --- BRx
   HW --- HWsub
-  HW --- HWx
+
+  ZC -.-> CLS & PHE & REA
+  BRM -.-> CLS
+  HW -.-> PHE & REA
 
   ZC -.-> EMP & DEPT & DOC & INV & VEN
   ZC -. 跨实例 .-> FAC
@@ -63,13 +70,13 @@ flowchart LR
 | 库 | 表 | 归属 | 国内 | 巴西 | 海外 |
 |---|---|---|:-:|:-:|:-:|
 | CoreINFO | ZCTracking_ProblemList | 国内主表 | ● | | |
-| CoreINFO | ZCTracking_ProductNames、ZCTracking_ProblemSteplog、ZCTracking_ProblemOrders、ZCTracking_XBOrders、ZCTracking_OtherOrder、ZCTracking_RiskStream | 国内子表 | ● | | |
+| CoreINFO | ZCTracking_ProductNames、ZCTracking_ProblemSteplog、ZCTracking_ProblemOrders、ZCTracking_XBOrders、ZCTracking_OtherOrder、ZCTracking_RiskStream、ZCTracking_CheckReason、ZCTracking_PossibleInvCode、ZCTracking_ProblemFiveWhy | 国内子表 | ● | | |
 | CoreINFO | BrazilProblemList | 巴西主表 | | ● | |
 | CoreINFO | BrazilProblemProcess、BrazilProblemCost、BrazilProblemPO | 巴西子表 | | ● | |
 | CoreINFO | OverseasProblemDetail | 海外主表 | | | ● |
 | CoreINFO | OverseasProblem_StepLog、OverseasProblem_DeliveryOrder | 海外子表 | | | ● |
-| CoreINFO | AfterSaleIssueClass | 巴西专用（停线级别） | | ● | |
-| CoreINFO | AfterSaleIssueClassPhenomenon、AfterSaleIssueClassPhenomenonReason | 海外专用（标准现象、可能原因） | | | ● |
+| CoreINFO | AfterSaleIssueClass | 共用（巴西停线级别；国内现象所属分类） | ● | ● | |
+| CoreINFO | AfterSaleIssueClassPhenomenon、AfterSaleIssueClassPhenomenonReason | 共用（问题现象、现象可能原因） | ● | | ● |
 | info | Brazil_Factory、Brazil_RequestList | 巴西专用 | | ● | |
 | info | tbIQCreportOut | 国内专用（CAR 报告，单独授权） | ● | | |
 | info | tbTask | 国内专用（全公司共用表，本模块只取国内制程任务） | ● | | |
@@ -78,7 +85,7 @@ flowchart LR
 | info | ProductName、NewProduct | 共用 | | ● | ● |
 | paxbase（ERP 实例） | PaxFactory | 共用 | ● | | ● |
 
-合计：CoreINFO 17、info 11、paxbase 1，共 29 张；国内 15、巴西 14、海外 11。
+合计：CoreINFO 20、info 11、paxbase 1，共 32 张；国内 21、巴西 14、海外 11。
 
 ## 2. 国内
 
@@ -90,7 +97,14 @@ erDiagram
     ZCTracking_ProblemList ||--o{ ZCTracking_XBOrders : "ID = ProblemId（仅物料单）"
     ZCTracking_ProblemList ||--o{ ZCTracking_OtherOrder : "ID = ProblemId"
     ZCTracking_ProblemList ||--o{ ZCTracking_RiskStream : "ID = ProblemId"
-    ZCTracking_ProblemList ||--o{ tbTask : "ID = frecID（文本键，ZCTracking 开头、已接受）"
+    ZCTracking_ProblemList ||--o{ ZCTracking_CheckReason : "ID = ProblemId"
+    ZCTracking_ProblemList ||--o{ ZCTracking_PossibleInvCode : "ID = ProblemId"
+    ZCTracking_ProblemList ||--o{ ZCTracking_ProblemFiveWhy : "ID = ProblemId"
+    ZCTracking_CheckReason }o--o| AfterSaleIssueClass : "ClassID = ID"
+    ZCTracking_CheckReason }o--o| AfterSaleIssueClassPhenomenon : "PhenomenonID = ID"
+    ZCTracking_CheckReason }o--o| AfterSaleIssueClassPhenomenonReason : "ReasonID = ID（0 表示没有）"
+    ZCTracking_ProblemFiveWhy }o--o{ Employee : "AddUser、UpdateUser = ID"
+    ZCTracking_ProblemList ||--o{ tbTask : "ID = frecID（文本键，效果确认、预防对策确认两类，已接受）"
     ZCTracking_ProblemList }o--o| tbIQCreportOut : "CARID = fid（仅物料问题）"
     ZCTracking_ProblemList }o--o| PaxFactory : "Factory = FactoryID（跨实例）"
     ZCTracking_ProblemList }o--o| Inventory : "CInvCode = cInvCode"
@@ -102,6 +116,7 @@ erDiagram
     ZCTracking_XBOrders }o--o| Inventory : "InvCode = cInvCode"
     ZCTracking_OtherOrder }o--o| PaxFactory : "Factory = FactoryID（跨实例）"
     ZCTracking_ProblemSteplog }o--o{ DocumentList : "FileUrl 各段 = ID（多值）"
+    ZCTracking_ProblemSteplog }o--o{ Employee : "AddUser = ID；MemberList 各段 = ID（多值）"
     ZCTracking_RiskStream }o--o| Employee : "UserID = ID"
     tbTask }o--o| Employee : "fuserID = ID（文本键）"
     Employee }o--o| Department : "Unit = ID"
@@ -123,6 +138,7 @@ erDiagram
     BrazilProblemList }o--o| tbIQCvendor : "cVenCode = ferpcode（空值不关联）"
     BrazilProblemList }o--o{ Employee : "各 *UserID = ID"
     BrazilProblemProcess ||--o{ DocumentList : "ID = frecid（8D，限业务名称）"
+    BrazilProblemProcess }o--o{ Employee : "各 *UserID = ID"
     Employee }o--o| Department : "Unit = ID"
 ```
 
@@ -152,16 +168,16 @@ erDiagram
 | 类型 | 关联 | 处理要点 |
 |---|---|---|
 | 跨实例 | 国内主表、其他在线订单、小板订单、海外主表 → 国内工厂 | 国内工厂在 ERP 实例，分开取再按工厂码（小板订单按工厂名称）对应 |
-| 多值 | 国内责任归属部门、国内步骤附件；巴西大机型、巴西加工厂；海外大机型、PN 列表、问题跟进人、步骤成员、附件 | 逗号分隔，逐段对应 |
+| 多值 | 国内主状态处理人、IQC 成员、责任归属部门、步骤处理人、步骤附件；巴西大机型、巴西加工厂；海外大机型、PN 列表、问题跟进人、当前责任人、步骤成员、附件 | 逗号分隔，逐段对应 |
 | JSON | 海外已选问题现象 → 标准现象 | `Key` 大于 0 的元素才指向标准现象 |
 | 文本键 | 待办任务业务记录 ID ↔ 国内主表 ID；待办任务人员、国内部分人员列 ↔ 人员 ID；巴西停线级别 ↔ 问题分类 ID | 两边类型不同，需转换后对应 |
-| 带条件 | 生产订单（仅整机单）、小板订单（仅物料单）、CAR 报告（仅物料问题）、待办任务（业务表名以 `ZCTracking` 开头、已接受）、巴西 8D（限业务名称）、文档（未删除） | 条件见各域「关联」一节 |
+| 带条件 | 生产订单（仅整机单）、小板订单（仅物料单）、CAR 报告（仅物料问题）、待办任务（只取效果确认、预防对策确认两类业务表名，已接受）、巴西 8D（限业务名称）、文档（未删除） | 条件见各域「关联」一节 |
 
 ## 6. 与权限配置的对应
 
-`privileges.md`「权限里要列出的表」中，挂在主表下、继承父表的 11 张子表，就是上面各域图里从主表出发、按单号一对多的子表（国内 6、巴西 3、海外 2）。其余表放最外层，包括几张结构上也挂在单下面的表：
+`privileges.md`「权限里要列出的表」中，挂在主表下、继承父表的 14 张子表，就是上面各域图里从主表出发、按单号一对多的子表（国内 9、巴西 3、海外 2）。其余表放最外层，包括几张结构上也挂在单下面的表：
 
 - 流程待办任务：文本键关联，且是全公司共用表，不按父子继承。
 - 巴西申请单：经关联申请单间接关联，本身是巴西业务的需求主表。
-- 可能原因：挂在标准现象下，不挂在问题单下。
+- 问题分类、问题现象、现象可能原因：配置表，被国内、巴西、海外中的两域引用，不挂在问题单下。
 - CAR 报告、文档清单：按 ID 被问题单引用，不是问题单的子表。

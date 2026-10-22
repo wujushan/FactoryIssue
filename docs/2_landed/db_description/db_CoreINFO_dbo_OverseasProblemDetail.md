@@ -26,14 +26,14 @@
 | ImpactQty | int | 影响数量 | — | — |
 | BadQty | int | 不良数量 | — | — |
 | Rate | varchar | 不良率 | 文本，`%` 与 `‰` 混用，如 `30%`、`6.6667‰`；按原文展示 | — |
-| ProblemLevel | varchar | 问题等级 | A+ / A / B / C；NULL 或空写「未填」 | — |
+| ProblemLevel | varchar | 问题等级 | A+ / A / B / C；NULL 或空写「未填」。按等级筛选时按显示文字精确匹配，「A」不含「A+」；各级定义见总述「问题等级」 | — |
 | FoundDate | varchar | 现场发现日期 | 也叫发现日期；文本存日期，格式 `YYYY-MM-DD` | — |
 | Station | varchar | 发现工位 | — | — |
 | Version | varchar | 版本 | 主表上的版本；发货单另有发货版本、生产版本，不是同一项 | — |
 | IsStop | int | 是否停线 | 0=否，1=是。停线重启后仍为 1。「曾经停线」看本列为 1 | — |
 | StopState | int | 停线状态 | 1=停线中，2=已经重启，其他值或 0=没有停线。「停线中」看本列为 1 | — |
 | StopDate | varchar | 停线日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
-| ReStartDate | datetime | 停线重启时间 | 停线重启时写入 | — |
+| ReStartDate | datetime | 停线重启时间 | 目前没有填：业务方 2026-10-22 正式镜像计数，已经重启的 6 张单都为空（见 `dirty_data.md`「其他」）。按重启时间筛、算停线时长时，没填的单不计入并写明，目前等于海外都不计入 | — |
 | ProblemDesc | varchar | 问题描述 | 自由文本，可能内嵌 base64 图片 | — |
 | Improve | varchar | 改善建议 | 自由文本，可能内嵌 base64 图片 | — |
 | Reason | varchar | 问题原因 | 本单已填写的原因：责任人确认 / 原因分析文本。不同于「可能问题原因」 | — |
@@ -42,7 +42,7 @@
 | Remark | varchar | 备注 | — | — |
 | Status | int | 状态 | 见下方「状态枚举」 | — |
 | MemberList | varchar | （内部字段，不返回） | 当前责任人 ID，逗号分隔 | `info.dbo.Employee.ID` |
-| MemberListName | varchar | 当前责任人 | 问题单流转到最新节点时的处理人姓名，与 `MemberList` 对应。直接展示，不另查人员表，也不用处理步骤上的成员代替。已完成的单为空（业务方 2026-10-20 内网计数） | — |
+| MemberListName | varchar | 当前责任人 | 问题单流转到最新节点时的处理人姓名，与 `MemberList` 对应。直接展示，不另查人员表，也不用处理步骤上的成员代替。已完成的单为空（业务方 2026-10-22 正式镜像计数） | — |
 | RDepartment | int | 问题跟进部门 | 空或一个部门 ID。填单时先选部门，再选该部门下的人员 | `info.dbo.Department.ID` |
 | RUser | nvarchar | 问题跟进人 | 空，或一个 / 多个员工 ID，逗号分隔，如 `4535,4527`；多人都属于问题跟进部门所指的那一个部门 | `info.dbo.Employee.ID` |
 | RConfirm | int | 跟进人是否确认 | 0 或空=否（不重新走流程），大于 0=是 | — |

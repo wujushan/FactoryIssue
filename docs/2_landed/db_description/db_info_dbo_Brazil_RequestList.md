@@ -11,6 +11,6 @@
 | 字段 | 类型 | 用户可见显示名 | 含义与取值 | 关联 |
 |---|---|---|---|---|
 | ID | int | （内部字段，不返回） | 主键 | `CoreINFO.dbo.BrazilProblemPO.RequestID` |
-| PartNumber | varchar | PN 编码 | 数字编码，多为 15 位，个别更短；与 PN 主数据的 PartNumber 关联得到 PN 名称，展示为「PN 名称 PN 编码」，找不到名称时只给编码。按 PN 筛选时编码精确匹配、名称包含匹配，任一命中即算 | `info.dbo.NewProduct.PartNumber` |
+| PartNumber | varchar | PN 编码 | 数字编码，多为 15 位。「0」是没选 PN 时的占位值（业务方 2026-10-22 正式镜像计数：未删除单关联的 307 条申请单中 52 条），与管理页面一致，不展示、不参与按 PN 查，见巴西业务描述「大机型与 PN」。其余与 PN 主数据的 PartNumber 关联得到 PN 名称，展示为「PN 名称 PN 编码」，找不到名称时只给编码。按 PN 筛选时编码精确匹配、名称包含匹配，任一命中即算 | `info.dbo.NewProduct.PartNumber` |
 
 表内另有合同、客户、需求数量、齐料状态、销售价等字段，本模块不使用。

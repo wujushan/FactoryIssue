@@ -21,7 +21,7 @@
 | IssQty | int | 发料数量 | — | — |
 | FaliaoDate | datetime | 发料日期 | — | — |
 | ReturnQty | int | 需退货数量 | — | — |
-| ReturnType | int | 处理方式 | 1=就地销毁，2=退回仓库，3=挑选，4=特采 | — |
+| ReturnType | int | 处理方式 | 1=就地销毁，2=退回仓库，3=继续使用，与管理页面一致。业务方 2026-10-22 正式镜像计数：目前只有 3（17,184 行）与 2（2 行），没有空值 | — |
 | ReceivingQty | int | 仓库收货数量 | — | — |
-| TotalinQty | int | 已入库数量 | — | — |
+| TotalinQty | int | 入库数量 | 管理页面写作「已入库数量」 | — |
 | Factory | nvarchar(60) | 订单工厂 | 存工厂码（与主表一致；小板订单存的是名称） | `paxbase.dbo.PaxFactory.FactoryID` → `FactoryName` |
