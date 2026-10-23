@@ -31,6 +31,7 @@
 | `overseas/business_description.md` | 海外口径与表关联 |
 | `link_rules.md` | 制程单跳转链接、附件预览链接的生成规则 |
 | `table_relations.md` | 表关系总览图：主表、子表、专用查表、共用主数据与关联列；只画结构，条件以各域「关联」一节为准。改各域「关联」或增删表时同步 |
+| `topic_terms.md` | 说法清单：「涉及某个话题」按哪些说法找，每个话题列算的、有歧义的、不算的说法。上线后由管理员在平台上维护，本表是初始版本 |
 | `db_description/` | 32 张表的字段说明（三域共用的基础表只写一份） |
 | `dirty_data.md` / `glossary.md` / `privileges.md` | 脏数据与特殊解析 / 术语表 / 权限管控 |
 
