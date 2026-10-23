@@ -53,7 +53,6 @@ flowchart LR
   HW --- HWsub
 
   ZC -.-> CLS & PHE & REA
-  BRM -.-> CLS
   HW -.-> PHE & REA
 
   ZC -.-> EMP & DEPT & DOC & INV & VEN
@@ -75,7 +74,7 @@ flowchart LR
 | CoreINFO | BrazilProblemProcess、BrazilProblemCost、BrazilProblemPO | 巴西子表 | | ● | |
 | CoreINFO | OverseasProblemDetail | 海外主表 | | | ● |
 | CoreINFO | OverseasProblem_StepLog、OverseasProblem_DeliveryOrder | 海外子表 | | | ● |
-| CoreINFO | AfterSaleIssueClass | 共用（巴西停线级别；国内现象所属分类） | ● | ● | |
+| CoreINFO | AfterSaleIssueClass | 国内专用（问题现象所属分类） | ● | | |
 | CoreINFO | AfterSaleIssueClassPhenomenon、AfterSaleIssueClassPhenomenonReason | 共用（问题现象、现象可能原因） | ● | | ● |
 | info | Brazil_Factory、Brazil_RequestList | 巴西专用 | | ● | |
 | info | tbIQCreportOut | 国内专用（CAR 报告，单独授权） | ● | | |
@@ -85,7 +84,7 @@ flowchart LR
 | info | ProductName、NewProduct | 共用 | | ● | ● |
 | paxbase（ERP 实例） | PaxFactory | 共用 | ● | | ● |
 
-合计：CoreINFO 20、info 11、paxbase 1，共 32 张；国内 21、巴西 14、海外 11。
+合计：CoreINFO 20、info 11、paxbase 1，共 32 张；国内 21、巴西 13、海外 11。
 
 ## 2. 国内
 
@@ -133,11 +132,11 @@ erDiagram
     Brazil_RequestList }o--o| NewProduct : "PartNumber = PartNumber"
     BrazilProblemList }o--o{ ProductName : "ProductIDAll 各段 = ID（多值）"
     BrazilProblemList }o--o{ Brazil_Factory : "BrazilFactory 各段 = FactoryName（多值）"
-    BrazilProblemList }o--o| AfterSaleIssueClass : "ProblemClass = ID（类型需转换）"
     BrazilProblemList }o--o| Inventory : "cInvCode = cInvCode"
     BrazilProblemList }o--o| tbIQCvendor : "cVenCode = ferpcode（空值不关联）"
     BrazilProblemList }o--o{ Employee : "各 *UserID = ID"
-    BrazilProblemProcess ||--o{ DocumentList : "ID = frecid（8D，限业务名称）"
+    BrazilProblemProcess ||--o{ DocumentList : "ID = frecid（8D、设计更改附件，限业务名称）"
+    BrazilProblemList ||--o{ DocumentList : "ID = frecid（投诉单附件，限业务名称）"
     BrazilProblemProcess }o--o{ Employee : "各 *UserID = ID"
     Employee }o--o| Department : "Unit = ID"
 ```
@@ -170,8 +169,8 @@ erDiagram
 | 跨实例 | 国内主表、其他在线订单、小板订单、海外主表 → 国内工厂 | 国内工厂在 ERP 实例，分开取再按工厂码（小板订单按工厂名称）对应 |
 | 多值 | 国内主状态处理人、IQC 成员、责任归属部门、步骤处理人、步骤附件；巴西大机型、巴西加工厂；海外大机型、PN 列表、问题跟进人、当前责任人、步骤成员、附件 | 逗号分隔，逐段对应 |
 | JSON | 海外已选问题现象 → 标准现象 | `Key` 大于 0 的元素才指向标准现象 |
-| 文本键 | 待办任务业务记录 ID ↔ 国内主表 ID；待办任务人员、国内部分人员列 ↔ 人员 ID；巴西停线级别 ↔ 问题分类 ID | 两边类型不同，需转换后对应 |
-| 带条件 | 生产订单（仅整机单）、小板订单（仅物料单）、CAR 报告（仅物料问题）、待办任务（只取效果确认、预防对策确认两类业务表名，已接受）、巴西 8D（限业务名称）、文档（未删除） | 条件见各域「关联」一节 |
+| 文本键 | 待办任务业务记录 ID ↔ 国内主表 ID；待办任务人员、国内部分人员列 ↔ 人员 ID | 两边类型不同，需转换后对应 |
+| 带条件 | 生产订单（仅整机单）、小板订单（仅物料单）、CAR 报告（仅物料问题）、待办任务（只取效果确认、预防对策确认两类业务表名，已接受）、巴西 8D、投诉单附件、设计更改附件（限业务名称）、文档（未删除） | 条件见各域「关联」一节 |
 
 ## 6. 与权限配置的对应
 
@@ -179,5 +178,5 @@ erDiagram
 
 - 流程待办任务：文本键关联，且是全公司共用表，不按父子继承。
 - 巴西申请单：经关联申请单间接关联，本身是巴西业务的需求主表。
-- 问题分类、问题现象、现象可能原因：配置表，被国内、巴西、海外中的两域引用，不挂在问题单下。
+- 问题现象、现象可能原因：配置表，国内、海外共用；问题分类：配置表，只有国内用。三张都不挂在问题单下。
 - CAR 报告、文档清单：按 ID 被问题单引用，不是问题单的子表。

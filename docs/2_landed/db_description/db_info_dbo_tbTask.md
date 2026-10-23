@@ -24,8 +24,8 @@
 |---|---|---|---|---|
 | fid | int | （内部字段，不返回） | 主键 | — |
 | ftable | varchar | （内部字段，不返回） | 业务表名。国内制程问题的任务以 `ZCTracking` 开头；本模块只用 `ZCTracking_ProblemSoftware3`（效果确认）、`ZCTracking_PreventionConfirm`（预防对策确认） | — |
-| frecID | varchar | （内部字段，不返回） | 业务记录 ID，文本型。国内制程问题任务存问题单主表 ID，如 `2824` | `CoreINFO.dbo.ZCTracking_ProblemList.ID` |
-| fname | varchar | （内部字段，不返回） | 任务标题，如「国内制程问题单【ZC2609022】待效果确认」。本模块不用：环节按业务表名认 | — |
+| frecID | varchar | （内部字段，不返回） | 业务记录 ID，文本型。国内制程问题任务存问题单主表 ID 的十进制文本 | `CoreINFO.dbo.ZCTracking_ProblemList.ID` |
+| fname | varchar | （内部字段，不返回） | 任务标题，形如「国内制程问题单【问题编号】待效果确认」。本模块不用：环节按业务表名认 | — |
 | fuserID | varchar | （内部字段，不返回） | 任务对应人员，单个员工 ID（文本型，需转整数关联）；多人时每人一条记录 | `info.dbo.Employee.ID` |
 | fstat | varchar | （内部字段，不返回） | 任务状态：待接受、已接受、已接收、已完成、完成、已取消；另有业务码值 `326` 与一个历史遗留的说明文字取值。本模块只取「已接受」 | — |
 

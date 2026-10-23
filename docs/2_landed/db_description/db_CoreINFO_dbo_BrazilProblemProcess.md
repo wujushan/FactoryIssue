@@ -5,9 +5,9 @@
 - **所属域**：巴西
 - **用途**：问题单的处理过程记录：原因分析、改善措施、库存处理、费用转嫁、供应商补料、设计更改、SQE 确认、责任人确认、效果确认与结案。一张单可有多条。
 - **数据产生方**：INFO 系统巴西制程问题流转时写入。
-- **最新一条**：同一 `ProblemID` 下 `ID` 最大的一条。问题跟进人取最新一条的 `ProcessUserID`，问题跟进部门取该人员所在部门。
+- **最新一条**：同一 `ProblemID` 下 `ID` 最大的一条。问题跟进人取最新一条的 `ProcessUserID`，问题跟进部门取该人员在人员表里现在所在的部门。
 - **8D 挂接**：本表 `ID` 是 8D 报告文档的业务记录 ID（见 `db_info_dbo_DocumentList.md`）。
-- **两种读法**：问题单清单与汇总中的过程类字段只取最新一条；看「完整处理过程」时给该单全部记录，按 `ID` 升序。
+- **只取最新一条**：问题单清单、汇总、单张单详情与「完整处理过程」都只取最新一条。前几条是同一单此前的处理轮次，最新一条已在其基础上修改补充（业务方 2026-10-23 答复，见巴西业务描述「单张单详情」）。8D 报告例外：挂在该单全部处理过程上的有效文档都给。
 - **是否类字段**：直接存中文（是 / 否 / 需要 / 不需要 / 改善 / 保持现状 / 确认 / 有效 / 无效），按原值展示。
 - **SQE 两步**：先「SQE 跟进结果」（叙述），需要设计更改时进入待设计更改；设计更改完成后进入待 SQE 确认，由「SQE 确认结果」记录结论。
 - **结案结果**：结案时由结案人评定的结果，与主表状态语义独立，不由状态推出。
@@ -33,7 +33,7 @@
 | StockPrecessMemo | nvarchar | 退货确认备注 | — | — |
 | StockPrecessUserID | int | 退货确认人 | 员工 ID | `info.dbo.Employee.ID` |
 | StockPrecessDate | datetime | 退货确认时间 | — | — |
-| IsCostShift | nvarchar | 是否有涉案金额 | 是 / 否 / 空 | — |
+| IsCostShift | nvarchar | 费用转嫁 | 是 / 否 / 空：费用是否转嫁给供应商，为是时另有扣款费用与扣款单号。显示名与管理页面一致。用户说「涉案金额」指费用明细（见费用表），不是这一项 | — |
 | DebitMoney | decimal | 扣款费用（美元） | — | — |
 | DebitNumber | varchar | 扣款单号 | — | — |
 | UnCostShiftReason | nvarchar | 未转嫁原因 | — | — |
@@ -58,7 +58,7 @@
 | ConfirmMemo | nvarchar | 效果确认备注 | — | — |
 | ConfirmUserID | int | 效果确认人 | 员工 ID | `info.dbo.Employee.ID` |
 | ConfirmDate | datetime | 效果确认日期 | — | — |
-| FinishResult | nvarchar | 结案结果 | 是 / 否 / 空 | — |
+| FinishResult | nvarchar | 结案结果 | 是 / 否 / 空。管理页面「结案确认」下写作「是否结案」；它是结案人的评定，单是否已结案仍只看主表状态 | — |
 | FinishMemo | nvarchar | 结案备注 | — | — |
 | FinishUserID | int | 结案人 | 员工 ID | `info.dbo.Employee.ID` |
 | FinishDate | datetime | 结案日期 | 已结案的单，最新一条处理过程上的结案日期即该单的「结案时间」（见总述「结案时间与结案周期」） | — |

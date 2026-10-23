@@ -20,7 +20,6 @@
 | IsStopLine | varchar | 是否停线 | 是 / 否，默认否。曾发生停线即为「是」，重启后不改回「否」 | — |
 | StopDate | varchar | 停线日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
 | StopStatus | varchar | 停线状态 | 是否已标记停线重启：`停线重启`=已重启；空或其他取值（如 `停线中`）=未标记重启。没有固定枚举。业务方 2026-10-21 正式镜像计数：未删除的单目前只有空与 `停线重启` 两种写法，是否停线为「是」的单都已标记停线重启 | — |
-| ProblemClass | varchar | （内部字段，不返回） | 停线级别 ID | `CoreINFO.dbo.AfterSaleIssueClass.ID` → `ClassName`（显示名「停线级别」） |
 | ProblemPhenomenon | nvarchar | 问题现象 | JSON 数组，展平规则见下方「问题现象」 | — |
 | ProblemLevel | varchar | 问题等级 | A+ / A / B / C，与管理页面一致；空（空串）写「未填」。按等级筛选时按显示文字精确匹配，「A」不含「A+」；各级定义见总述「问题等级」 | — |
 | ProblemDiscoveryDate | varchar | 现场发现日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
@@ -47,7 +46,7 @@
 | UpdateDate | datetime | （内部字段，不返回） | 审计列：最后修改时间 | — |
 | Status | int | 状态 | 见下方「状态枚举」 | — |
 
-本域不使用源表的 `RequestID`（默认 0；PN 不以本列为准，只经 `BrazilProblemPO` 解析）与 `MailCount`。
+本域不使用源表的 `RequestID`（默认 0；PN 不以本列为准，只经 `BrazilProblemPO` 解析）、`MailCount` 与 `ProblemClass`。`ProblemClass` 存的是问题分类 ID（对到问题分类表的分类类型与分类名称，如「功能问题 → LCD 显示问题」），不是停线级别：只在部分没停线的单上有值（业务方 2026-10-23 正式镜像计数：未删除 203 张中 73 张，停过线的 9 张都没有），管理页面不显示。
 
 ## 状态枚举（Status）
 
