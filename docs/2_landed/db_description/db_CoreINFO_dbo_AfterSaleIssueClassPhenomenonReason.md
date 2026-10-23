@@ -1,4 +1,4 @@
-# AfterSaleIssueClassPhenomenonReason（标准现象的可能原因）
+# AfterSaleIssueClassPhenomenonReason（现象可能原因）
 
 - **数据源别名（source）**：info
 - **物理表名（table）**：CoreINFO.dbo.AfterSaleIssueClassPhenomenonReason

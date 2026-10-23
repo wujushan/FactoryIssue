@@ -42,13 +42,13 @@
 | ReStartExamineUser | nvarchar(255) | 重启审核人 | 一名员工 ID，文本型，需转整数关联；无效值按空 | `info.dbo.Employee.ID` |
 | CInvCode | nvarchar(255) | 料号 | 涉及物料编码 | `info.dbo.Inventory.cInvCode` |
 | VenCode | nvarchar(255) | 供应商编号 | 可空 | `info.dbo.tbIQCvendor.ferpcode` |
-| MemberList | nvarchar(525) | （内部字段，不返回） | 主状态处理人 ID，逗号分隔，如 `624,1719` | `info.dbo.Employee.ID` |
+| MemberList | nvarchar(525) | （内部字段，不返回） | 主状态处理人 ID，逗号分隔 | `info.dbo.Employee.ID` |
 | MemberListName | nvarchar(525) | 主状态处理人 | 主状态环节的处理人姓名，逗号分隔，与 `MemberList` 一一对应；随最新处理节点变化，直接展示，不另查人员表。是当前状态主状态那一行的人。非并行阶段，它与 IQC 成员、进行中的风险订单责任人一起构成当前责任人；状态 30、36、37 时本列是效果确认一行的人，预防对策确认一行的人取待办人员（见国内业务描述「当前状态」「当前责任人」）。回答中不单列本列，按当前状态 / 当前责任人给出；按人匹配用 `MemberList` 里的员工 ID | — |
 | RDepartment | int | 问题跟进部门 | 被指定跟进处理本单的部门，即问题跟进人所在部门。只有指定了问题跟进人的类型才有值 | `info.dbo.Department.ID` |
 | RUser | nvarchar(255) | 问题跟进人 | 被指定跟进处理本单的一名人员 ID，文本型，需转整数关联；无效值按空。只有硬件、软件、结构问题、制程优化有值 | `info.dbo.Employee.ID` |
 | RConfirm | int | 跟进人是否确认 | 0=否，1=是 | — |
 | RCompleteTime | datetime | 计划完成时间 | 硬件、软件、结构问题、制程优化在责任人确认时填，资料问题在工程确认时填（源系统称「责任人计划完成时间」） | — |
-| AllReDepartment | nvarchar(1000) | 责任归属部门 | 结案后人为定责的部门 ID，逗号分隔，如 `34`、`23,35`；空=无需定责。物料问题不展示、按责任部门查单与统计时不计入，与管理页面一致（业务方 2026-10-23 正式镜像计数：物料问题目前都没有填） | `info.dbo.Department.ID` |
+| AllReDepartment | nvarchar(1000) | 责任归属部门 | 结案后人为定责的部门 ID，一个或多个，逗号分隔；空=无需定责。物料问题不展示、按责任部门查单与统计时不计入，与管理页面一致（业务方 2026-10-23 正式镜像计数：物料问题目前都没有填） | `info.dbo.Department.ID` |
 | ReasonClass | nvarchar(525) | 原因分类 | 结案时人为归类，从自维护的原因列表中选取，取值是有限集合，如「人为工作疏忽」 | — |
 | ReasonClassRemark | nvarchar(2000) | 原因分类说明 | 富文本 | — |
 | IsDesignChange | int | 是否设计变更 | 0=否，1=是。只对物料问题有意义 | — |

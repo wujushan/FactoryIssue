@@ -1,4 +1,4 @@
-# AfterSaleIssueClassPhenomenon（标准问题现象）
+# AfterSaleIssueClassPhenomenon（现象主数据）
 
 - **数据源别名（source）**：info
 - **物理表名（table）**：CoreINFO.dbo.AfterSaleIssueClassPhenomenon
@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | ID | int | （内部字段，不返回） | 主键 | `OverseasProblemDetail.hasCheckedPhenomenon[].Key`；`ZCTracking_CheckReason.PhenomenonID`；`AfterSaleIssueClassPhenomenonReason.PhenomenonID` |
 | ClassID | int | （内部字段，不返回） | 所属分类；本模块不使用，国内的所属分类取 `ZCTracking_CheckReason.ClassID` | — |
-| PhenomenonDesc | nvarchar | 标准现象描述（海外）；问题现象（国内） | 现象的文字。海外不替代单上「已选问题现象」的文字；国内直接作为问题现象展示 | — |
+| PhenomenonDesc | nvarchar | 问题现象 | 现象的文字。国内直接作为问题现象展示；海外只用来关联可能问题原因，不展示，也不替代单上「已选问题现象」的文字 | — |
 | AddUser | int | （内部字段，不返回） | 审计列：录入人 | `info.dbo.Employee.ID` |
 | AddDate | datetime | （内部字段，不返回） | 审计列：创建时间 | — |
 | LastUser | int | （内部字段，不返回） | 审计列：最后修改人 | — |

@@ -14,11 +14,6 @@
 |---|---|---|---|---|
 | fid | int | （内部字段，不返回） | 主键 | `ZCTracking_ProblemList.CARID` |
 | fcheckid | int | （内部字段，不返回） | 检验单 ID | — |
-| fcompany | nvarchar(500) | 公司名称 | — | — |
-| fcount | varchar(50) | 检验总数 | 文本存数量，按原值展示，不参与计算 | — |
-| fcheckcount | varchar(50) | 检查总数 | 文本存数量，按原值展示，不参与计算 | — |
-| fbadcount | varchar(50) | CAR 不良数量 | 文本存数量，按原值展示，不参与计算 | — |
-| fbadper | varchar(50) | CAR 不良率 | 文本，按原值展示，不参与计算 | — |
 | fdesc | varchar(max) | 问题点 | — | — |
 | fstep2how1 | nvarchar(1000) | 围堵对策 1 | — | — |
 | fstep2how2 | nvarchar(1000) | 围堵对策 2 | — | — |
@@ -32,4 +27,4 @@
 | fstep6memo | nvarchar(2000) | 有效性确认 | — | — |
 | fstep6date | smalldatetime | 有效性确认录入时间 | — | — |
 
-表内另有多步骤审批记录与人员字段，本模块不使用。
+表内另有公司名称、检验总数、检查总数、不良数量、不良率（`fcompany`、`fcount`、`fcheckcount`、`fbadcount`、`fbadper`），以及多步骤审批记录与人员字段，本模块不使用：CAR 只给问题点、围堵对策、根本原因、永久纠正措施、预防措施、有效性确认 6 项叙述内容（见国内业务描述「物料问题专属」）。

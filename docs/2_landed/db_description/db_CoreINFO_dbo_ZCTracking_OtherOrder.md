@@ -15,7 +15,7 @@
 | ID | int | （内部字段，不返回） | 主键 | — |
 | ProblemId | int | （内部字段，不返回） | 所属问题单 | `CoreINFO.dbo.ZCTracking_ProblemList.ID` |
 | OrderNo | nvarchar(60) | 订单号 | — | — |
-| PartNumber | nvarchar(50) | 零件号 | — | — |
+| PartNumber | nvarchar(50) | （内部字段，不返回） | 管理页面的其他在线订单表格不显示这一列，本助手也不展示 | — |
 | ProductName | nvarchar(255) | 订单机型 | 该订单的机型文字。按机型查单只看机型子表，不看本列 | — |
 | Qty | int | 订单数量 | — | — |
 | IssuedQty | int | 规划用量 | — | — |

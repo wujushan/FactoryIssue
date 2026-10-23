@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | ID | int | （内部字段，不返回） | 主键 | — |
 | ProblemId | int | （内部字段，不返回） | 所属问题单 | `CoreINFO.dbo.ZCTracking_ProblemList.ID` |
-| ClassID | int | （内部字段，不返回） | 现象所属的问题分类 | `CoreINFO.dbo.AfterSaleIssueClass.ID` |
+| ClassID | int | （内部字段，不返回） | 现象所属的现象分类 | `CoreINFO.dbo.AfterSaleIssueClass.ID` |
 | PhenomenonID | int | （内部字段，不返回） | 选中的现象 | `CoreINFO.dbo.AfterSaleIssueClassPhenomenon.ID` |
 | ReasonID | int | （内部字段，不返回） | 该现象下的一条可能原因；0 表示这条现象没有可能原因（手填的现象都是 0） | `CoreINFO.dbo.AfterSaleIssueClassPhenomenonReason.ID` |
 | AddUser | int | （内部字段，不返回） | 审计列：新增人 | `info.dbo.Employee.ID` |
@@ -32,4 +32,4 @@
 
 ## 按文字找单
 
-问题现象的文字按现象去重、连成一段，进按文字找单的比对范围，属「问题本身涉及」那一组的栏目（见总述「涉及某个话题怎么找」）。它是选出来的短标签，不受「10 字以内不比对」限制。可能原因不进比对范围。本表不作筛选条件、不统计。
+问题现象的文字按现象去重、连成一段，进按文字找单的比对范围，属「问题本身涉及」那一组的栏目（见总述「涉及某个话题怎么找」）。它是选出来的短标签，不受「剥净后不超过 10 个字的内容不参与按意思找」限制。可能原因不进比对范围。本表不作筛选条件、不统计。

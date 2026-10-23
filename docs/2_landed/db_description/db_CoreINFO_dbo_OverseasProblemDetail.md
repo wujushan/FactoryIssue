@@ -11,7 +11,7 @@
 
 | 字段 | 类型 | 用户可见显示名 | 含义与取值 | 关联 |
 |---|---|---|---|---|
-| Id | int | （内部字段，不返回） | 主键 | 子表 `ProblemId`；制程单链接参数 |
+| Id | int | （内部字段，不返回） | 主键 | 子表 `ProblemId`；`info.dbo.DocumentList.frecid`（附件有效性校验）；制程单链接参数 |
 | Numbers | varchar | 问题编号 | `HW` + 年 2 位 + 月 2 位 + 当月 3 位序号，如 HW2609001 | — |
 | ProblemType | int | 问题类型 | 1=硬件问题，2=软件问题，3=物料问题，4=其他，5=工厂制程，6=结构问题，7=制程优化。空值显示「未填」，1–7 以外的值显示「其他（未识别）」 | — |
 | OldProblemType | int | 原问题类型 | 改分类前的类型，枚举同 `ProblemType` | — |
@@ -36,7 +36,7 @@
 | ReStartDate | datetime | 停线重启时间 | 目前没有填：业务方 2026-10-22 正式镜像计数，已经重启的 6 张单都为空（见 `dirty_data.md`「其他」）。按重启时间筛、算停线时长时，没填的单不计入并写明，目前等于海外都不计入 | — |
 | ProblemDesc | varchar | 问题描述 | 自由文本，可能内嵌 base64 图片 | — |
 | Improve | varchar | 改善建议 | 自由文本，可能内嵌 base64 图片 | — |
-| Reason | varchar | 问题原因 | 本单已填写的原因：责任人确认 / 原因分析文本。不同于「可能问题原因」 | — |
+| Reason | varchar | 原因分析 | 本单已填写的原因：责任人确认时填的原因分析文本，与国内、巴西的原因分析同一含义。不同于「可能问题原因」 | — |
 | Measures | nvarchar | 改善措施 | 改善措施、工厂制程原因分析、物料问题设计变更改善情况 / 原因说明 | — |
 | Prevention | nvarchar | 预防对策 | 预防对策、工厂制程制定的对策 | — |
 | Remark | varchar | 备注 | — | — |
@@ -44,15 +44,15 @@
 | MemberList | varchar | （内部字段，不返回） | 当前责任人 ID，逗号分隔 | `info.dbo.Employee.ID` |
 | MemberListName | varchar | 当前责任人 | 问题单流转到最新节点时的处理人姓名，与 `MemberList` 对应。直接展示，不另查人员表，也不用处理步骤上的成员代替。已完成的单为空（业务方 2026-10-22 正式镜像计数） | — |
 | RDepartment | int | 问题跟进部门 | 空或一个部门 ID。填单时先选部门，再选该部门下的人员 | `info.dbo.Department.ID` |
-| RUser | nvarchar | 问题跟进人 | 空，或一个 / 多个员工 ID，逗号分隔，如 `4535,4527`；多人都属于问题跟进部门所指的那一个部门 | `info.dbo.Employee.ID` |
+| RUser | nvarchar | 问题跟进人 | 空，或一个 / 多个员工 ID，逗号分隔；多人都属于问题跟进部门所指的那一个部门 | `info.dbo.Employee.ID` |
 | RConfirm | int | 跟进人是否确认 | 0 或空=否（不重新走流程），大于 0=是 | — |
 | RCompleteTime | datetime | 计划完成时间 | 问题跟进人计划完成时间 | — |
 | IQCOpinion | int | IQC 意见 | 2=退回仓库，3=继续使用 | — |
 | IsDesignChange | int | 是否设计变更 | 0=否，1=是 | — |
 | DesignUser | int | 设计变更责任人 | 员工 ID | `info.dbo.Employee.ID` |
 | DesignConfirmResult | int | 处理结果 | 1=改善，2=保持现状，3=挂起；空写「未填」。与国内一样一张单只有这一列：管理页面在「责任人确认」下显示为「处理结果」（与确认结果、计划完成时间同一行），术语「责任人处理结果」即指它；物料问题设计变更时也记在这一列 | — |
-| DesignDate | datetime | 设计更改预计完成时间 | — | — |
-| Confirmation | nvarchar | 效果确认 | 效果确认结论 | — |
+| DesignDate | datetime | 设计变更预计完成时间 | — | — |
+| Confirmation | nvarchar | 效果确认内容 | 效果确认环节填写的结果，叙述文字，与国内效果确认内容同一含义。单张单详情的「效果确认」一块里，页面标签写作「效果确认结果」 | — |
 | ConfirmUser | int | 效果确认人 | 员工 ID | `info.dbo.Employee.ID` |
 | ConfirmDate | datetime | 效果确认时间 | — | — |
 | DocId | varchar | （内部字段，不返回） | 填单附件 ID，逗号分隔 | `info.dbo.DocumentList.ID` |
@@ -91,7 +91,7 @@
 
 **hasCheckedPhenomenon（已选问题现象）**：JSON 数组，每个元素一条已选现象，标准现象和手填现象可混在一起；只有一条时仍是数组。元素键有 `Key`、`Value`、`parentType`、`otherVal`，以及 `subTypeId`、`subTypeName`、`parentIndex`、`tagIndex`。
 
-展示为一段文字「已选问题现象」，不展示原始 JSON，也不用标准现象表的描述替换。
+展示为一段文字「已选问题现象」，不展示原始 JSON，也不用现象主数据的描述替换。
 
 - 空值、空串，或去掉首尾空白后不以 `[` 开头：视为空数组。否则按 JSON 数组解析。
 - 单元素片段（`parentType`、`Value` 为空时按空串拼接）：
