@@ -31,7 +31,11 @@ dependencies = [
     # core ≥0.3.5：`RetrievalPort.search(restrict_ids=...)`、`RETRIEVAL_RESTRICT_MAX_IDS` 与
     # `RetrievalRestrictTooLarge`（语义检索的候选范围限定，docs/dev/02 教了）。本模块「类似问题」
     # 带机型 / 工厂 / 时间条件时靠它只在候选单里找；低于它没有这个参数，传了即 TypeError。
-    "paxsz-forge-core>=0.3.5",
+    # core ≥0.3.7：`VectorizeSpec.metadata_columns`、`search(restrict_column=, filters=, group_by=)`、
+    # `VectorHit.rerank_score`、`RetrievalColumnNotDeclared`（切块检索，docs/dev/02、07 教了）。本模块
+    # 按段向量化，按单限定 / 按字段找 / 按单去重 / 跨域按重排分比都靠它；低于它传这些参数即
+    # TypeError，`metadata_columns` 声明被静默丢弃（向量表建不出这两列）。
+    "paxsz-forge-core>=0.3.7",
 ]
 
 [project.entry-points."forge.modules"]
@@ -81,7 +85,8 @@ dev = [
     #   `forge capabilities pull --check`，低于它这个 job 一跑就红。
     # - platform ≥0.3.3 才把 `manifest.collection_fields` 交给 ctx.data（权限协议 v1.3）。低于它，
     #   `forge dev serve` 本地取数时用了集合操作符的规则一律按「集合字段未登记」中断，线上却正常。
-    "paxsz-forge-platform>=0.3.3",  # dev harness + 轻量 dev console + forge release：uv run forge dev serve
+    # - platform ≥0.3.7 与 core 0.3.7 / data 0.3.2 配套（切块检索；docs/dev/02 写明的 dev 依赖下界）。
+    "paxsz-forge-platform>=0.3.7",  # dev harness + 轻量 dev console + forge release：uv run forge dev serve
     # data ≥0.1.10：绑定参数会把 DataFrame 里取出来的 numpy 标量转回原生类型。低于它，
     # 拿 `df["id"].max()` 这种值去查 SQL Server 会报 `Invalid parameter type … (HY105)`，
     # 而同一个值写回 mart（PG）却不报错 —— 典型症状是「治理 job 首轮成功、第二轮起必炸」。
@@ -91,7 +96,9 @@ dev = [
     # data ≥0.3.0：权限协议 v1.3 的行列权限编译（子表字段引用 / inherit_parent / 集合操作符，
     # docs/dev/04 教了）。低于它，本地按 v1.2 语义编译，同一棵权限树本地与线上取到的行不一样。
     # data ≥0.3.1：`ctx.retrieval.search(restrict_ids=...)` 的实现（与行级权限 AND、限定时精确近邻）。
-    "paxsz-forge-data>=0.3.1",     # DataScopeFilter / 数据源接入 / ctx.knowledge.citations（按 profile 需要）
+    # data ≥0.3.2：切块检索的实现（`metadata_columns` 建列 / 回填透传 / 启动期校验，`restrict_column` /
+    # `filters` / `group_by` 编译进同一个 WHERE，命中带回 `rerank_score`）。
+    "paxsz-forge-data>=0.3.2",     # DataScopeFilter / 数据源接入 / ctx.knowledge.citations（按 profile 需要）
     # sandbox ≥0.2.0：`run_script(..., return_frames=True)` 与 `SandboxOutcome.frames`（docs/dev/02 教了）；
     # 且 platform ≥0.3.1 本身就要求它（ctx.stats 每次调用都传新参数）。
     "paxsz-forge-sandbox>=0.2.0",    # paxsz-forge-platform 的传递依赖：explicit 索引下须直接声明才走内网源（沙箱数字处理）

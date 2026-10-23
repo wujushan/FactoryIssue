@@ -1003,7 +1003,7 @@ hits = await ctx.retrieval.search(query, source="forge_mart_x", table="issue_vec
 - `None` = 不限定；`[]` = 直接返回空（不是「不限定」）。元素只认 str / int（float 编号先 `.dropna().astype(int)`），其余 `TypeError`。
 - 去重后超过 `forge_core.module.RETRIEVAL_RESTRICT_MAX_IDS`（5000）抛 `forge_core.errors.RetrievalRestrictTooLarge`，**不截断**——改用不限定的检索，并照实说明结果不保证完整。
 
-**长文本切块后按记录限定 / 去重 / 按字段找**（切块表一块一行、`id_column` 是块编号；需 `manifest.vectorize.metadata_columns` 声明过用到的列，见 [07](07-capability-profiles.md)；**需升级到含本功能的 SDK**——`metadata_columns` / `restrict_column` / `filters` / `group_by` / `rerank_score` 均晚于 core 0.3.6 / data 0.3.1，具体版本以发包公告为准，低版本上传这些参数即 `TypeError`）：
+**长文本切块后按记录限定 / 去重 / 按字段找**（切块表一块一行、`id_column` 是块编号；需 `manifest.vectorize.metadata_columns` 声明过用到的列，见 [07](07-capability-profiles.md)；需 `paxsz-forge-core ≥ 0.3.7` / `paxsz-forge-data ≥ 0.3.2` / dev 依赖 `paxsz-forge-platform ≥ 0.3.7`——低版本上传这些参数即 `TypeError`、`metadata_columns` 声明被静默丢弃）：
 
 ```python
 hits = await ctx.retrieval.search(
