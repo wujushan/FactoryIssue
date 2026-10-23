@@ -115,6 +115,9 @@ A 轨全部做完（wheel 已发布）之后，B 轨才开始。**建向量表�
 每条各自生成一张表、一个回填 job、一份 cron。
 反过来，写进同一条 spec 的 `text_columns` 会被拼成**一段 content、一个向量**——那是「这几列合起来
 描述同一件事」时才该用的。判据在阶段 3：**你希望用户的问题分别命中它们，就分表**。
+🅥 **长文本切块是第三种形态**：阶段 2 的治理 ETL 把源表落成一块一行（块编号作 `id_column`、带「所属记录编号」
+「所属字段」列），**放一张向量表**，把那几列写进 `metadata_columns`——检索期按记录限定 / 去重 / 按字段找都靠它们。
+不要按段分表。见 [07](07-capability-profiles.md)。
 
 此刻在你机器上能做的自检只有一条：`uv run forge vectorize ddl` 打得出 DDL，且
 「权限承载列」那行不是空的（空的说明 `field_mappings` 没配对，检索期就没有行级过滤可编译）。
@@ -349,7 +352,11 @@ deploy.sh  systemctl --user restart forge-jobs
 | **某个模块的定时任务一条都不跑，其他模块正常** | 该模块被隔离了（非法 cron / `jobs()` 抛异常） | 看 `job_collect_failed` 日志与 jobs 能力面板的 `module_jobs` 项；改完**重启 `forge-jobs`** |
 | **窄权限用户召回条数远少于 top_n（管理员正常）** | HNSW 后过滤的召回塌陷；服务端 pgvector < 0.8.0 时没有 `iterative_scan` | 升级服务端 pgvector ≥ 0.8.0；验收必须用窄权限账号测召回条数 |
 | **带条件（机型/工厂/时间）的检索经常 0 条，不带条件正常** | 模块「全表召回 top_k → 与候选编号求交」：候选窄时相关的几条排不进全表前 top_k | 改用 `ctx.retrieval.search(..., restrict_ids=候选编号)`（精确近邻，候选内召回完整；需 `paxsz-forge-core ≥ 0.3.5` / `paxsz-forge-data ≥ 0.3.1`）；验收用窄条件测 |
-| `restrict_ids` 传了编号却 0 条 | 编号与向量行 `id` 对不上：向量行 id 是**源表 id 列转 text**，传的却是别的列 / 拼了前缀 | 传 `manifest.vectorize` 的 `id_column` 那一列的值；float / 整串字符串会直接 `TypeError`，不会走到这里 |
+| `restrict_ids` 传了编号却 0 条 | 编号与向量行 `id` 对不上：向量行 id 是**源表 id 列转 text**，传的却是别的列 / 拼了前缀；**切块表**传的是记录编号而向量行 id 是块编号 | 传 `manifest.vectorize` 的 `id_column` 那一列的值；切块表加 `restrict_column="record_id"`；float / 整串字符串会直接 `TypeError`，不会走到这里 |
+| `RETRIEVAL_COLUMN_NOT_DECLARED` | `filters` / `group_by` / `restrict_column` 引用的列不在该表 `manifest.vectorize.metadata_columns` 里（拼错、忘声明、或拿权限列当元数据列） | 在 `metadata_columns` 补声明 → 重跑 `forge vectorize apply`（新表）或手工 `ALTER TABLE … ADD COLUMN … text`（旧表）→ 重跑回填 |
+| 平台起不来，`VECTOR_SCOPE_COLUMNS_MISSING` 且消息含 `metadata_columns` | 向量表已存在、后来才在声明里加了 `metadata_columns`——`apply` 只建新表不改旧表 | 手工 `ALTER TABLE <向量表> ADD COLUMN <列> text` + 建 btree，重跑回填把值补上 |
+| `group_by` 返回的记录数不足 `top_n`，但候选明明够 | 没带 `restrict_ids` 时近邻只多取 4 倍再折叠（只能尽量凑）；一条记录块数极多时被挤 | 带候选时走 `restrict_ids`（精确）；不带时放大 `top_k`，或把超长记录在治理 ETL 里切得更均匀 |
+| 按权限分表检索后合并，最相关的那张单排在后面 | 合并按 `score`（向量余弦，跨表不可比） | 改按 `h.rerank_score` 排（`None` 时才退回 `score`） |
 | 换了 embedding 模型后结果变差 | 正常：换模型会触发一次全量重嵌，重嵌完成前新旧向量并存 | 等回填跑完，或手动 `forge jobs run` 催一轮 |
 
 ---

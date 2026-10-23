@@ -47,7 +47,7 @@ JoinEdge(
 
 `ConfigFileSpec`（`forge_core.config_files`）字段：`name`（文件名，**不含路径**；`.env` 这种以点开头的合法，但 `.py`/`.sh` 这类可执行/可导入的扩展名一律拒绝——配置通道不是代码通道）、`description`（显示在 Console 的文件列表里，管理员照着它决定要传什么，别只写「配置文件」）、`required`（平台启动时若尚未上传会告警一次，**不阻断启动**）。同一模块内文件名不得重复（**大小写不敏感**：Windows 开发机与 Linux 服务器对此不一致，让它在声明期就非法）。
 
-`VectorizeSpec`（`forge_core.module`）字段：`source`（mart 别名，须已在 `data_sources` 声明）、`vector_table` / `origin_table`、`id_column`、`text_columns`（按序拼成 `content`）、`separator`（默认 `"\n"`，**属契约**——改它 = content 变 = 平台自动全量重嵌）、`default_cron`、`batch_size`、`dim`。**权限承载列不在这里声明**，平台自己从 `field_mappings[source]` 算。表达力边界是**单表 + 列拼接**：复杂拼装靠 `governance-etl` 先落成干净表（分层），不靠把声明做成 DSL。生成的 job 名 = `<模块编码>.vectorize:<向量表>`；DDL 用 `forge vectorize ddl` 打印。
+`VectorizeSpec`（`forge_core.module`）字段：`source`（mart 别名，须已在 `data_sources` 声明）、`vector_table` / `origin_table`、`id_column`、`text_columns`（按序拼成 `content`）、`separator`（默认 `"\n"`，**属契约**——改它 = content 变 = 平台自动全量重嵌）、`default_cron`、`batch_size`、`dim`、`metadata_columns`（治理后表里要原样抄进向量表的业务条件列，如切块表的 `["record_id", "field"]`；检索期 `filters` / `group_by` / `restrict_column` **只认这里声明过的列**；不得与 `id_column` 或 `id/content/embedding/metadata/content_hash` 同名）。**权限承载列不在这里声明**，平台自己从 `field_mappings[source]` 算。表达力边界是**单表 + 列拼接**：复杂拼装靠 `governance-etl` 先落成干净表（分层），不靠把声明做成 DSL。生成的 job 名 = `<模块编码>.vectorize:<向量表>`；DDL 用 `forge vectorize ddl` 打印。
 
 #### `ForgeModule`（ABC，模块基类）
 
@@ -980,8 +980,8 @@ async def handle(self, request, ctx):
 async def search(
     query, *, source, table, top_k=50, top_n=10,
     dim=1024, id_col="id", text_col="content", embedding_col="embedding", metadata_col="metadata",
-    restrict_ids=None,
-) -> list[VectorHit]
+    restrict_ids=None, restrict_column=None, filters=None, group_by=None,
+) -> list[VectorHit]   # h.id / h.text / h.score（向量余弦）/ h.rerank_score（重排分，可为 None）/ h.metadata
 ```
 
 `source` = `manifest.data_sources` 声明的别名（通常 `forge_mart_<code>`），`table` = 向量表物理名。embedding/rerank 客户端与向量库连接由平台按部署配置装配，**模块不碰 endpoint、不碰连接串**：
@@ -995,13 +995,32 @@ for h in hits:
 **先按业务条件缩小范围再检索**（「L1400 的问题里有没有音频相关的」，需 `paxsz-forge-core ≥ 0.3.5` / `paxsz-forge-data ≥ 0.3.1`）：先经 `ctx.data.fetch()` 取出候选编号，再传 `restrict_ids`——只在这些编号里找。**别「全表召回再按编号求交」**：候选窄时相关的那几条排不进全表前 `top_k`，求交常为 0 且不报错。
 
 ```python
-ids = ctx.data.fetch(spec)["issue_no"].tolist()   # 向量行 id = 源表 id 列转 text，直接传
+ids = ctx.data.fetch(spec)["issue_id"].tolist()   # 传 manifest.vectorize 的 id_column 那一列（向量行 id = 它转 text），不是业务单号
 hits = await ctx.retrieval.search(query, source="forge_mart_x", table="issue_vec", restrict_ids=ids)
 ```
 
 - 与行级权限是 **AND**，只收窄不放宽；限定时平台走**精确**近邻，候选内召回完整。
 - `None` = 不限定；`[]` = 直接返回空（不是「不限定」）。元素只认 str / int（float 编号先 `.dropna().astype(int)`），其余 `TypeError`。
 - 去重后超过 `forge_core.module.RETRIEVAL_RESTRICT_MAX_IDS`（5000）抛 `forge_core.errors.RetrievalRestrictTooLarge`，**不截断**——改用不限定的检索，并照实说明结果不保证完整。
+
+**长文本切块后按记录限定 / 去重 / 按字段找**（切块表一块一行、`id_column` 是块编号；需 `manifest.vectorize.metadata_columns` 声明过用到的列，见 [07](07-capability-profiles.md)；需 `paxsz-forge-core ≥ 0.3.7` / `paxsz-forge-data ≥ 0.3.2` / dev 依赖 `paxsz-forge-platform ≥ 0.3.7`——低版本上传这些参数即 `TypeError`、`metadata_columns` 声明被静默丢弃）：
+
+```python
+hits = await ctx.retrieval.search(
+    query, source="forge_mart_x", table="issue_chunk_vec",
+    restrict_ids=record_ids, restrict_column="record_id",   # 候选按业务记录编号匹配，不是块编号
+    filters={"field": ["reason"]},                          # 只在「原因分析」的块里找（等值/IN，不做区间）
+    group_by="record_id",                                   # 一条记录只占一个结果位；top_n 数的是记录数
+)
+for h in hits:
+    record_id = h.metadata["record_id"]                      # 凭它回源取展示字段
+```
+
+- 三个参数引用的列**必须是该表声明过的 `metadata_columns`**，否则 `RetrievalColumnNotDeclared`（配置错误，不静默忽略条件）。
+- `group_by` 带 `restrict_ids` 时结果精确（不足 N 条就是真的不够）；不带时近邻多取 4 倍再折叠，**只能尽量凑满**。
+- 候选限定用 `restrict_ids`（精确路径）而不是 `filters={"record_id": [...]}`——后者在不限定路径上是近似检索，召回不保证。
+
+**按权限分表（如国内 / 巴西 / 海外各一张）后合并结果，按 `rerank_score` 排，不要按 `score`**：`score` 是向量余弦、跨表不可比；`rerank_score` 是本地 reranker 的相关度分，同一问句下跨表可比。`None` 表示没配 reranker 或重排失败回退，此时才退回 `score`。同一记录在多张表都命中时按记录编号去重留分高者。
 
 红线：行级权限由平台经 `ctx.data.row_scope_sql(source, table)` 编译后**随近邻检索一并下推**——无权向量不出库。**别自己 new `PgVectorIndex` / `EmbeddingClient`、别自己读 env 绕开平台配置**：那样等于绕开权限与审计（检索 SQL 也不会进审计归档）。`ctx.retrieval is None` 说明 profile 没声明或平台没配 embedding 服务，按前者查 [07](07-capability-profiles.md)、后者找平台侧，而不是自己造句柄。
 

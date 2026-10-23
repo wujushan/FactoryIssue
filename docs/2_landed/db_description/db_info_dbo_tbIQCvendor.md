@@ -14,5 +14,3 @@
 | ferpcode | varchar(50) | 供应商编号 | ERP 供应商编码；空值不参与关联 | 国内 `VenCode`；巴西 `cVenCode` |
 | fname | varchar(100) | 供应商名称 | — | — |
 | ftype | varchar(50) | 供应商类型 | — | — |
-
-表内另有地址、联系人、资质、准入分类、等级、删除标记等字段，本模块不使用。

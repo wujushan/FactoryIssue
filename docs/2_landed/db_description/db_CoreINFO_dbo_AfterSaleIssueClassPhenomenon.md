@@ -1,19 +1,19 @@
-# AfterSaleIssueClassPhenomenon（标准问题现象）
+# AfterSaleIssueClassPhenomenon（现象主数据）
 
 - **数据源别名（source）**：info
 - **物理表名（table）**：CoreINFO.dbo.AfterSaleIssueClassPhenomenon
-- **所属域**：海外
-- **用途**：标准问题现象主数据。海外主表「已选问题现象」中 `Key` 大于 0 的元素指向本表。
+- **所属域**：海外、国内
+- **用途**：问题现象主数据。海外主表「已选问题现象」中 `Key` 大于 0 的元素指向本表；国内已选现象（`ZCTracking_CheckReason.PhenomenonID`）也指向本表。国内建单时手填的「其他」现象同样写进本表，所以国内指向的现象不全是标准现象。
 - **数据产生方**：INFO 系统分类维护页面。
 
 ## 字段
 
 | 字段 | 类型 | 用户可见显示名 | 含义与取值 | 关联 |
 |---|---|---|---|---|
-| ID | int | （内部字段，不返回） | 主键 | `OverseasProblemDetail.hasCheckedPhenomenon[].Key`；`AfterSaleIssueClassPhenomenonReason.PhenomenonID` |
-| ClassID | int | （内部字段，不返回） | 所属分类；本模块不使用，不关联问题分类表 | — |
-| PhenomenonDesc | nvarchar | 标准现象描述 | 标准现象的文字。不替代海外单上「已选问题现象」的文字 | — |
+| ID | int | （内部字段，不返回） | 主键 | `OverseasProblemDetail.hasCheckedPhenomenon[].Key`；`ZCTracking_CheckReason.PhenomenonID`；`AfterSaleIssueClassPhenomenonReason.PhenomenonID` |
+| PhenomenonDesc | nvarchar | 问题现象 | 现象的文字。国内直接作为问题现象展示；海外只用来关联可能问题原因，不展示，也不替代单上「已选问题现象」的文字 | — |
 | AddUser | int | （内部字段，不返回） | 审计列：录入人 | `info.dbo.Employee.ID` |
 | AddDate | datetime | （内部字段，不返回） | 审计列：创建时间 | — |
 | LastUser | int | （内部字段，不返回） | 审计列：最后修改人 | — |
 | LastDate | datetime | （内部字段，不返回） | 审计列：最后修改时间 | — |
+别用 `ClassID`：国内问题现象的所属分类取 `ZCTracking_CheckReason.ClassID`，不取本列。

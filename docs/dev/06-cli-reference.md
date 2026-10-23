@@ -184,10 +184,12 @@ uv run forge vectorize ddl                      # 打印向量表 DDL
 uv run forge vectorize ddl --module <模块编码>   # 同上，显式限定模块
 ```
 
-按 `manifest.vectorize` 生成建表 + HNSW 索引 + 每个 scope 列的 btree 索引 DDL。
+按 `manifest.vectorize` 生成建表 + HNSW 索引 + 每个 scope 列与 `metadata_columns` 列的 btree 索引 DDL。
 **scope 列由平台从 `manifest.field_mappings` 自动算出**——这正是重点：建表、回填 SQL、
 启动期校验三处的列定义同一个信源，不会漂移。**别手写向量表 DDL**，手写等于把「scope 列该有
 哪些」又交回给人记。
+⚠️ 全部语句都是 `IF NOT EXISTS`：**给已存在的向量表新增 `metadata_columns` 不会被它补上**，
+需手工 `ALTER TABLE … ADD COLUMN … text` + 建 btree 并重跑回填，否则平台启动期拒绝（见 [11](11-vectorization-and-governance.md) 排查表）。
 
 > **在你仓里，带不带 `--module` 输出一模一样**。缺省是「打印全部已装配模块」，而业务仓的 venv 里
 > 只装配了你自己一个模块（`pyproject.toml` 只注册一个 entry point；平台内置的 EchoModule 没有

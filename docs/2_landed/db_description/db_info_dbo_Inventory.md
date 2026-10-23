@@ -10,8 +10,6 @@
 
 | 字段 | 类型 | 用户可见显示名 | 含义与取值 | 关联 |
 |---|---|---|---|---|
-| cInvCode | nvarchar | 料号 | 物料编码 | 国内 `ZCTracking_ProblemList.CInvCode`、`ZCTracking_XBOrders.InvCode`；巴西 `BrazilProblemList.cInvCode` |
+| cInvCode | nvarchar | 料号 | 物料编码，15 位数字（个别例外）；与 PN 主数据的 PN 编码是同一套编码 | 国内 `ZCTracking_ProblemList.CInvCode`、`ZCTracking_XBOrders.InvCode`；巴西 `BrazilProblemList.cInvCode` |
 | cInvName | nvarchar | 物料名称 | — | — |
 | cInvStd | nvarchar | 规格型号 | 物料描述 / 规格型号 | — |
-
-表内另有物料分类编码、生产地址、英文名称、失效日期、默认供应商、是否 BOM 母件等字段，本模块不使用。

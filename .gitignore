@@ -43,3 +43,5 @@ runtime/
 ## 本地原始材料含真实业务标识，不纳入版本库
 docs/1_user_input/C10探测结果.md
 docs/1_user_input/customer_issues_permissions.json
+## 内网探测原始结果：结论已落盘 2_landed，原始结果只留本地
+docs/1_user_input/probe_answers/

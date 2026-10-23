@@ -175,6 +175,22 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
   一个整体被命中，就合进一条 spec 的 `text_columns`。** 检索时由你的 `handle()` 用
   `ctx.retrieval.search(..., table=...)` 选表——平台不替你选，也不跨表自动合并。
 
+  **长文本要切块（一条记录拆成多段、各出一个向量）时，放一张表，不要按段分表**（决策 2026-10-23；与
+  Qdrant `group_by` / Milvus `group_by_field` / Azure `parent_id` 同一套做法）：用 `governance-etl` 把源表落成
+  **一块一行**的治理后表（块编号作 `id_column`，再带「所属记录编号」「所属字段」等列），声明时把这些列写进
+  `metadata_columns`——平台为它们建 text 列 + btree、回填透传、启动期校验存在：
+
+  ```python
+  VectorizeSpec(source="forge_mart_kb", vector_table="issue_chunk_vec", origin_table="issue_chunks",
+                id_column="chunk_id", text_columns=["chunk_text"],
+                metadata_columns=["record_id", "field"])   # 检索期 restrict_column / filters / group_by 只认这里声明的列
+  ```
+
+  检索时 `restrict_ids=记录编号, restrict_column="record_id"` 按记录限定、`group_by="record_id"` 一条记录只占一个
+  结果位、`filters={"field": ["reason"]}` 只在某字段的块里找（写法见 [02](02-sdk-reference.md)）。**切块本身归治理 ETL**
+  （块大小 / 重叠 / 按段落切随业务定），平台不内建。按**权限**分表（如国内 / 巴西 / 海外各一张）仍是必要的——
+  权限协议按表给；按**字段**分表则不必要。
+
   **权限承载列不在这里重复声明**——平台从 `field_mappings[source]` 自动算出，喂给 DDL / 回填 SQL /
   启动期校验三处（同一信源，不会漂移）。**表达力边界是「单表 + 列拼接」**：复杂拼装靠分层，
   用 `governance-etl` 先把数据落成一张可直接向量化的干净表（含 content 源列 + 权限承载列），
@@ -196,7 +212,7 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
     被平台侧覆盖），SELECT 与 upsert 自动带上 scope 列，源表删掉的行连带删向量。
     你的活是（若需要）用 `governance-etl` 把数据落成一张可直接向量化的表。
   - **建表 DDL 也由平台生成、也由平台执行**：`forge vectorize ddl` 在你仓里**只打印**（建表 + HNSW
-    索引 + **每个 scope 列的 btree 索引**，scope 列已自动带上），真正建表是运维在服务器上跑
+    索引 + **每个 scope 列与 `metadata_columns` 列的 btree 索引**，scope 列已自动带上），真正建表是运维在服务器上跑
     `forge vectorize apply`（装配时由部署脚本自动执行）。**你不需要 Alembic 迁移，模板里也没有**
     ——旧口径「纳入你的 Alembic 迁移」承诺了一个不存在的机制，已被
     平台侧 2026-08-06 的决策推翻。
@@ -245,6 +261,8 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
   即 HNSW 后过滤塌陷，查 pgvector 服务端版本）。向量化字段若受列级管控，G2 决策已给出处置。
   有带业务条件的检索时再加一条：用**窄条件**（某个机型 / 某个工厂）实测，候选里相关的记录都捞得到——
   宽条件测不出模块侧求交的塌陷；检索走的是 `restrict_ids`，而不是召回后求交。
+  切块表再加两条：`restrict_ids` 配了 `restrict_column`（传记录编号却按块编号匹配 = 恒 0 条）；按权限分表
+  后合并按 `rerank_score`（向量 `score` 跨表不可比）。
 
 ### `governance-etl`（脏数据 / 大数据量需治理） ⚠ 跨 G2 + 需平台侧前置
 

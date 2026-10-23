@@ -12,5 +12,3 @@
 |---|---|---|---|---|
 | fID | int | （内部字段，不返回） | 主键 | — |
 | FactoryName | nvarchar | 加工厂 | 巴西工厂名称 | `BrazilProblemList.BrazilFactory`（逗号多值逐段匹配） |
-
-表内另有地址、联系方式、所属公司、站点等字段，本模块不使用。

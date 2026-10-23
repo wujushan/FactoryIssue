@@ -11,18 +11,17 @@
 
 | 字段 | 类型 | 用户可见显示名 | 含义与取值 | 关联 |
 |---|---|---|---|---|
-| ID | int | （内部字段，不返回） | 自增主键 | 子表 `ProblemID`；制程单链接参数（加密后） |
+| ID | int | （内部字段，不返回） | 自增主键 | 子表 `ProblemID`；`info.dbo.DocumentList.frecid`（投诉单附件）；制程单链接参数（加密后） |
 | OrderNumber | varchar | 问题编号 | `BR` + 年 2 位 + 月 2 位 + 当月 3 位序号，如 BR2404001 | — |
-| ClaimNumber | varchar | 投诉单号 | 自由文本，无固定编码规则。多数以 `CLAIM` 开头（如 `CLAIM 014.04/2024`、`CLAIM-019/24`），但不绝对；可空 | — |
+| ClaimNumber | varchar | 投诉单号 | 自由文本，无固定编码规则；按号查单的匹配规则见巴西业务描述「投诉单号」。多数以 `CLAIM` 开头，后面接空格或连字符，再接编号与年份，中间夹着点或斜杠，写法不统一；也有不以 `CLAIM` 开头的；可空 | — |
 | BrazilFactory | varchar | 加工厂 | 巴西工厂**名称**（不是 ID），可逗号多值，如 `CA,TT`。已有取值如 TT、CA、TR | `info.dbo.Brazil_Factory.FactoryName`（按段匹配） |
 | ProductIDAll | varchar | （内部字段，不返回） | 大机型 ID，空 / 单值 / 逗号分隔多值，逐段去首尾空格。对不上的段不显示，全部对不上显示「未识别机型」 | `info.dbo.ProductName.ID` → `ProductName`（显示名「大机型」，一单多个时去重合并）、`Series`（显示名「系列」） |
-| ProblemType | varchar | 问题类型 | 文本：设计问题、结构问题、生产问题、制程优化、硬件问题、物料问题、其他。「其他」可写成 `其他\|备注`，此时问题类型显示「其他」，`\|` 后的文字显示为「其他问题备注说明」。只有待提交（草稿）可为空 | — |
+| ProblemType | varchar | 问题类型 | 文本：设计问题、结构问题、生产问题、制程优化、硬件问题、物料问题、其他。「其他」可写成 `其他\|备注`，此时问题类型显示「其他」，`\|` 后的文字显示为「其他问题说明」。只有待提交（草稿）可为空 | — |
 | IsStopLine | varchar | 是否停线 | 是 / 否，默认否。曾发生停线即为「是」，重启后不改回「否」 | — |
 | StopDate | varchar | 停线日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
-| StopStatus | varchar | 停线状态 | 是否已标记停线重启：`停线重启`=已重启；空或其他取值（如 `停线中`）=未标记重启。没有固定枚举 | — |
-| ProblemClass | varchar | （内部字段，不返回） | 停线级别 ID | `CoreINFO.dbo.AfterSaleIssueClass.ID` → `ClassName`（显示名「停线级别」） |
+| StopStatus | varchar | 停线状态 | 是否已标记停线重启：`停线重启`=已重启；空或其他取值（如 `停线中`）=未标记重启。没有固定枚举。业务方 2026-10-21 正式镜像计数：未删除的单目前只有空与 `停线重启` 两种写法，是否停线为「是」的单都已标记停线重启 | — |
 | ProblemPhenomenon | nvarchar | 问题现象 | JSON 数组，展平规则见下方「问题现象」 | — |
-| ProblemLevel | varchar | 问题等级 | A / B / C / 空（空写「未填」） | — |
+| ProblemLevel | varchar | 问题等级 | A+ / A / B / C，与管理页面一致；空（空串）写「未填」。按等级筛选时按显示文字精确匹配，「A」不含「A+」；各级定义见总述「问题等级」 | — |
 | ProblemDiscoveryDate | varchar | 现场发现日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
 | ProblemDiscoveryStation | varchar | 发现工位 | 自由文本，可空 | — |
 | StatisticsDate | varchar | 统计日期 | 文本存日期，格式 `YYYY-MM-DD` | — |
@@ -36,18 +35,20 @@
 | SupplementQty | int | 补料数量 | — | — |
 | SupplementResult | varchar | 补料结果 | 是 / 否 / 空 | — |
 | SupplementMemo | nvarchar | 补料备注 | 富文本 | — |
-| SupplementUserID | int | 补料人 | 员工 ID | `info.dbo.Employee.ID` |
+| SupplementUserID | int | 补料人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | SupplementDate | datetime | 补料日期 | — | — |
 | IsCost | int | 是否涉及费用 | 1=是，2=否；0 为删除状态的测试数据，按无效值处理。只在用户明说「是否涉及费用」时作筛选条件；「涉及费用的单」按费用明细认定，见费用表 | — |
-| ActorUserID | int | 初始责任人 | 员工 ID | `info.dbo.Employee.ID` |
+| ActorUserID | int | 初始责任人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | Memo | nvarchar | 备注 | 富文本 | — |
-| AddUserID | int | 填单人 | 员工 ID | `info.dbo.Employee.ID` |
+| AddUserID | int | 填单人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | AddDate | datetime | 建单时间 | — | — |
 | UpdateUserID | int | （内部字段，不返回） | 审计列：最后修改人 | `info.dbo.Employee.ID` |
 | UpdateDate | datetime | （内部字段，不返回） | 审计列：最后修改时间 | — |
 | Status | int | 状态 | 见下方「状态枚举」 | — |
 
-本域不使用源表的 `RequestID`（默认 0；PN 不以本列为准，只经 `BrazilProblemPO` 解析）与 `MailCount`。
+别用 `RequestID`：默认 0，PN 不以本列为准，只经 `BrazilProblemPO` 解析。
+
+别用 `ProblemClass`：存的是现象分类 ID，不是停线级别，管理页面不显示。
 
 ## 状态枚举（Status）
 
@@ -79,7 +80,7 @@ JSON 数组，每个元素含 `Key`（整数）、`Value`、`parentType`、`othe
 
 ## 问题类型的「其他|备注」
 
-| 源值 | 问题类型（展示） | 其他问题备注说明 |
+| 源值 | 问题类型（展示） | 其他问题说明 |
 |---|---|---|
 | `物料问题` | 物料问题 | （空） |
 | `其他\|包装破损` | 其他 | 包装破损 |
