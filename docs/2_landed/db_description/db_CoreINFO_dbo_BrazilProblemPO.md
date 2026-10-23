@@ -13,5 +13,3 @@
 | ID | int | （内部字段，不返回） | 主键 | — |
 | ProblemID | int | （内部字段，不返回） | 所属问题单 | `CoreINFO.dbo.BrazilProblemList.ID` |
 | RequestID | int | （内部字段，不返回） | 申请单 ID | `info.dbo.Brazil_RequestList.ID` |
-
-本域不使用源表的 `OnlineQty`（在线数量）、`InvoiceNoAll`、`RequestType`、`Memo`：关联申请单只用来解析 PN。

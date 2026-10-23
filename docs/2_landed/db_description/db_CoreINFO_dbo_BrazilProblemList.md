@@ -35,18 +35,20 @@
 | SupplementQty | int | 补料数量 | — | — |
 | SupplementResult | varchar | 补料结果 | 是 / 否 / 空 | — |
 | SupplementMemo | nvarchar | 补料备注 | 富文本 | — |
-| SupplementUserID | int | 补料人 | 员工 ID | `info.dbo.Employee.ID` |
+| SupplementUserID | int | 补料人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | SupplementDate | datetime | 补料日期 | — | — |
 | IsCost | int | 是否涉及费用 | 1=是，2=否；0 为删除状态的测试数据，按无效值处理。只在用户明说「是否涉及费用」时作筛选条件；「涉及费用的单」按费用明细认定，见费用表 | — |
-| ActorUserID | int | 初始责任人 | 员工 ID | `info.dbo.Employee.ID` |
+| ActorUserID | int | 初始责任人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | Memo | nvarchar | 备注 | 富文本 | — |
-| AddUserID | int | 填单人 | 员工 ID | `info.dbo.Employee.ID` |
+| AddUserID | int | 填单人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | AddDate | datetime | 建单时间 | — | — |
 | UpdateUserID | int | （内部字段，不返回） | 审计列：最后修改人 | `info.dbo.Employee.ID` |
 | UpdateDate | datetime | （内部字段，不返回） | 审计列：最后修改时间 | — |
 | Status | int | 状态 | 见下方「状态枚举」 | — |
 
-本域不使用源表的 `RequestID`（默认 0；PN 不以本列为准，只经 `BrazilProblemPO` 解析）、`MailCount` 与 `ProblemClass`。`ProblemClass` 存的是现象分类 ID（对到现象分类表的分类类型与分类名称，如「功能问题 → LCD 显示问题」），不是停线级别：只在部分没停线的单上有值（业务方 2026-10-23 正式镜像计数：未删除 203 张中 73 张，停过线的 9 张都没有），管理页面不显示。
+别用 `RequestID`：默认 0，PN 不以本列为准，只经 `BrazilProblemPO` 解析。
+
+别用 `ProblemClass`：存的是现象分类 ID，不是停线级别，管理页面不显示。
 
 ## 状态枚举（Status）
 

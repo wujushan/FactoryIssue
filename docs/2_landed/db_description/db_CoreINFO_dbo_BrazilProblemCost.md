@@ -16,7 +16,7 @@
 | CostType | nvarchar | 费用类型 | 物料费、第三方处理费用、物料报废处理费用、返工费、CIF税费、物流费、损失产能费用（停线） | — |
 | CostMoney | decimal | 费用金额（美元） | — | — |
 | CostBrlMoney | decimal | 费用金额（雷亚尔） | — | — |
-| ConstBrlRate | decimal | 巴西汇率 | — | — |
+| ConstBrlRate | decimal | 汇率（美元兑雷亚尔） | — | — |
 | CostMemo | nvarchar | 费用备注 | 富文本 | — |
 
 ## 按单汇总

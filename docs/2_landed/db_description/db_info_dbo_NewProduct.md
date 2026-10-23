@@ -1,4 +1,4 @@
-# NewProduct（PN 机型）
+# NewProduct（PN 主数据）
 
 - **数据源别名（source）**：info
 - **物理表名（table）**：info.dbo.NewProduct
@@ -15,5 +15,3 @@
 | Name | nvarchar | PN 名称 | 带连字符的型号码。按 PN 筛选时包含匹配 | — |
 
 回答中的「PN」展示为「PN 名称 PN 编码」，与管理页面一致；一单多个时去重，用「、」连接（巴西称「PN 列表」）。
-
-表内另有描述、大类 / 小类、市场名称、重量尺寸、量产状态等字段，本模块不使用。

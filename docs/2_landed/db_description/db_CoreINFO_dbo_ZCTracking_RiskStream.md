@@ -15,6 +15,4 @@
 | ProblemId | int | （内部字段，不返回） | 所属问题单 | `CoreINFO.dbo.ZCTracking_ProblemList.ID` |
 | Step | int | 退货 / 退库环节 | 14=填写退货信息，15=填写退库信息。与主表状态、处理步骤环节编码不是同一套编号 | — |
 | Status | int | 进度 | 1=进行中，2=完成 | — |
-| UserID | int | （内部字段，不返回） | 责任人员工 ID，经人员表翻成姓名，显示「责任人」 | `info.dbo.Employee.ID` |
-
-本模块不使用源表的 `Remark`（备注）、`AddUser`（新增人）、`AddDate`（新增时间）：本表只用来拼当前状态里的退货 / 退库一段，风险订单信息不在查询范围（见国内业务描述「查询范围」），这几列不展示，也不作筛选条件。
+| UserID | int | 风险订单责任人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |

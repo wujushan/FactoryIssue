@@ -16,11 +16,11 @@
 | ProblemType | int | 问题类型 | 1=硬件问题，2=软件问题，3=物料问题，4=其他，5=工厂制程，6=结构问题，7=制程优化。空值显示「未填」，1–7 以外的值显示「其他（未识别）」 | — |
 | OldProblemType | int | 原问题类型 | 改分类前的类型，枚举同 `ProblemType` | — |
 | ProblemRemark | varchar | 其他问题说明 | 问题类型为「其他」时填写 | — |
-| Factory | varchar | 加工厂 | 海外工厂名称，直接存名称，不关联国内工厂主数据。写法统一，取值是可枚举的闭集；按工厂筛选用包含或名称相近匹配，不要求精确相等 | — |
+| Factory | varchar | 加工厂 | 海外工厂名称，直接存名称，不关联国内工厂主数据。写法统一，取值是可枚举的闭集。按工厂筛选的规则见海外业务描述「加工厂」 | — |
 | Factory2 | varchar | 国内工厂 | 国内工厂码。只在用户明说「国内工厂」时作筛选条件 | `paxbase.dbo.PaxFactory.FactoryID` → `FactoryName` |
 | ProductType | varchar | （内部字段，不返回） | 大机型 ID，逗号分隔，逐段去首尾空格。对不上的段不显示，全部对不上显示「未识别机型」 | `info.dbo.ProductName.ID` → `ProductName`（显示名「大机型」；一单多个时去重，用「、」连接） |
 | Series | varchar | 系列 | 选 PN 时随大机型带出的系列文本。只展示原文，不作查询条件，不另关联 | — |
-| PNList | varchar | PN | PN 编码，逗号分隔。每段经 PN 主数据得到 PN 名称，展示为「PN 名称 PN 编码」，找不到名称的只给编码；多段时去重，用「、」连接。按 PN 筛选时编码按段精确匹配，名称包含匹配 | 各段 `= info.dbo.NewProduct.PartNumber` → `Name` |
+| PNList | varchar | PN | PN 编码，逗号分隔。每段经 PN 主数据得到 PN 名称，展示为「PN 名称 PN 编码」，找不到名称的只给编码；多段时去重，用「、」连接。按 PN 筛选的规则见海外业务描述「大机型与 PN」 | 各段 `= info.dbo.NewProduct.PartNumber` → `Name` |
 | InvInfo | varchar | 物料 | JSON 数组，见下方「JSON 列结构」。不关联存货档案与供应商表 | — |
 | hasCheckedPhenomenon | varchar | 已选问题现象 | JSON 数组，见下方「JSON 列结构」 | 元素 `Key`>0 → `CoreINFO.dbo.AfterSaleIssueClassPhenomenon.ID` |
 | ImpactQty | int | 影响数量 | — | — |
@@ -49,18 +49,16 @@
 | RCompleteTime | datetime | 计划完成时间 | 问题跟进人计划完成时间 | — |
 | IQCOpinion | int | IQC 意见 | 2=退回仓库，3=继续使用 | — |
 | IsDesignChange | int | 是否设计变更 | 0=否，1=是 | — |
-| DesignUser | int | 设计变更责任人 | 员工 ID | `info.dbo.Employee.ID` |
+| DesignUser | int | 设计变更责任人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | DesignConfirmResult | int | 处理结果 | 1=改善，2=保持现状，3=挂起；空写「未填」。与国内一样一张单只有这一列：管理页面在「责任人确认」下显示为「处理结果」（与确认结果、计划完成时间同一行），术语「责任人处理结果」即指它；物料问题设计变更时也记在这一列 | — |
 | DesignDate | datetime | 设计变更预计完成时间 | — | — |
 | Confirmation | nvarchar | 效果确认内容 | 效果确认环节填写的结果，叙述文字，与国内效果确认内容同一含义。单张单详情的「效果确认」一块里，页面标签写作「效果确认结果」 | — |
-| ConfirmUser | int | 效果确认人 | 员工 ID | `info.dbo.Employee.ID` |
+| ConfirmUser | int | 效果确认人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | ConfirmDate | datetime | 效果确认时间 | — | — |
-| DocId | varchar | （内部字段，不返回） | 填单附件 ID，逗号分隔 | `info.dbo.DocumentList.ID` |
-| AddUser | int | 填单人 | 员工 ID；源系统也称「创建人」 | `info.dbo.Employee.ID` |
+| DocId | varchar | 附件 | 填单附件的文档 ID，逗号分隔；以文档名称展示，ID 不外露 | `info.dbo.DocumentList.ID` |
+| AddUser | int | 填单人 | 员工 ID，经人员表翻成姓名；源系统也称「创建人」 | `info.dbo.Employee.ID` |
 | AddDate | datetime | 建单时间 | — | — |
 | IsDelete | bit | （内部字段，不返回） | 软删标记：0=未删除，1=已删除；只查为 0 的单，与源系统一致 | — |
-
-本域不使用源表的 `OtherOnline`（其他在线）、`StockList`（库存）、`OReturnOrderNo`（在线退货单号）、`SReturnOrderNo`（在库退货单号）。
 
 ## 状态枚举（Status）
 

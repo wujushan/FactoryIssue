@@ -4,9 +4,9 @@
 - **物理表名（table）**：info.dbo.tbIQCreportOut
 - **所属域**：国内
 - **用途**：IQC 检验报告与 8 步纠正预防措施记录。国内物料问题单经 `CARID` 关联本表，用于回答物料问题的 CAR 内容；其他类型的单即使有 `CARID` 也不读取、不展示。
-- **权限**：本表单独授权。没有 CAR 报告权限的用户不读取、不展示本表内容（见 `privileges.md`「CAR 报告」）。CAR 报告页面链接对所有用户生成，用主表 `CARID` 拼出，不需要读本表（见 `link_rules.md`）。
 - **数据产生方**：INFO 系统 IQC 报告页面。
 - **列类型**：按 information_schema（业务方 2026-10-20 内网元数据），字符串长度为声明的字符数。
+- **权限**：本表单独授权。没有 CAR 报告权限的用户不读取、不展示本表内容（见 `privileges.md`「CAR 报告」）。CAR 报告页面链接对所有用户生成，用主表 `CARID` 拼出，不需要读本表（见 `link_rules.md`）。
 
 ## 字段（本模块用到的部分）
 
@@ -26,5 +26,3 @@
 | fstep5date | smalldatetime | 预防措施录入时间 | — | — |
 | fstep6memo | nvarchar(2000) | 有效性确认 | — | — |
 | fstep6date | smalldatetime | 有效性确认录入时间 | — | — |
-
-表内另有公司名称、检验总数、检查总数、不良数量、不良率（`fcompany`、`fcount`、`fcheckcount`、`fbadcount`、`fbadper`），以及多步骤审批记录与人员字段，本模块不使用：CAR 只给问题点、围堵对策、根本原因、永久纠正措施、预防措施、有效性确认 6 项叙述内容（见国内业务描述「物料问题专属」）。

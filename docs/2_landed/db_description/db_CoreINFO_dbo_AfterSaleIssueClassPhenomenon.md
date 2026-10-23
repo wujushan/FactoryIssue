@@ -11,9 +11,9 @@
 | 字段 | 类型 | 用户可见显示名 | 含义与取值 | 关联 |
 |---|---|---|---|---|
 | ID | int | （内部字段，不返回） | 主键 | `OverseasProblemDetail.hasCheckedPhenomenon[].Key`；`ZCTracking_CheckReason.PhenomenonID`；`AfterSaleIssueClassPhenomenonReason.PhenomenonID` |
-| ClassID | int | （内部字段，不返回） | 所属分类；本模块不使用，国内的所属分类取 `ZCTracking_CheckReason.ClassID` | — |
 | PhenomenonDesc | nvarchar | 问题现象 | 现象的文字。国内直接作为问题现象展示；海外只用来关联可能问题原因，不展示，也不替代单上「已选问题现象」的文字 | — |
 | AddUser | int | （内部字段，不返回） | 审计列：录入人 | `info.dbo.Employee.ID` |
 | AddDate | datetime | （内部字段，不返回） | 审计列：创建时间 | — |
 | LastUser | int | （内部字段，不返回） | 审计列：最后修改人 | — |
 | LastDate | datetime | （内部字段，不返回） | 审计列：最后修改时间 | — |
+别用 `ClassID`：国内问题现象的所属分类取 `ZCTracking_CheckReason.ClassID`，不取本列。

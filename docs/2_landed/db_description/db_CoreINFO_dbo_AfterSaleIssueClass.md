@@ -13,5 +13,3 @@
 | ID | int | （内部字段，不返回） | 主键 | `ZCTracking_CheckReason.ClassID` |
 | ClassName | varchar | 分类名称 | 国内问题现象的所属分类 | — |
 | TypeName | varchar | 分类类型 | 分类名称的上一级，展示问题现象所属分类时用（分类类型 → 分类名称） | — |
-
-表内另有 A/B/C 等级不良率上下限、适用场景（人工 / 客户 / 海外制程）与审计列，本模块不使用。
