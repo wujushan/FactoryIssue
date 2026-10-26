@@ -32,7 +32,8 @@ class FactoryIssueModule(ForgeModule):
         version=MODULE_VERSION,  # 跟随 pyproject.toml，勿改回字面量
         # 能力 profile：初始化选 / 追加某能力前先读 docs/dev/07-capability-profiles.md 对应小节
         # （追加 ≠ 只加字符串：semantic-retrieval/governance-etl 跨 G2 决策、需平台侧建 mart 库并登记数据源）。
-        profiles=['structured-query', 'semantic-retrieval', 'governance-etl', 'stats-sandbox', 'analysis-report'],
+        # G2（决策 2026-10-20「G2 数据源与治理决策」）：不调用其他模块，不启用 analysis-report。
+        profiles=['structured-query', 'semantic-retrieval', 'governance-etl', 'stats-sandbox'],
         # 路由素材（G1 产物）：示例问题与关键词，直接影响入口路由质量
         intents=[],
         keywords=[],

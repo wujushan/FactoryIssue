@@ -16,14 +16,14 @@
 
 业务记录 ID 即国内问题单主表 `ID`（文本形式）。只取任务状态为「已接受」的，即当前待处理的任务。其他业务表名的任务不取，包括「待填写停线重启方案」等国内其他待办、巴西制程问题的任务。
 
-权限上的行规则仍按「业务表名以 `ZCTracking` 开头」放行（见 `privileges.md`），本模块取数时再收窄到这两类。
+权限上的行规则同样只放行这两个业务表名（见 `privileges.md`「风险订单流程表与流程待办任务表的配法」），本模块取数时也自带这个条件。
 
 ## 字段（本模块用到的部分）
 
 | 字段 | 类型 | 用户可见显示名 | 含义与取值 | 关联 |
 |---|---|---|---|---|
 | fid | int | （内部字段，不返回） | 主键 | — |
-| ftable | varchar | （内部字段，不返回） | 业务表名。国内制程问题的任务以 `ZCTracking` 开头；本模块只用 `ZCTracking_ProblemSoftware3`（效果确认）、`ZCTracking_PreventionConfirm`（预防对策确认）。权限行规则作用于本列（见 `privileges.md`「风险订单流程表与流程待办任务表的配法」） | — |
+| ftable | varchar | （内部字段，不返回） | 业务表名。国内制程问题的任务以 `ZCTracking` 开头，共 21 种（业务方 2026-10-26 内网计数）；本模块只用 `ZCTracking_ProblemSoftware3`（效果确认）、`ZCTracking_PreventionConfirm`（预防对策确认）。权限行规则作用于本列，只放行这两个（见 `privileges.md`「风险订单流程表与流程待办任务表的配法」） | — |
 | frecID | varchar | （内部字段，不返回） | 业务记录 ID，文本型。国内制程问题任务存问题单主表 ID 的十进制文本 | `CoreINFO.dbo.ZCTracking_ProblemList.ID` |
 | fuserID | varchar | （内部字段，不返回） | 任务对应人员，单个员工 ID（文本型，需转整数关联）；多人时每人一条记录 | `info.dbo.Employee.ID` |
 | fstat | varchar | （内部字段，不返回） | 任务状态：待接受、已接受、已接收、已完成、完成、已取消；另有业务码值 `326` 与一个历史遗留的说明文字取值。本模块只取「已接受」 | — |
