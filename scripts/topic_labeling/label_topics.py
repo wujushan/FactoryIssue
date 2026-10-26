@@ -198,6 +198,9 @@ _FW_SRC = "ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷ
 _FW_DST = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-"
 _FW = str.maketrans(_FW_SRC, _FW_DST)
 _ASCII_TERM = re.compile(r"^[A-Za-z0-9 .-]+$")
+MASK = "\x00"  # 屏蔽「不算的说法」用的占位符
+PHENOMENON_COLS = {"问题现象", "已选问题现象"}
+SHORT_TEXT = 10  # 剥净后不超过 10 个字的内容不参与按意思找（问题现象除外），总述「比对范围」
 
 
 def norm(text: str) -> str:
@@ -255,7 +258,8 @@ class TopicMatcher:
         hits: list[tuple[str, str, int, str]] = []
         for grp, col, text in order.cols:
             tx = norm(text)
-            mt = self.ex_re.sub(" ", tx) if self.ex_re else tx
+            # 屏蔽处换成占位符：去空格时不会被删掉，屏蔽处两侧的文字不会拼成新词
+            mt = self.ex_re.sub(MASK, tx) if self.ex_re else tx
             mt_ns = mt.replace(" ", "")
             for word, kind, rx, word_ns in self.items:
                 ok = rx.search(mt) is not None if rx is not None else (word_ns in mt_ns)
@@ -359,6 +363,8 @@ def build_doc(order: Order, per_col: int, total: int) -> tuple[str, bool]:
     for grp in (1, 2):
         for g, col, text in order.cols:
             if g != grp or text in seen:
+                continue
+            if col not in PHENOMENON_COLS and len(text.replace(" ", "")) <= SHORT_TEXT:
                 continue
             seen.add(text)
             s = text
@@ -738,9 +744,8 @@ def analyze(
                     phrase_rows.append([t.name, p, n])
         md += ["## 说法清单没找到、模型判为问题本身的张数", ""]
         md += md_table(["话题", "张数"], miss_rows) + [""]
-        md += ["## 说法候选（模型依据里不含现有说法、出现在 2 张及以上单上的短语）", "",
-               "外传前请人工过目：短语摘自单上原文。", ""]
-        md += (md_table(["话题", "短语", "单数"], phrase_rows) if phrase_rows else ["没有。"]) + [""]
+        # 说法候选的短语摘自原文，只写进 说法候选.csv（只在内网看），不进 汇总.md
+        md += ["## 说法候选", "", f"共 {len(phrase_rows)} 个，见 说法候选.csv（短语摘自原文，只在内网看，不发回）。", ""]
         write_csv(out_dir / "说法候选.csv", ["话题", "短语", "单数"], phrase_rows)
 
         # 5) 抽查清单与应命中集草稿
@@ -930,19 +935,6 @@ def what_if(
             for (g0, g1), keys in sorted(moves.items(), key=lambda kv: -len(kv[1])):
                 mrows.append([GROUP_NAMES[g0], GROUP_NAMES[g1], len(keys), self_share(keys, name)])
             md += md_table(["现行", "草稿", "张数", "其中模型判为问题本身"], mrows)
-        # 模型判为问题本身的单里，依据短语怎么写（帮着挑更具体的说法；短语摘自原文，外传前过目）
-        phrases: Counter = Counter()
-        for _, labels in label_sets:
-            for rec in labels.values():
-                for it in rec.get("topics", []):
-                    if it["topic"] == name and it["relation"] == "问题本身":
-                        ev = norm(it.get("evidence", "")).replace(" ", "")
-                        if ev:
-                            phrases[ev] += 1
-        top = [[p, n] for p, n in phrases.most_common(20) if n >= 2]
-        if top:
-            md += ["", "**模型判为问题本身时的依据短语**（各标签集合计，2 次及以上，摘自原文）", ""]
-            md += md_table(["短语", "次数"], top)
         md += [""]
         summary_rows.append([name, before["1"] + before["2"], after["1"] + after["2"], before["3"], after["3"]])
     if judged:
@@ -993,6 +985,16 @@ def load_env_file(path: Path) -> None:
         os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
+def check_out_dir(path: Path) -> Path | None:
+    """输出含真实单号与原文短语，只允许写在仓库的 runtime/ 下（已被 .gitignore 忽略）。"""
+    resolved = path.resolve()
+    runtime = (ROOT / "runtime").resolve()
+    if resolved != runtime and runtime not in resolved.parents:
+        print(f"输出目录必须在 {runtime} 下：{resolved}", file=sys.stderr)
+        return None
+    return resolved
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="用本地大模型给制程问题单打话题标签，并与说法清单对照")
     ap.add_argument("--dry-run", action="store_true", help="不调模型，只做按词匹配与 T4 计数对照")
@@ -1029,7 +1031,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         draft_topics, _ = parse_topic_terms(args.what_if.read_text(encoding="utf-8"))
         label_sets = [(p.name, load_label_set(p)) for p in args.labels_dir]
-        out_dir = args.out or DEFAULT_OUT_ROOT / f"{dt.date.today().strftime('%Y%m%d')}-whatif"
+        out_dir = check_out_dir(args.out or DEFAULT_OUT_ROOT / f"{dt.date.today().strftime('%Y%m%d')}-whatif")
+        if out_dir is None:
+            return 2
         out_dir.mkdir(parents=True, exist_ok=True)
         orders = fetch_orders(dsn)
         if args.domain:
@@ -1040,7 +1044,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"完成，输出在 {out_path}", flush=True)
         return 0
 
-    out_dir = args.out or DEFAULT_OUT_ROOT / f"{dt.date.today().strftime('%Y%m%d')}-{PROMPT_VERSION}"
+    out_dir = check_out_dir(args.out or DEFAULT_OUT_ROOT / f"{dt.date.today().strftime('%Y%m%d')}-{PROMPT_VERSION}")
+    if out_dir is None:
+        return 2
     out_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.monotonic()
