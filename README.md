@@ -11,15 +11,16 @@
 - [x] **G1 业务逻辑梳理与落盘**：2026-10-23 完成（第四次复核清零并做完落盘精炼，见决策 2026-10-23「G1 四次复核修订」「G1 落盘精炼」）。口径在 `docs/2_landed/`（32 张表：31 张 `info`、1 张 `erp`），决策过程见 `docs/decisions/`，内网探测见 `docs/probes/`。业务方另有一批功能定义待投递，届时按同一流程补梳理。
   - 2026-10-24 梳理测试案例集时重新打开，新增 9 项当日全部关闭并落盘（决策 2026-10-24「测试案例梳理补充口径」），歧义清单再次清零。
   - **带入后续阶段**：
-    - G2：类似问题怎么比对（关键词还是语义检索）、富文本清洗放在哪、要不要建 `forge_mart_factory_issue`；如建 mart，每张单要带所属域、可按域过滤，CAR 报告正文不进检索文本；海外附件只能从单上登记的 ID 取。确认平台 `data_sources.json` 已登记 `info`、`erp`。
     - 权限：待办任务表的固定行规则为业务表名 `IN` 两个（`privileges.md`，探测 C8 已核对），G4a 要给这条规则用到的字段写 `field_mappings`，否则取数会被拒；`docs/platform-feedback/` 两份待平台答复，实现前三种出错情形只靠权限平台承诺兜住（业务方已接受）。
     - G3：权限分支在自动化测试通道验不到，要构造权限数据的单元测试，加四类真实账号人工验收。正式数据里目前没有国内当前状态的 IQC 段、进行中的退货 / 退库段，也没有巴西只有雷亚尔费用的单，这几条规则要构造数据测。`2_landed` 里示例问题的单号只示意问法，场景按钮与测试用例的单号另从正式镜像挑。
     - G4a：每轮开头用 `ctx.data.describe()` 判域；`manifest.glossary` 按 `glossary.md` 同步，说法清单配置的内置默认值按 `topic_terms.md`，按词找时屏蔽不算的说法后两侧不拼接；各分析维度的图表样式（`Event.chart` 的 `style`）在设计里定；配图规则、一问多段、多轮沿用、Top N 与导出条数、表格列名已定（总述「回答怎么组织」「初步分析维度」，决策 2026-10-26「回答组织方式默认值」），其中 Top N、导出阈值与表格条数做成 `ctx.config` 可配。
     - G6：按 `privileges.md`「上线前核对」逐条核对。
-- [ ] **G2 数据现状勘察与治理决策**：数据画像（内网执行，聚合统计特征，外传前人工审核）→ 治理必要性评估报告 → 决策落盘 `docs/decisions/`。**判定是否需要治理/向量化**：原始结构化取数一律直连 info/erp（只读热备副本），仅当需数据治理或非结构化字段向量化时才建 `forge_mart_<模块编码>` 产物库并启用 `governance-etl`/`semantic-retrieval`（模板见 `docs/decisions/README.md`）。**建 mart 就必须在决策里写死两件事**：① 权限承载列清单（缺列平台直接拒绝启动，返工要重建表 + 重跑 embedding）；② 受列级管控字段的处置（列级权限当前不作用于检索路径）。**评审必须在申请建库之前**——建库是运维当场传口令、跑完即走的动作
-  - **进行中**：决策草案 `docs/decisions/2026-10-20-G2数据源与治理决策.md`（结构化直连；文字查找建 `forge_mart_factory_issue`，每域文字表、分段表、按意思找的段表、向量表共 12 张，不设权限承载列；按字段分段向量化；「涉及某个话题」按说法写在哪一栏分三组，关键词与语义两路）。画像已全部跑完，业务方答复已全部关闭。2026-10-26 独立评审（`docs/reviews/2026-10-26-G2数据源与治理决策独立评审.md`）结论「修后再评」，已按评审修订，**待复评**；评审通过才申请建库。
-    - 不挡评审与建库的未决项：平台答复「查询侧缺少任务说明」「治理任务缺少大模型与重排句柄」与文档反馈「无权限管控时向量化自检说法冲突」（都不阻塞上线）；DBA 书面确认正式库版本与两张大表索引（建库后、首轮跑数前要有）；平台告知 `info` 连接的默认库（建议 `CoreINFO`）。
-  - **带入 G3**：检索评测集（非接、音频、花屏等主题问句 + 业务方确认的应命中单），用来定分段规则，见决策「检索评测」。
+- [x] **G2 数据现状勘察与治理决策**：2026-10-26 完成（独立评审修后，开发者复评通过）。决策见 `docs/decisions/2026-10-20-G2数据源与治理决策.md`（结构化直连 `info` / `erp`；文字查找建 `forge_mart_factory_issue`，每域 4 张表共 12 张，不设权限承载列），画像见 `docs/probes/`，评审见 `docs/reviews/`。
+  - **带入后续阶段**：
+    - 平台 / 运维：按 `docs/platform-feedback/2026-10-26-申请建产物库与上线前置.md` 在测试、正式两套环境建库、登记别名、配权限，必须早于装配含 mart 声明的版本；DBA 书面确认正式库版本与两张大表索引（首轮跑数前）；三份反馈待平台答复（都不阻塞上线）。
+    - G3：检索评测集（主题问句 + 业务方确认的应命中单），用来定分段规则（决策「检索评测」）。
+    - G4a / G4b：manifest 按决策「结论」写 `data_sources`（mart 别名的 `tables` 列 9 张）、`vectorize` 3 条（`metadata_columns` 不得后改）、`config_files`；mart 别名不填 `field_mappings`；查询流程按决策「查询期怎么用」「叙述原文的取数」细化；平台没把 `info` 默认库设为 `CoreINFO` 前，经 `info` 发出的 SQL 不用 `TRY_CONVERT` / `STRING_SPLIT`。
+    - 上线：首轮跑数先全量重建，再 3 个向量化任务，再重启平台；统计行发回业务仓做决策「上线首轮核对」。
 - [ ] **G3 测试案例集**：种子问题集 → 编程助手扩展 → `docs/testcases/`（每条附参考 SQL/预期工具调用；自动化 golden 集 + 人工测试手册双产物）。golden 集用 `scripts/qa_test.py` 经平台 `/test` 通道在真实测试数据上跑，格式与断言原则见 [docs/dev/10](docs/dev/10-automated-testing.md)
 - [ ] **G4a 技术设计定稿**：落 `docs/decisions/YYYY-MM-DD-模块技术设计.md`（模板见 `docs/decisions/README.md`）——manifest 草案 + **`field_mappings` 逐列锚定**（协议权限字段 → 物理列；缺失 fail-closed 拒查、锚错列即越权，这是最该被人看一眼的地方）+ `handle()` 编排与事件序列 + SQL/沙箱边界 + 错误与降级。纯 `structured-query` 模块几十行足够；带 `governance-etl`/`semantic-retrieval`/`analysis-report` 的必须独立成文
 - [ ] **G4b 编码实现**：照 G4a 的设计写 manifest（intents/keywords/dependencies/**data_sources**/field_mappings）+ tools + 流式事件；**偏离设计要回改 G4a 文档**，别让代码与设计各说各话。data_sources 别名须与 G1 各表 `source` 并集一致、且平台侧 data_sources.json 已登记（否则平台拒绝启动）。**回给用户的内容按 [docs/dev/09 答案呈现规范](docs/dev/09-answer-presentation.md) 自检**：无意义字段（自增 ID 等）不返回、表名/字段名不外露、数据之外给合理分析、寒暄（「你好」「你能做什么」）报本板块能力与常用场景
@@ -38,7 +39,7 @@
 
 ## 能力 Profile（本模块声明启用哪些框架能力）
 
-本模块当前启用：**`structured-query,semantic-retrieval,governance-etl,stats-sandbox,analysis-report`**（在 `manifest.profiles` 声明，业务扩展 = 追加 profile + 按其 checklist 补内容）。
+本模块当前启用：**`structured-query,semantic-retrieval,governance-etl,stats-sandbox`**（在 `manifest.profiles` 声明，业务扩展 = 追加 profile + 按其 checklist 补内容）。`analysis-report` 按 G2 决策不启用：本助手不调用其他模块。
 
 > **初始化选 profile / 追加某 profile 能力前，先读 [docs/dev/07-capability-profiles.md](docs/dev/07-capability-profiles.md)** 的对应小节，按其「声明 / 依赖 / 代码 / 平台前置 / DoD」分步办。⚠️ 追加 ≠ 只加字符串：`semantic-retrieval` / `governance-etl` 跨 G2 决策、需平台侧建 `forge_mart_<模块编码>` 库并登记数据源，**不得跳过、不得只改字符串就报完成**。
 
