@@ -294,43 +294,108 @@ def _cn_to_int(s: str) -> int | None:
     return tens * 10 + ones
 
 
+def _list_lengths(obj: Any) -> set[int]:
+    """事实里每个列表的项数。线上由沙箱模板给 facts 的每个列表附上项数（设计稿 §8.1、§8.3，T10），这里模拟它。"""
+    out: set[int] = set()
+    if isinstance(obj, dict):
+        for v in obj.values():
+            out |= _list_lengths(v)
+    elif isinstance(obj, list):
+        out.add(len(obj))
+        for v in obj:
+            out |= _list_lengths(v)
+    return out
+
+
 def allowed_numbers(case: dict) -> set[float]:
-    """问句、说明、表格、事实里出现过的数，阿拉伯数字与汉字数（「三个域」）都算。"""
+    """问句、说明、表格、事实里出现过的数，阿拉伯数字与汉字数（「三个域」）都算；事实里各列表的项数也算。"""
     text = " ".join([case["q"], case.get("note", ""), case.get("table", ""), json.dumps(case["facts"], ensure_ascii=False)])
     allowed = {float(x) for x in re.findall(r"\d+(?:\.\d+)?", text)}
     allowed |= {float(v) for v in (_cn_to_int(x) for x in _CN_NUM.findall(text)) if v is not None}
+    allowed |= {float(n) for n in _list_lengths(case["facts"])}
     return allowed
 
 
-# 「这两类」「那两张」是指代前文点过名的几项，不是统计出来的数，不查
+# 「这两类」「那两张」是指代前文点过名的两项，不查；「这三张」「那五家」照查（设计稿 §8.3，G4a 评审 I7）
 _CN_NUM_CLAIM = re.compile(r"(?<![这那])" + _CN_NUM.pattern)
-# 「前两名」「前 3 名」是表格里的名次；「A 和 B 两类」数的是本句刚点过名的几项。都不是统计出来的数，不查
+_CN_NUM_AFTER_DEM = re.compile(r"(?<=[这那])([三四五六七八九十][零一二两三四五六七八九十]*)(?=[张个条起项家类次天倍名成])")
+# 约数与比值的说法：只能是模型自己算的，事实里没有同样的说法就删句
+_APPROX = re.compile(r"[\d一二两三四五六七八九十]+(?:\.\d+)?\s*(?:倍|成(?![为功本品果立员熟型绩长交都分])|个?百分点)"
+                     r"|翻倍|翻了?[一两]?[番倍]|(?:一|过|近|大|超过?|将近|接近)半(?![年月天])|半数|[上中下]旬")
+# 日期：年、月、日要在事实里出现过，或落在事实给的起止范围内
+_DATE_TOKEN = re.compile(r"(\d{4})\s*年|(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号])?")
+_SRC_DATE = re.compile(r"(\d{4})-(\d{1,2})(?:-(\d{1,2}))?")
+_SRC_RANGE = re.compile(r"(\d{4})-(\d{1,2})(?:-\d{1,2})?\s*(?:至|到|~|-)\s*(\d{4})-(\d{1,2})")
+# 点名的机型、工厂、部门、供应商、系列要在事实、表格或问句里出现（人员与常用词撞名，不查）
+_ENTITY_KINDS = ("机型", "系列", "加工厂", "部门", "供应商")
+
+
+def _date_sources(source: str) -> tuple[set[int], set[int], set[int]]:
+    years = {int(y) for y in re.findall(r"(\d{4})\s*年", source)}
+    months = {int(m) for m in re.findall(r"(?<!\d)(\d{1,2})\s*月", source)}
+    days = {int(d) for d in re.findall(r"(?<!\d)(\d{1,2})\s*[日号]", source)}
+    for y, m, d in _SRC_DATE.findall(source):
+        years.add(int(y))
+        months.add(int(m))
+        if d:
+            days.add(int(d))
+    for y1, m1, y2, m2 in _SRC_RANGE.findall(source):
+        start, end = int(y1) * 12 + int(m1) - 1, int(y2) * 12 + int(m2) - 1
+        for k in range(start, min(end, start + 36) + 1):
+            years.add(k // 12)
+            months.add(k % 12 + 1)
+    return years, months, days
+# 「前两名」「前 3 名」「第三名」是表格里的名次；「A 和 B 两类」数的是本句刚点过名的几项。都不是统计出来的数，不查。
+# 「第 N 名」只在 N 不超过事实里最长的列表时不查（T10）：排名表只有 3 行却说「第五名」，照查
 _ORDINAL = re.compile(r"前\s*(?:\d+|[两三四五六七八九十]+)\s*[名位]")
+_NTH = re.compile(r"第\s*(\d+|[一二两三四五六七八九十]+)\s*[名位]")
 _ENUM_TWO = re.compile(r"([^，。；]*[和与、][^，。；]*?)两(?=[个类张家项名])")
 
 
-def _ordinal_free(sentence: str) -> str:
-    return _ENUM_TWO.sub(r"\1", _ORDINAL.sub("", sentence))
+def _ordinal_free(sentence: str, max_rank: int = 0) -> str:
+    def nth(m: re.Match) -> str:
+        raw = m.group(1)
+        n = int(raw) if raw.isdigit() else _cn_to_int(raw)
+        return "" if n is not None and 1 <= n <= max_rank else m.group(0)
+
+    return _ENUM_TWO.sub(r"\1", _NTH.sub(nth, _ORDINAL.sub("", sentence)))
 
 
 def check_narrative(case: dict, text: str) -> dict:
+    from prematch import find_entities
+
     allowed = allowed_numbers(case)
+    max_rank = max(_list_lengths(case["facts"]), default=0)
     body = scoring._THINK.sub("", text or "")
     sentences = [s for s in re.split(r"[。！？；\n]+", body) if s.strip()]
+    raw_source = " ".join([case["q"], case.get("note", ""), case.get("table", ""),
+                           json.dumps(case["facts"], ensure_ascii=False)])
+    source = raw_source.upper()
+    years, months, days = _date_sources(raw_source)
     with_numbers, bad = 0, []
     for s in sentences:
-        values = [float(x) for x in _NUM.findall(_ordinal_free(s))]
-        values += [v for v in (_cn_to_int(x) for x in _CN_NUM_CLAIM.findall(_ordinal_free(s))) if v is not None]
-        if not values:
-            continue
-        with_numbers += 1
-        unsupported = [v for v in values if not any(abs(v - a) < 1e-9 for a in allowed)]
-        if unsupported:
-            bad.append({"句子": s.strip(), "事实里没有的数": unsupported})
+        found: list[Any] = []
+        # 日期单独查，查过的从句子里去掉，免得年月日里的数再按「数」查一遍
+        for m in _DATE_TOKEN.finditer(s):
+            y, mo, d = m.group(1), m.group(2), m.group(3)
+            if (y and int(y) not in years) or (mo and int(mo) not in months) or (d and int(d) not in days):
+                found.append(m.group(0).replace(" ", ""))
+        plain = _DATE_TOKEN.sub(" ", s)
+        free = _ordinal_free(plain, max_rank)
+        values = [float(x) for x in _NUM.findall(free)]
+        values += [v for v in (_cn_to_int(x) for x in _CN_NUM_CLAIM.findall(free)) if v is not None]
+        values += [v for v in (_cn_to_int(x) for x in _CN_NUM_AFTER_DEM.findall(plain)) if v is not None]
+        if values or _DATE_TOKEN.search(s):
+            with_numbers += 1
+        found += [v for v in values if not any(abs(v - a) < 1e-9 for a in allowed)]
+        found += [m.group(0) for m in _APPROX.finditer(s) if m.group(0) not in raw_source]
+        if found:
+            bad.append({"句子": s.strip(), "事实里没有的数": found})
     # 问题编号里的数字不在上面查（前面紧挨字母），单独查：正文里点名的单号必须出现在问句、表格或事实里（设计稿 §8.3）
-    source = " ".join([case["q"], case.get("table", ""), json.dumps(case["facts"], ensure_ascii=False)]).upper()
     for s in sentences:
         fake = [n for n in _ISSUE_NO.findall(s) if n.upper() not in source]
+        fake += [name for name, kinds, _ in find_entities(s)
+                 if any(k.startswith(_ENTITY_KINDS) for k in kinds) and name.upper() not in source]
         if fake:
             bad.append({"句子": s.strip(), "事实里没有的数": fake})
     # 线上按设计会把含出处不明数字的句子删掉：首句（直接回应用户的那句）被删、或删完剩不下几句，回答就残了
@@ -338,7 +403,7 @@ def check_narrative(case: dict, text: str) -> dict:
     first_bad = bool(sentences) and sentences[0].strip() in bad_set
     return {"sentences": len(sentences), "with_numbers": with_numbers, "bad": bad,
             "leaks": _LEAK.findall(body), "chars": len(body),
-            "first_bad": first_bad, "left": len(sentences) - len(bad)}
+            "first_bad": first_bad, "left": len(sentences) - len(bad_set)}
 
 
 async def run_narrative(caller: Caller, case: dict, group: str) -> dict:
@@ -1053,9 +1118,9 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
 
     t = [{"said": "今年", "basis": "建单"}]
     cases = [
-        ("名字改到对得上的一类",
-         {"steps": [agg("s1", time=t, filters=[{"field": "跟进人", "op": "属于", "value": ["柯洱斯", "亮亮"]}], group_by=["跟进人"])]},
-         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "加工厂" and p["steps"][0]["params"]["group_by"] == ["加工厂"]),
+        ("没有问句时不改类（要看问句里有没有类别词）",
+         {"steps": [agg("s1", time=t, filters=[{"field": "跟进人", "op": "属于", "value": ["柯洱斯", "亮亮"]}])]},
+         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
         ("对得上的不动",
          {"steps": [agg("s1", time=t, filters=[{"field": "跟进人", "op": "是", "value": "李飞"}])]},
          lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
@@ -1133,6 +1198,39 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
         ("明说 A+ 时不拆", "安全问题里 A+ 的单有哪些",
          {"steps": [lst("s1", filters=[{"field": "问题等级", "value": "A+"}])]},
          lambda p: len(p["steps"]) == 1),
+        # 第 7 条（G65）：只给名称、整串相同、只对上一类、问句里没有所选那一类的类别词，才改类
+        ("只给名称时改到对得上的一类", "这个月柯洱斯和亮亮各提交了几张单",
+         {"steps": [agg("s1", time=[{"said": "这个月"}], filters=[{"field": "跟进人", "op": "属于", "value": ["柯洱斯", "亮亮"]}],
+                        group_by=["跟进人"])]},
+         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "加工厂" and p["steps"][0]["params"]["group_by"] == ["加工厂"]),
+        ("说了类别却对不上时不改类", "跟进人是柯洱斯的单有哪些",
+         {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "柯洱斯"}])]},
+         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
+        ("对上两类时不改类", "亮亮的单有哪些",
+         {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "亮亮"}])]},
+         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
+        ("只是包含不算对上", "百富的单有哪些",
+         {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "百富"}])]},
+         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
+        # 第 17 条：汇总没给时间改为追问；问当前状态、引用前一步时不追问
+        ("汇总缺时间改为追问", "各加工厂的合计不良率排一下",
+         {"steps": [agg("s1", group_by=["加工厂"], metrics=["合计不良率"], ranking=True)]},
+         lambda p: [s["skill"] for s in p["steps"]] == ["clarify"]),
+        ("问当前状态的汇总不追问", "现在各加工厂还有多少单没结案？",
+         {"steps": [agg("s1", group_by=["加工厂"], filters=[{"field": "状态", "op": "是", "value": "未结案"}])]},
+         lambda p: p["steps"][0]["skill"] == "aggregate"),
+        ("清单缺时间不追问", "国内的问题有哪些",
+         {"steps": [lst("s1", domains={"value": ["国内"], "from": "user"})]},
+         lambda p: p["steps"][0]["skill"] == "list_issues"),
+        ("在上一步结果里统计不追问", "找到的这些单按工厂分一下",
+         {"steps": [agg("s1", within={"ref": "s0.issues"}, group_by=["加工厂"])]},
+         lambda p: p["steps"][0]["skill"] == "aggregate"),
+        ("明说不限时间不追问", "把海外所有单的不良率合成一个平均值",
+         {"steps": [agg("s1", domains={"value": ["海外"], "from": "user"}, metrics=["合计不良率"])]},
+         lambda p: p["steps"][0]["skill"] == "aggregate"),
+        ("「所有工厂」不算不限时间", "所有工厂的合计不良率排一下",
+         {"steps": [agg("s1", group_by=["加工厂"], metrics=["合计不良率"], ranking=True)]},
+         lambda p: [s["skill"] for s in p["steps"]] == ["clarify"]),
     ]
     for label, query, plan, ok in with_query:
         counts["aux"] += 1
@@ -1240,11 +1338,31 @@ def offline_checks() -> tuple[dict[str, int], list[str]]:
         counts["aux"] += 2
         if check_narrative(case, "前两名之后依次是甲和乙，这两张单最需要关注。")["bad"]:
             problems.append(f"{case['id']} 写分析里名次、指代被误判成编了数")
+        # T10：引用事实里列表的项数、「第一名」不算编数
+        lengths = sorted(_list_lengths(case["facts"]))
+        if lengths:
+            counts["aux"] += 1
+            n = lengths[-1]
+            if check_narrative(case, f"共列出 {n} 项，其中第一名最需要关注。")["bad"]:
+                problems.append(f"{case['id']} 写分析里引用列表项数（{n}）或「第一名」被误判成编了数")
         if not check_narrative(case, "硬件和结构两类合计 98765 张。")["bad"]:
             problems.append(f"{case['id']} 写分析里「两类」之后编的数没查出来")
         counts["aux"] += 1
         if not check_narrative(case, "最需要关注的是 ZC9909999。")["bad"]:
             problems.append(f"{case['id']} 写分析里编的问题编号没查出来")
+        # 设计稿 §8.3 加严的几类（G4a 评审 I7）：指代后的数、约数与比值、日期、点名的机型
+        source = json.dumps(case, ensure_ascii=False)
+        must_flag = ["这九十七张都在惠州。", "比上月翻了一倍。", "9 月中旬起明显增多。", "占比约三成。", "接近一半是硬件问题。",
+                     "最集中的是 2019 年 3 月 15 日。"]
+        if "A8700" not in source:
+            must_flag.append("问题集中在 A8700 上。")
+        # T10：「第 N 名」只在 N 不超过事实里最长的列表时放行
+        if max(_list_lengths(case["facts"]), default=0) < 99 and 99.0 not in allowed_numbers(case):
+            must_flag.append("它排在第九十九名。")
+        for sentence in must_flag:
+            counts["aux"] += 1
+            if not check_narrative(case, sentence)["bad"]:
+                problems.append(f"{case['id']} 写分析里「{sentence}」没查出来")
     for task in stats_tasks.TASKS:
         want = asyncio.run(reference_result(task))
         bad, hit = _perturb(want)

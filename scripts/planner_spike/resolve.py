@@ -1,20 +1,15 @@
 """模拟线上代码在执行计划前做的确定性处理。打分前先过这一道，量的是「模型 + 代码」一起的结果。
 
-规划实测 p0 里有几类错法模型每次都犯、而代码能确定地纠正，p1 起改由代码做（设计稿里写进代码职责）：
+规则编号同设计稿 §5.3（模块技术设计「规整与校验」）。本文件按代码的先后组织，每段注释标出对应的条号：
 
-1. **话题范围**：话题本身 / 比话题小 / 组合说法 / 清单外，对照话题清单（`docs/2_landed/topic_terms.md`）判断，
-   不用模型填的值。规则见 `topic_scope()`。
-2. **名字归哪一类**：模型把名字放进某个条件（如跟进人），库里这一类对不上、另一类恰好对得上时，改到对得上的那一类。
-   线上查的是库里的取值；这里用 `CATALOG` 示意几类取值，只放对照集问句里出现的名字。
-3. **同一统计拆成几步**：几步统计的范围（域、时间、条件、对比对象）与分组都相同时，合成一步。
-4. **追问与取数混在一份计划里**：只留追问（p1 实测里模型会写「追问缺的时间」再加一步统计）。
-5. **同一个意思统一成一种写法**（p2 起；p1 实测 Qwen3-Fast 不一致的问句里约三成只是写法不同）：
-   对象对比 → 按该维筛这几个值再按该维分组；时段对比的旧写法 → time 两项加 `compare: "时段"`；
-   分组取值是点名的几个时去掉 ranking；只有一个词时去掉 logic；文字查找没写 ask 即问现象；
-   issue 统一成 `{value, from}`；有停线、结案、重启日期条件时去掉同义的状态条件。
-6–10（p2 实测后加，要看本轮问句原话）：时间原话里没有时间词的（「停过线」）改回状态条件；时间原话后面紧跟的事件词
-   （「今年结案了」）定日期依据；「X 各款」按机型包含 X；文字查找没在问句里点名的栏目去掉；问「安全问题」拆成
-   问题等级 A+ 与话题「安全」两路。都是 2_landed 已写明的规则，模型偶尔不照做。
+- 不改口径、直接改写：第 1 条话题范围（`topic_scope()`）；第 2 条合并重复统计；第 3 条追问与取数混在一起时只留追问；
+  第 4 条写法统一；第 6 条检索文字里去掉条件值。第 5 条「详情并进前一步」在执行层，这里不模拟。
+- 改口径、判据可证明：第 7 条名字归类；第 8 条写成时间的状态改回条件；第 9 条「X 各款」；第 10 条栏目要点名；
+  第 11 条安全问题两路；第 17 条汇总缺时间改为追问。
+- 校验、打回重写：第 12 条格式（`scoring.validate_plan`）；第 13、15 条见 `query_checks()`；第 14 条要等线上的
+  时间换算模块，第 16 条只记日志，这里都不模拟。
+
+名字对库线上查的是库里的取值；这里用 `CATALOG` 示意几类取值，只放对照集问句里出现的名字。
 
 不是模块代码，`src/` 不引用它。
 """
@@ -30,7 +25,7 @@ from common import norm, norm_field
 from prompts import load_topics
 
 # ---------------------------------------------------------------------------
-# 1. 话题范围
+# 第 1 条 话题范围
 # ---------------------------------------------------------------------------
 
 _TOPICS = load_topics()
@@ -72,7 +67,7 @@ def topic_scope(topic: str | None) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# 2. 名字归哪一类
+# 第 7 条 名字归类（总述「三域共用的说法」只给名称一行，G65）
 # ---------------------------------------------------------------------------
 
 # 同一组里的几类存的是同一批名字（同一批人、同一批部门），组内换不换由语义定，代码不动
@@ -95,14 +90,37 @@ CATALOG = {
 }
 
 
+# 用户说了是哪一类的词：问句里出现模型所选那一类的类别词，就是用户说了类别，对不上时不改类（交 §6.5 追问）
+_CLASS_WORDS = {
+    "工厂": ("工厂", "加工厂"),
+    "人": ("跟进人", "跟进", "负责", "责任人", "处理人", "经办", "手上", "手里"),
+    "部门": ("部门",),
+    "供应商": ("供应商", "厂商", "供方", "供应"),
+    "系列": ("系列",),
+}
+
+
+def _name_key(text: str, group: str) -> str:
+    key = norm(text)
+    if group == "工厂":
+        key = re.sub(r"工厂$", "", key)
+    elif group == "系列":
+        key = re.sub(r"系列$", "", key)
+    return key
+
+
 def _found(value: str, group: str) -> bool:
-    v = norm(value)
+    """整串相同才算对上（G65：不用包含匹配，那等于猜相近的名称）。工厂、系列比较前去掉末尾的「工厂」「系列」。"""
+    v = _name_key(value, group)
     if len(v) < 2 and group != "系列":
         return False
-    return any(v == norm(c) or (len(norm(c)) >= 2 and (norm(c) in v or v in norm(c))) for c in CATALOG[group])
+    return any(v == _name_key(c, group) for c in CATALOG[group])
 
 
-def _regroup(step: dict) -> None:
+def _regroup(step: dict, query: str | None) -> None:
+    if not query:  # 要看问句里有没有类别词，没有问句时不改
+        return
+    q = norm(query)
     p = step.get("params") or {}
     for f in p.get("filters") or []:
         if not isinstance(f, dict):
@@ -114,6 +132,8 @@ def _regroup(step: dict) -> None:
             continue
         values = values if isinstance(values, list) else [values]
         if not all(isinstance(v, str) for v in values) or all(_found(v, group) for v in values):
+            continue
+        if any(norm(w) in q for w in _CLASS_WORDS[group]):
             continue
         others = [g for g in CATALOG if g != group and all(_found(v, g) for v in values)]
         if len(others) != 1:
@@ -127,7 +147,7 @@ def _regroup(step: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. 同一统计拆成几步 → 合成一步
+# 第 2 条 合并重复统计：同一统计拆成几步 → 合成一步
 # ---------------------------------------------------------------------------
 
 _REF = re.compile(r"^s(\d+)\.(\w+)$")
@@ -169,7 +189,7 @@ def _scope(step: dict) -> tuple | None:
 
 
 # ---------------------------------------------------------------------------
-# 5. 同一个意思统一成一种写法
+# 第 4 条 写法统一：同一个意思统一成一种写法（p1 实测 Qwen3-Fast 不一致的问句里约三成只是写法不同）
 # ---------------------------------------------------------------------------
 
 # 有这件事的日期条件时，同义的状态条件多余（结案时间只对已结案的单有，停线、重启日期同理）
@@ -177,13 +197,13 @@ _IMPLIED_STATUS = {"停线": {"曾经停线", "停过线"}, "结案": {"已结�
 
 # p2 实测后加（2026-10-27）：以下几条都是把 2_landed 已写明的说法交给代码判，模型偶尔不照做
 
-# 6. 时间原话里没有时间词、日期依据却是停线 / 结案 / 重启：模型把「停过线的」写成了时间，改回状态条件
+# 第 8 条 时间原话里没有时间词、日期依据却是停线 / 结案 / 重启：模型把「停过线的」写成了时间，改回状态条件
 _TIME_WORD = re.compile(r"[0-9０-９一二三四五六七八九十两]|年|月|周|星期|天|日|号|季|今|去|昨|前|本|上|下|近|以来|至今|现在|q",
                         re.IGNORECASE)
 _STATUS_OF_BASIS = {"停线": "曾经停线", "结案": "已结案", "重启": "已重启"}
 
-# 7. 时间原话后面紧跟的事件词定日期依据（总述「按哪个日期筛」：按问的那件事取日期）。
-#    2026-10-27 起不改写，改为校验（query_checks）：判据靠词的位置，可能误判，打回让模型重写
+# 第 13 条（校验）时间原话后面紧跟的事件词定日期依据（总述「按哪个日期筛」：按问的那件事取日期）。
+#    不改写，在 query_checks 里打回：判据靠词的位置，可能误判
 _SKIP_AFTER_TIME = re.compile(r"^(?:内|里|以来|已经|有|共|一共|总共|都|被|发生(?:了|过)?|出现(?:了|过)?)*")
 _EVENT_BASIS = (("现场发现", "现场发现"), ("停过线", "停线"), ("停线", "停线"), ("停产", "停线"), ("重启", "重启"),
                 ("结案", "结案"), ("关闭", "结案"), ("关掉", "结案"), ("建单", "建单"), ("新建", "建单"), ("创建", "建单"))
@@ -220,7 +240,8 @@ def _time_rules(p: dict, query: str | None) -> None:
         p.pop("time", None)
 
 
-# 8. 「X 各款」「X 各型号」：机型包含 X、按机型分组，不按系列查（总述「机型与系列怎么对」）
+# 第 9 条 「X 各款」「X 各型号」：计划写成机型包含 X、按机型分组，不按系列查。执行时「机型 包含 X」只取 X 与
+#    「X + 字母」的机型（总述「机型与系列怎么对」），不是字面的包含匹配；这里只量计划，不模拟对库
 _EACH_MODEL = re.compile(r"\s*(?:各款|各型号|各个型号|所有型号|各种型号|全系列各型号)")
 
 
@@ -241,7 +262,7 @@ def _each_model_rule(p: dict, query: str | None) -> None:
             p["group_by"] = group if any(norm_field(g) == "机型" for g in group) else group + ["机型"]
 
 
-# 9. 文字查找的栏目要是用户点名的：问句里没出现栏目名时去掉（总述「关键词搜索与类似问题」：没说栏目时在比对范围里找）
+# 第 10 条 文字查找的栏目要是用户点名的：问句里没出现栏目名时去掉（总述「关键词搜索与类似问题」：没说栏目时在比对范围里找）
 _FIELD_CORE = re.compile(r"^问题|(?:分析|结果|内容|里|中)$")
 
 
@@ -261,7 +282,7 @@ def _named_fields_rule(step: dict, query: str | None) -> None:
         p.pop("fields")
 
 
-# 11. 检索用的文字里去掉同一步的条件值（「A960 煲机时屏幕显示异常」→「煲机时屏幕显示异常」）；条件仍在 filters 里。
+# 第 6 条 检索用的文字里去掉同一步的条件值（「A960 煲机时屏幕显示异常」→「煲机时屏幕显示异常」）；条件仍在 filters 里。
 #     物料名称不去（「喇叭」既是物料也是现象）；去掉后不足 2 个字时不动
 _STRIPPABLE = {norm_field(f) for f in ("机型", "系列", "加工厂", "国内工厂", "供应商", "跟进人", "当前责任人", "责任人",
                                        "跟进部门", "责任归属部门")}
@@ -287,7 +308,7 @@ def _strip_condition_values(step: dict) -> None:
             p[key] = new
 
 
-# 10. 问「安全问题」：问题等级 A+ 与话题「安全」两路分开查（总述「三域共用的说法」安全问题一行）；明说 A+ 时只按等级
+# 第 11 条 问「安全问题」：问题等级 A+ 与话题「安全」两路分开查（总述「三域共用的说法」安全问题一行）；明说 A+ 时只按等级
 _SAFETY = re.compile(r"安全问题|涉及安全|安全相关|安全方面|安全类")
 _APLUS = re.compile(r"a\s*\+", re.IGNORECASE)
 
@@ -309,6 +330,47 @@ def _safety_rule(plan: dict, query: str | None) -> None:
          "params": {**cond, **({"filters": filters} if filters else {}), "mode": "话题", "topic": "安全", "ask": "现象",
                     "topic_scope": "话题本身"}},
     ]
+
+
+# 第 17 条 汇总统计没给时间：改为追问（总述「必要澄清项」第一行）。判据看计划结构：
+#    整份计划没有一项时间；有一步统计（aggregate / custom_stats）不在前一步的结果里算、不引用前一步；
+#    条件与分组里也没有当前状态类的（停线中、未结案、待提交、当前责任人、处理环节）——问当前状态的不追问。
+#    另看问句：用户明说不限时间（「所有单」「至今」「都出过哪些」）时不追问（G66，总述「必要澄清项」）
+_CURRENT_STATUS = {norm(v) for v in ("未结案", "停线中", "进行中", "没结案", "未完成", "待处理", "待提交", "草稿")}
+_ALL_TIME = re.compile(r"(?:所有|全部)(?:的)?(?:问题)?单|历来|至今|迄今|有史以来|一直以来|累计|历史上"
+                       r"|都(?:出过|有过|有哪些|有什么|是哪些)")
+_CURRENT_FIELDS = {norm_field(f) for f in ("当前责任人",)}
+_CURRENT_GROUPS = {norm_field(f) for f in ("当前责任人", "处理环节")}
+MISSING_TIME_CLARIFY = {"reason": "缺时间", "question": "要统计哪个时间段？",
+                        "options": ["今年", "近 30 天", "2026 年上半年"]}  # 选项取自总述「必要澄清项」示例回答
+
+
+def _is_current_state(p: dict) -> bool:
+    for f in _as_list(p.get("filters")):
+        if not isinstance(f, dict):
+            continue
+        field = norm_field(f.get("field"))
+        if field in _CURRENT_FIELDS:
+            return True
+        if field == "状态" and {norm(v) for v in _as_list(f.get("value")) if isinstance(v, str)} & _CURRENT_STATUS:
+            return True
+    return any(norm_field(g) in _CURRENT_GROUPS for g in _as_list(p.get("group_by")))
+
+
+def _missing_time_rule(plan: dict, query: str | None) -> None:
+    if not query or _ALL_TIME.search(query):  # 要看问句里有没有明说不限时间，没有问句时不改
+        return
+    steps = [s for s in plan.get("steps") or [] if isinstance(s, dict)]
+    if any(_as_list((s.get("params") or {}).get("time")) for s in steps):
+        return
+    for s in steps:
+        p = s.get("params") or {}
+        if s.get("skill") not in ("aggregate", "custom_stats") or s.get("when") is not None:
+            continue
+        if p.get("within") is not None or _has_ref(p) or _is_current_state(p):
+            continue
+        plan["steps"] = [{"id": "s1", "skill": "clarify", "when": None, "params": copy.deepcopy(MISSING_TIME_CLARIFY)}]
+        return
 
 
 def _canonical(step: dict, query: str | None = None) -> None:
@@ -513,7 +575,8 @@ def apply(plan: dict | None, query: str | None = None) -> dict | None:
         _strip_condition_values(step)
         if step.get("skill") == "text_search" and p.get("topic"):
             p["topic_scope"] = topic_scope(p["topic"])
-        _regroup(step)
+        _regroup(step, query)
     _safety_rule(out, query)
     merge_duplicate_aggregates(out)
+    _missing_time_rule(out, query)
     return out
