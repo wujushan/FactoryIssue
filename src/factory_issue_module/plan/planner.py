@@ -1,0 +1,181 @@
+"""规划（设计 §4.2 第 4、5 步、§5.3、§5.6）。顺序同 spike 的 `run_plan`，§1.3 的分数按它得出。
+
+1. 号码直通：问句只剩号码、号的种类词与固定套话时不调模型，直接生成计划，不经第 5 步。
+2. 一次模型调用写计划（`[system, user]`，temperature 0，要 JSON）。先查格式（第 12 条）；格式合格后规整，
+   再对规整后的计划做其余校验（第 7 条的校验一半、第 13–15 条）。
+3. 格式或校验不过时带着错处修一次（`[system, user, assistant, user]`，前两条原样沿用），两者合计只修一次，
+   修后的计划再规整一遍。修后格式仍不合格：第一次只是校验被打回的，用第一次的计划，否则规划失败（§14）。
+   只是校验仍不过，按修后的计划执行，`check_errors` 带回去（第 13 条：开头写明按什么理解）。
+4. 每次改写、打回各打一条 `factory_issue_plan_rule`（规则编号、技能、改前改后的条件名，不含问句与取值）；
+   第 16 条只记日志。模型调用出错或超时同样是规划失败。
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import date
+from typing import Any
+
+import structlog
+from forge_core.module import ModuleManifest
+
+from factory_issue_module.config.files import TopicTerms
+from factory_issue_module.plan import normalize, prematch, prompt, schema
+from factory_issue_module.plan.normalize import Inferred, RuleHit
+
+logger = structlog.get_logger(__name__)
+
+#: 规划要 JSON；temperature 0 与规划器实测相同（§1.3）
+_CHAT_KW: dict[str, Any] = {"temperature": 0.0, "response_format": {"type": "json_object"}}
+
+
+@dataclass
+class PlanResult:
+    #: 规整后的计划；None 表示规划失败，按 §14「没能理解这个问题」答
+    plan: dict | None
+    #: "shortcut"（号码直通）或 "model"
+    source: str
+    #: 修一次之后仍不过的校验（按模型的计划执行）。执行与呈现（S2 起）要用它：第 13 条仍不一致时开头写明按
+    #: 什么日期理解，并给另一种理解的按钮
+    check_errors: list[str] = field(default_factory=list)
+    hits: list[RuleHit] = field(default_factory=list)
+    #: 第 7 条按库里的取值定的类。呈现（S2 起）在开头写「按 X 理解」，模型本来就放对了类时同样要写
+    inferred: list[Inferred] = field(default_factory=list)
+    calls: int = 0
+
+
+@dataclass(frozen=True)
+class PlanInputs:
+    query: str
+    history: Sequence[Mapping[str, Any]] = ()
+    previous_plan: dict | None = None
+    previous_outcome: str | None = None
+    earlier_query: str | None = None
+    #: 第 7 条名字归类用的「类 → 库里的名字」（可查的域的主数据）
+    classes: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: 第 15 条与预匹配用的「名字 → 在库里属于哪几类」
+    entities: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: 可查的域的机型名称：号码直通不把写了连字符的机型当 PN / PO（S2 起由主数据给）
+    machines: Collection[str] | None = None
+    today: date | None = None
+
+
+def _content(resp: Any) -> str:
+    try:
+        return str(resp["choices"][0]["message"]["content"] or "")
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _parse(text: str) -> tuple[dict | None, list[str]]:
+    try:
+        plan = schema.parse_reply(text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return None, [f"不是合格的 JSON：{exc}"]
+    return plan, schema.check_format(plan)
+
+
+def _log_hits(hits: Sequence[RuleHit]) -> None:
+    for h in hits:
+        logger.info("factory_issue_plan_rule", rule=h.rule, action=h.action, skill=h.skill,
+                    before=list(h.before), after=list(h.after))
+
+
+@dataclass
+class _Normalized:
+    plan: dict
+    hits: list[RuleHit] = field(default_factory=list)
+    inferred: list[Inferred] = field(default_factory=list)
+
+
+def _log_bounce(rules: Sequence[int], plan: dict | None) -> None:
+    skill = "+".join(str(s.get("skill")) for s in (plan or {}).get("steps") or [] if isinstance(s, dict))
+    for rule in sorted(set(rules)):
+        logger.info("factory_issue_plan_rule", rule=rule, action="打回", skill=skill)
+
+
+class Planner:
+    def __init__(self, manifest: ModuleManifest, topics: TopicTerms) -> None:
+        self.manifest = manifest
+        self.topics = topics
+
+    def _normalize(self, plan: dict, inputs: PlanInputs) -> _Normalized:
+        schema.drop_ignored_keys(plan)
+        done = _Normalized(plan=plan)
+        out = normalize.apply(plan, normalize.Context(
+            query=inputs.query, previous=inputs.previous_plan, previous_outcome=inputs.previous_outcome,
+            earlier_query=inputs.earlier_query, classes=inputs.classes, topics=self.topics,
+            today=inputs.today, hits=done.hits, inferred=done.inferred))
+        if out is not None:
+            done.plan = out
+        return done
+
+    def _checks(self, plan: dict, inputs: PlanInputs) -> list[tuple[int, str]]:
+        return normalize.tagged_checks(plan, inputs.query, inputs.entities, inputs.today)
+
+    def messages(self, inputs: PlanInputs) -> list[dict[str, str]]:
+        system = prompt.planner_system(self.manifest, self.topics)
+        user = prompt.planner_user(inputs.query, inputs.history, inputs.previous_plan, inputs.previous_outcome)
+        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    async def plan(self, llm: Any, inputs: PlanInputs) -> PlanResult:
+        shortcut = prematch.number_shortcut(inputs.query, inputs.machines)
+        if shortcut is not None:
+            logger.info("factory_issue_plan_shortcut", skill=shortcut["steps"][0]["skill"])
+            return PlanResult(plan=shortcut, source="shortcut")
+        if llm is None:
+            logger.error("factory_issue_plan_no_llm")
+            return PlanResult(plan=None, source="model")
+
+        messages = self.messages(inputs)
+        result = PlanResult(plan=None, source="model")
+        try:
+            first = _content(await llm.chat(messages, **_CHAT_KW))
+        except Exception as exc:  # noqa: BLE001 —— 超时或服务出错：按 §14 答，异常只进日志
+            logger.warning("factory_issue_plan_call_failed", attempt=1, error=type(exc).__name__)
+            result.calls = 1
+            return result
+        result.calls = 1
+
+        plan, errors = _parse(first)
+        first_done: _Normalized | None = None
+        checks: list[tuple[int, str]] = []
+        if plan is not None and not errors:
+            first_done = self._normalize(plan, inputs)
+            checks = self._checks(first_done.plan, inputs)
+            if not checks:
+                return self._done(result, first_done, inputs)
+        _log_bounce([12] if errors else [r for r, _ in checks], plan)
+
+        repair = [*messages, {"role": "assistant", "content": first},
+                  {"role": "user", "content": prompt.repair_user(errors or [m for _, m in checks])}]
+        try:
+            second = _content(await llm.chat(repair, **_CHAT_KW))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("factory_issue_plan_call_failed", attempt=2, error=type(exc).__name__)
+            second = None
+        result.calls = 2
+        plan2, errors2 = _parse(second) if second is not None else (None, ["修正那次调用出错"])
+        if plan2 is None or errors2:
+            if first_done is not None:
+                # 第一次只是校验被打回、修的那次又不合格：照用第一次的计划
+                result.check_errors = [m for _, m in checks]
+                return self._done(result, first_done, inputs)
+            logger.info("factory_issue_plan_failed", errors=len(errors2))
+            return result
+        fixed = self._normalize(plan2, inputs)
+        still = self._checks(fixed.plan, inputs)
+        if still:
+            _log_bounce([r for r, _ in still], fixed.plan)
+            result.check_errors = [m for _, m in still]
+        return self._done(result, fixed, inputs)
+
+    def _done(self, result: PlanResult, done: _Normalized, inputs: PlanInputs) -> PlanResult:
+        _log_hits(done.hits)
+        missed = normalize.values_not_in_query(done.plan, inputs.query)
+        if missed:
+            logger.info("factory_issue_plan_rule", rule=16, action="只记日志", fields=missed)
+        result.plan, result.hits, result.inferred = done.plan, done.hits, done.inferred
+        return result

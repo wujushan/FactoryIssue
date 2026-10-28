@@ -701,6 +701,9 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
         base_n = base_ok = biz_n = biz_intro = nb_n = nb_fetch = 0
         u_dist: dict[str, dict[str, int]] = {}
         sigs: dict[str, list[str]] = {}
+        # 照线上顺序另算一遍（plan/planner.py）：号码直通命中的问句线上不调模型，用直通出的计划打分
+        online_ok = 0
+        online_sigs: dict[str, list[str]] = {}
         for r in recs:
             case = PLAN_BY_ID[r["case"]]
             a0 = r["attempts"][0]
@@ -738,6 +741,11 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
                 blank = scoring.score_alt(case["expect"][0], {}, [])
                 res = {"categories": {k: False for k in blank}, "all_ok": False, "alt": 0,
                        "clarify": "漏问" if case.get("clarify") in ("model", "rule") else None}
+            short = resolve.number_shortcut(case["q"])
+            online = short if short is not None else (resolved if plan is not None else None)
+            if online is not None:
+                online_ok += int(scoring.score_plan(case, online)["all_ok"])
+                online_sigs.setdefault(r["case"], []).append(scoring.plan_signature(online))
             cats = res["categories"]
             for cat, ok in cats.items():
                 cat_n[cat] = cat_n.get(cat, 0) + 1
@@ -783,6 +791,8 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
                                     got_json[:1500], fixed])
         consistent_n = sum(1 for v in sigs.values() if len(v) >= 2)
         consistent = sum(1 for v in sigs.values() if len(v) >= 2 and len(set(v)) == 1)
+        online_cons_n = sum(1 for v in online_sigs.values() if len(v) >= 2)
+        online_cons = sum(1 for v in online_sigs.values() if len(v) >= 2 and len(set(v)) == 1)
         params = {c: _rate(cat_ok[c], cat_n[c]) for c in scoring.CATEGORIES if c in cat_n and c != "技能"}
         out[group] = {
             "runs": n, "http_err": http_err,
@@ -801,6 +811,7 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
             "tags": {t: (_rate(sum(v), len(v)), len(v)) for t, v in sorted(tags.items())},
             "base_all_ok": _rate(base_ok, base_n), "base_n": base_n,
             "biz_intro": biz_intro, "biz_n": biz_n, "nb_fetch": nb_fetch, "nb_n": nb_n, "u_dist": u_dist,
+            "online_all_ok": _rate(online_ok, n), "online_consistent": _rate(online_cons, online_cons_n),
         }
     return out, errors_rows
 
@@ -943,13 +954,14 @@ def write_report(out_dir: Path, models: Any = None) -> dict:
     parts: dict[str, list[dict]] = {}
     for r in raw:
         parts.setdefault(r["part"], []).append(r)
+    info_path = out_dir / "run_info.json"
+    info = json.loads(info_path.read_text(encoding="utf-8")) if info_path.exists() else {}
+    # 提示词版本取跑的时候记下的（重出汇总时本进程的提示可能已经改了）
     md = ["# 规划器实测汇总", "",
-          f"- 生成时间：{dt.datetime.now().isoformat(timespec='seconds')}；提示词 {prompts.PROMPT_VERSION}；"
+          f"- 生成时间：{dt.datetime.now().isoformat(timespec='seconds')}；提示词 {info.get('prompt') or prompts.PROMPT_VERSION}；"
           f"对照集 {PLAN_CASES_VERSION}，{len(PLAN_CASES)} 条（core {sum(1 for c in PLAN_CASES if c.get('core'))} 条）",
           "- 本文件只有计数、比例、耗时与问句编号，不含业务数据，可以发回。", ""]
-    info_path = out_dir / "run_info.json"
-    if info_path.exists():
-        info = json.loads(info_path.read_text(encoding="utf-8"))
+    if info:
         md += [f"- 模型服务：{json.dumps(info.get('models'), ensure_ascii=False)}",
                 f"- 模型名：{info.get('model')}；并发 {info.get('concurrency')}；超时 {info.get('timeout')} 秒", ""]
     err_rows: list[list] = []
@@ -978,6 +990,8 @@ def write_report(out_dir: Path, models: Any = None) -> dict:
             ("被 §5.3 第 13、15 条校验拦下的运行（不打回的组为「按现规则会拦下」）", lambda s: str(s["query_bounced"])),
             ("整份计划全对（经代码处理，上面各项都按这个算）", lambda s: _fmt(s["all_ok"])),
             ("整份计划全对（不含通用输入 U 条，可与 c4 的运行比）", lambda s: f"{_fmt(s['base_all_ok'])}（{s['base_n']} 次）"),
+            ("整份计划全对 / 多次一致（照线上先走号码直通，直通命中的不算模型的计划）",
+             lambda s: f"{_fmt(s['online_all_ok'])} / {_fmt(s['online_consistent'])}"),
             ("业务问句被写成 introduce（次 / 运行数，门槛 0）", lambda s: f"{s['biz_intro']} / {s['biz_n']}"),
             ("非业务输入写成了期望之外的取数（次 / 运行数）", lambda s: f"{s['nb_fetch']} / {s['nb_n']}"),
             ("整份计划全对（模型原样）", lambda s: _fmt(s["raw_all_ok"])),
@@ -1587,7 +1601,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", default="", help="规划只跑编号以这些前缀开头的问句，逗号分隔，如 U-（其余各项不受影响）")
     ap.add_argument("--concurrency", type=int, default=2, help="同时发几个请求；耗时按这个负载量")
     ap.add_argument("--timeout", type=float, default=LLM_TIMEOUT, help="单次调用超时秒数，默认同线上 120")
+    ap.add_argument("--prompt-changes", default="全部",
+                    help=f"规划提示在 p2 之上的改动只保留哪几处，逗号分隔，取 {'、'.join(prompts.PROMPT_CHANGES)}；"
+                         "「无」= p2 原文；默认全部（即 src 现在的提示）")
     args = ap.parse_args(argv)
+
+    global PLAN_SYSTEM
+    if args.prompt_changes != "全部":
+        names = [] if args.prompt_changes == "无" else [n.strip() for n in args.prompt_changes.split(",") if n.strip()]
+        prompts.keep_prompt_changes(names)
+        PLAN_SYSTEM = prompts.planner_system()
+        print(f"规划提示：{prompts.PROMPT_VERSION}", flush=True)
 
     if args.self_check:
         return self_check()

@@ -125,13 +125,13 @@ async def test_unavailable_privileges_answer_without_fetching():
     assert h.queries == [] and h.llm.calls == []
 
 
-async def test_partial_domain_before_planner_answers_not_understood_with_buttons():
-    """S0 的过渡：规划层（S1）接上之前，有权限的问句按 §14「规划不合格」答。"""
-    h = make_harness(scopes.account_jia())
+async def test_partial_domain_planner_call_failed_answers_not_understood_with_buttons():
+    """§14「规划超时」：有权限的问句要经规划器；模型调用出错时答没能理解，附 3 个按钮，不取数。"""
+    h = make_harness(scopes.account_jia(), llm_replies=[TimeoutError("规划超时")])
     events = await run(h, "上个月国内的问题有哪些")
     assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS]
     assert errors.NOT_UNDERSTOOD in _text(events)
-    assert h.queries == [] and h.llm.calls == []
+    assert h.queries == [] and len(h.llm.calls) == 1
 
 
 # ---------------------------------------------------------------- 能力介绍的组成（J-P04 的有权一半在 S1 经规划器）

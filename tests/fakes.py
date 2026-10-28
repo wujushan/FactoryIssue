@@ -6,7 +6,8 @@
 - `ctx.stats` 用平台的 `StatsRunner`（同一个沙箱库，本机子进程跑）。
 - `ctx.llm` 按调用顺序回放写好的回复；没给回放就调用时报错，用来断言「不调模型」。每次调用都检查
   只有一条 system 且在最前。
-- `ctx.workspace`、`ctx.config`、`ctx.files`、`ctx.retrieval` 用字典实现。
+- `ctx.workspace`、`ctx.config`、`ctx.files`、`ctx.retrieval` 用字典实现；给了 `history` 时 `ctx.session`
+  回放这几轮落库的问答（`conversation_messages` 从它取最近几轮）。
 - 假数据照 `docs/testcases/seed/单测夹具清单.md`：假单号（年份 99）、「测试甲」「测试乙」、15 个 9 的编码。
 """
 
@@ -184,6 +185,19 @@ class FakeFiles:
                        expires_ts=time.time() + 86400)
 
 
+class FakeSession:
+    """`ctx.session` 的替身：落库的历史，每轮 user、assistant 各一条（同轮共用 message_id）。"""
+
+    def __init__(self, turns: list[tuple[str, str]] | None = None) -> None:
+        self.rows: list[dict[str, Any]] = []
+        for i, (user, assistant) in enumerate(turns or []):
+            self.rows += [{"role": "user", "content": user, "message_id": f"m{i}"},
+                          {"role": "assistant", "content": assistant, "message_id": f"m{i}"}]
+
+    async def history(self, conversation_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        return self.rows[-limit:]
+
+
 class FakeRetrieval:
     def __init__(self, hits: list[list[Any]] | None = None) -> None:
         self.hits = list(hits or [])
@@ -220,6 +234,7 @@ def make_harness(
     workspace: bool = True,
     manifest: ModuleManifest = MANIFEST,
     field_mappings: dict[str, Any] | None = None,
+    history: list[tuple[str, str]] | None = None,
 ) -> Harness:
     """`privileges=None` 表示授权树里没带权限；`resolved=False` 表示平台没按需解析（旁路授权树）。"""
     queries: list[Query] = []
@@ -259,6 +274,7 @@ def make_harness(
         files=files,
         workspace=ws,
         config=config,
+        session=FakeSession(history) if history is not None else None,
     )
     return Harness(ctx=ctx, queries=queries, connectors=connectors, llm=llm, stats=stats,
                    workspace=ws, config=config, files=files, retrieval=retrieval)
