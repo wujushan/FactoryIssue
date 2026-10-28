@@ -116,7 +116,7 @@ def test_case_turns_defaults_to_one_query():
 def test_golden_files_stay_inside_g3_rules():
     payload = json.loads((ROOT / "docs/testcases/golden/cases.json").read_text(encoding="utf-8"))
     cases = payload["cases"]
-    assert len(cases) == 109
+    assert len(cases) == 114
     ids = [case["id"] for case in cases]
     assert len(ids) == len(set(ids))
     permission_ids = {"XC-017", "XC-030", "XC-032", "XC-033", "XC-034"}
@@ -125,7 +125,7 @@ def test_golden_files_stay_inside_g3_rules():
     for case_id in permission_ids:
         assert case_id in manual
     multi = [case for case in cases if case.get("turns")]
-    assert len(multi) == 9
+    assert len(multi) == 11
     for case in cases:
         assert case["target"] == "FACTORY_ISSUE"
         assert case.get("query")

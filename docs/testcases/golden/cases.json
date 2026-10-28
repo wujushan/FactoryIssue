@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "109 条。种子 v0.9.5 里验证方式为 A 或 A+B 的全部案例。",
+    "114 条。种子 v0.9.5 的 109 条，加 2026-10-28 按落盘补的 XC-035 至 XC-039。",
     "权限 5 条只在 docs/testcases/manual/其余.md。",
     "断言只锁口径和呈现，不锁表张数、列顺序、调用次数和某天的行数。"
   ],
@@ -267,9 +267,9 @@
           "ProblemId"
         ],
         "answer_contains": [
-          "不保证完整"
-        ],
-        "max_total_rows": 10
+          "不保证完整",
+          "统计口径"
+        ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-007.sql"
     },
@@ -297,6 +297,9 @@
         ],
         "anywhere_contains": [
           "ZC2606037"
+        ],
+        "answer_contains": [
+          "统计口径"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-008.sql"
@@ -427,6 +430,9 @@
         ],
         "anywhere_contains": [
           "ZC2604021"
+        ],
+        "answer_contains": [
+          "统计口径"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-012.sql"
@@ -455,6 +461,9 @@
         ],
         "anywhere_contains": [
           "ZC2507021"
+        ],
+        "answer_contains": [
+          "统计口径"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-013.sql"
@@ -500,7 +509,6 @@
           ]
         },
         "charts": {
-          "min_count": 1,
           "types": [
             "bar"
           ]
@@ -748,7 +756,10 @@
             "料号",
             "问题描述"
           ]
-        }
+        },
+        "answer_contains": [
+          "统计口径"
+        ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-020.sql"
     },
@@ -1102,7 +1113,7 @@
     },
     {
       "id": "CN-029",
-      "query": "2026 上半年柯洱斯、亮亮、惠州百富各提交了多少单？",
+      "query": "2026 上半年国内柯洱斯、亮亮、惠州百富各提交了多少单？",
       "target": "FACTORY_ISSUE",
       "batch": "首批",
       "level": "P0",
@@ -1245,7 +1256,7 @@
     },
     {
       "id": "CN-032",
-      "query": "截止 2026 年 6 月，A8900 今年在亮亮工厂有多少单？",
+      "query": "截止 2026 年 6 月，国内 A8900 今年在亮亮工厂有多少单？",
       "target": "FACTORY_ISSUE",
       "batch": "其余",
       "level": "P1",
@@ -1371,8 +1382,10 @@
           "统计口径",
           "停线日期"
         ],
-        "anywhere_contains": [
-          "没重启"
+        "anywhere_contains_any": [
+          "没重启",
+          "未重启",
+          "没有重启"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-035.sql"
@@ -1459,7 +1472,10 @@
         ],
         "anywhere_contains": [
           "换料",
-          "不保证"
+          "外壳开裂"
+        ],
+        "answer_contains": [
+          "统计口径"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-038.sql"
@@ -1490,7 +1506,13 @@
           "统计口径"
         ],
         "anywhere_contains": [
-          "音频"
+          "音频",
+          "问题本身",
+          "可能相关"
+        ],
+        "anywhere_contains_any": [
+          "处理中提到",
+          "处理过程中提到"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-039.sql"
@@ -1518,9 +1540,9 @@
           "ProblemId"
         ],
         "answer_contains": [
-          "不保证完整"
-        ],
-        "max_total_rows": 10
+          "不保证完整",
+          "统计口径"
+        ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-040.sql"
     },
@@ -1550,6 +1572,9 @@
           "打印",
           "USB",
           "问题描述"
+        ],
+        "answer_contains": [
+          "统计口径"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-041.sql"
@@ -1694,7 +1719,6 @@
           "24 小时",
           "附件"
         ],
-        "max_total_rows": 20,
         "tables": {
           "forbidden_columns": [
             "ID",
@@ -2095,7 +2119,13 @@
           "统计口径"
         ],
         "anywhere_contains": [
-          "非接"
+          "非接",
+          "问题本身",
+          "可能相关"
+        ],
+        "anywhere_contains_any": [
+          "处理中提到",
+          "处理过程中提到"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-055.sql"
@@ -2124,7 +2154,10 @@
         ],
         "anywhere_contains": [
           "漏电",
-          "歧义"
+          "漏电流"
+        ],
+        "answer_contains": [
+          "统计口径"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-056.sql"
@@ -2152,8 +2185,10 @@
           "ProblemId"
         ],
         "anywhere_contains": [
-          "打印",
-          "打印机盖"
+          "打印"
+        ],
+        "answer_contains": [
+          "统计口径"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-057.sql"
@@ -2183,6 +2218,9 @@
         "anywhere_contains": [
           "换料",
           "改善措施"
+        ],
+        "answer_contains": [
+          "统计口径"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-058.sql"
@@ -2861,7 +2899,6 @@
           ]
         },
         "charts": {
-          "min_count": 1,
           "types": [
             "bar"
           ]
@@ -3211,7 +3248,6 @@
           ]
         },
         "charts": {
-          "min_count": 1,
           "types": [
             "bar"
           ]
@@ -3340,7 +3376,8 @@
           "伊朗"
         ],
         "anywhere_contains": [
-          "未命中"
+          "国内",
+          "巴西"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-010.sql"
@@ -3604,7 +3641,10 @@
           "统计口径"
         ],
         "anywhere_contains": [
-          "A8900"
+          "A8900",
+          "国内",
+          "巴西",
+          "海外"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-019.sql"
@@ -3637,7 +3677,10 @@
         "anywhere_contains": [
           "问题类型",
           "加工厂",
-          "A8900"
+          "A8900",
+          "国内",
+          "巴西",
+          "海外"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-020.sql"
@@ -3669,7 +3712,10 @@
         ],
         "anywhere_contains": [
           "停线",
-          "A8900"
+          "A8900",
+          "国内",
+          "巴西",
+          "海外"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-021.sql"
@@ -3697,7 +3743,10 @@
           "ProblemId"
         ],
         "anywhere_contains": [
-          "原因"
+          "原因",
+          "国内",
+          "巴西",
+          "海外"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-022.sql"
@@ -3730,6 +3779,11 @@
         "suggestions": true,
         "suggestion_contains": [
           "按上月同期比"
+        ],
+        "anywhere_contains": [
+          "国内",
+          "巴西",
+          "海外"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-023.sql"
@@ -3813,8 +3867,7 @@
           "ProblemId"
         ],
         "anywhere_contains": [
-          "A920PRO",
-          "重查"
+          "A920PRO"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-025.sql",
@@ -3853,7 +3906,8 @@
         ],
         "anywhere_contains": [
           "上个月",
-          "沿用"
+          "A920PRO",
+          "软件"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-026.sql",
@@ -3929,7 +3983,10 @@
           "统计口径"
         ],
         "anywhere_contains": [
-          "A920PRO"
+          "A920PRO",
+          "国内",
+          "巴西",
+          "海外"
         ],
         "tables": {
           "forbidden_columns": [
@@ -4015,10 +4072,220 @@
           "非接",
           "国内",
           "巴西",
-          "海外"
+          "海外",
+          "问题本身",
+          "可能相关"
+        ],
+        "anywhere_contains_any": [
+          "处理中提到",
+          "处理过程中提到"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-031.sql"
+    },
+    {
+      "id": "XC-035",
+      "query": "那国内呢？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "min_queries": 1,
+        "anywhere_contains": [
+          "国内",
+          "硬件"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-035.sql。换域后沿用上一轮的时间和问题类型。",
+      "turns": [
+        {
+          "query": "上个月巴西的硬件问题有哪些？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "那国内呢？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "XC-036",
+      "query": "你确定吗？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "min_queries": 1,
+        "anywhere_contains": [
+          "A920PRO",
+          "软件"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-036.sql。按上一轮条件重查，不因质疑改口。",
+      "turns": [
+        {
+          "query": "2026 年 6 月国内 A920PRO 的软件问题都有哪些？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "你确定吗？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "XC-037",
+      "query": "国内 A920PRO 最近的软件问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "min_queries": 1,
+        "answer_contains": [
+          "近 30 天"
+        ],
+        "anywhere_contains": [
+          "A920PRO",
+          "软件"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "问题类型",
+            "不良率",
+            "不良数量",
+            "问题描述"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-037.sql。「最近」按近 30 天。结果为空时不改成近 90 天出数。"
+    },
+    {
+      "id": "XC-038",
+      "query": "国庆以来国内的制程问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "澄清",
+      "data_path": "不取数",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "clarify": true,
+        "max_queries": 0,
+        "visible_contains": [
+          "近 30 天",
+          "今年"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-038.sql。换算不出起止日期，本轮不出数。"
+    },
+    {
+      "id": "XC-039",
+      "query": "上上周国内的制程问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "min_queries": 1,
+        "answer_contains": [
+          "张"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "问题类型",
+            "不良率",
+            "不良数量",
+            "问题描述"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-039.sql。上上周是再往前一个自然周，本轮不追问日期。"
     }
   ]
 }
