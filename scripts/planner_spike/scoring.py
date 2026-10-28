@@ -678,6 +678,7 @@ def score_plan(case: dict, plan: dict) -> dict:
             clarify_issue = "漏问"
     elif kind in ("none", "db") and has_clarify:
         clarify_issue = "多问"
+    # kind == "optional"：问不问都行（口径未定的通用输入），只看计划本身对不对
     return {"categories": best, "all_ok": all(best.values()) and clarify_issue is None,
             "alt": best_alt, "clarify": clarify_issue}
 

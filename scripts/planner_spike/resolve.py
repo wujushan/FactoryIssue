@@ -3,9 +3,10 @@
 规则编号同设计稿 §5.3（模块技术设计「规整与校验」）。本文件按代码的先后组织，每段注释标出对应的条号：
 
 - 不改口径、直接改写：第 1 条话题范围（`topic_scope()`）；第 2 条合并重复统计；第 3 条追问与取数混在一起时只留追问；
-  第 4 条写法统一；第 6 条检索文字里去掉条件值。第 5 条「详情并进前一步」在执行层，这里不模拟。
+  第 4 条写法统一；第 5 条后半「沿用的清单并进后一步」（`fold_previous_list()`）；第 6 条检索文字里去掉条件值。
+  第 5 条前半「详情并进前一步」在执行层，这里不模拟。
 - 改口径、判据可证明：第 7 条名字归类；第 8 条写成时间的状态改回条件；第 9 条「X 各款」；第 10 条栏目要点名；
-  第 11 条安全问题两路；第 17 条汇总缺时间改为追问。
+  第 11 条安全问题两路；第 17 条汇总缺时间改为追问；第 18 条上一轮没有结果时「其中」改为追问。
 - 校验、打回重写：第 12 条格式（`scoring.validate_plan`）；第 7 条的校验一半、第 13、15 条见 `query_checks()`；
   第 14 条要等线上的时间换算模块，第 16 条只记日志，这里都不模拟。
 
@@ -466,6 +467,22 @@ def _missing_time_rule(plan: dict, query: str | None, previous: dict | None = No
         return
 
 
+# 第 18 条 上一轮没有结果时「其中」：上一轮是追问、查出 0 张或出错，本轮要在上一轮结果里找（词表），计划又沿用了
+#    上一轮时改为追问（总述「接着上一轮问」，G74）。线上另给「按更早那次的条件查」的选项，问句取工作区 last，这里不模拟
+_IN_PREVIOUS = re.compile(r"其中|这些|这几张|这批|里面|里头|刚才那些|上面那些|刚才的")
+NO_RESULT_CLARIFY = {"reason": "上一轮没有结果", "question": "上一轮没有查到结果，没有可以接着统计的范围。", "options": []}
+
+
+def _no_result_rule(plan: dict, query: str | None, previous_outcome: str | None) -> bool:
+    if not query or not previous_outcome or not _IN_PREVIOUS.search(query):
+        return False
+    steps = [s for s in plan.get("steps") or [] if isinstance(s, dict)]
+    if not any(_uses_previous(s) or (s.get("params") or {}).get("within") is not None for s in steps):
+        return False
+    plan["steps"] = [{"id": "s1", "skill": "clarify", "when": None, "params": copy.deepcopy(NO_RESULT_CLARIFY)}]
+    return True
+
+
 def _canonical(step: dict, query: str | None = None) -> None:
     p = step.get("params")
     if not isinstance(p, dict):
@@ -572,6 +589,53 @@ def merge_duplicate_aggregates(plan: dict) -> None:
     plan["steps"] = new_steps
 
 
+# 第 5 条后半：清单只为后一步提供范围（被 within 引用），且清单的条件全是沿用上一轮的（用户本轮没要这张清单），
+# 把清单的条件并进后一步、去掉清单。「其中已完成的有多少」写成「先列上一轮清单，再在里面统计」时，
+# 执行出来会多一段清单（通用输入 U-20）
+_LIST_ONLY_KEYS = {"domains", "time", "filters"}
+
+
+def _all_previous(p: dict) -> bool:
+    items = [p["domains"]] if p.get("domains") else []
+    items += [x for key in ("time", "filters") for x in _as_list(p.get(key))]
+    return bool(items) and all(isinstance(x, dict) and x.get("from") == "previous" for x in items)
+
+
+def fold_previous_list(plan: dict) -> None:
+    steps = [s for s in plan.get("steps") or [] if isinstance(s, dict)]
+    for i, lst in enumerate(steps[:-1]):
+        lp = lst.get("params") or {}
+        if lst.get("skill") != "list_issues" or lst.get("when") is not None or set(lp) - _LIST_ONLY_KEYS:
+            continue
+        if not _all_previous(lp):
+            continue
+        ref = f"{lst.get('id')}.issues"
+        users = [s for s in steps if s is not lst and ref in json.dumps(s, ensure_ascii=False)]
+        if len(users) != 1:
+            continue
+        nxt = users[0]
+        np_ = nxt.get("params") or {}
+        if (nxt.get("skill") not in ("aggregate", "list_issues") or np_.get("within") != {"ref": ref}
+                or json.dumps(np_, ensure_ascii=False).count(ref) != 1 or np_.get("time") or np_.get("domains")):
+            continue
+        np_.pop("within")
+        for key in ("domains", "time"):
+            if lp.get(key):
+                np_[key] = copy.deepcopy(lp[key])
+        np_["filters"] = copy.deepcopy(_as_list(lp.get("filters"))) + _as_list(np_.get("filters"))
+        if not np_["filters"]:
+            np_.pop("filters")
+        kept = [s for s in steps if s is not lst]
+        mapping = {str(s.get("id")): f"s{k + 1}" for k, s in enumerate(kept)}
+        new_steps = []
+        for s in kept:
+            s = _rewrite_refs(s, mapping)
+            s["id"] = mapping[str(s.get("id"))]
+            new_steps.append(s)
+        plan["steps"] = new_steps
+        return
+
+
 # ---------------------------------------------------------------------------
 # 号码直通：问句只有号码（加上号的种类、「查一下」「是哪张单」这类套话）时不调规划，代码直接查单
 # ---------------------------------------------------------------------------
@@ -659,9 +723,11 @@ def _time_options(out: dict) -> dict:
     return out
 
 
-def apply(plan: dict | None, query: str | None = None, previous: dict | None = None) -> dict | None:
+def apply(plan: dict | None, query: str | None = None, previous: dict | None = None,
+          previous_outcome: str | None = None) -> dict | None:
     """返回处理后的计划副本（不改原计划）。`query` 是本轮用户原话，不给时只做不看问句的那几条；
-    `previous` 是上一轮的计划（线上为工作区里上一轮的执行计划），只有第 17 条用。"""
+    `previous` 是上一轮的计划（线上为工作区里上一轮的执行计划），只有第 17 条用；
+    `previous_outcome` 是上一轮没有查到结果时的结局（追问、查出 0 张、出错），只有第 18 条用。"""
     if plan is None:
         return None
     out = copy.deepcopy(plan)
@@ -684,6 +750,9 @@ def apply(plan: dict | None, query: str | None = None, previous: dict | None = N
             out["steps"] = [ask]
             return out
     _safety_rule(out, query)
+    fold_previous_list(out)
     merge_duplicate_aggregates(out)
+    if _no_result_rule(out, query, previous_outcome):
+        return out
     _missing_time_rule(out, query, previous)
     return _time_options(out)

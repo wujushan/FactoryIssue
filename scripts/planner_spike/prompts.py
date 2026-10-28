@@ -324,6 +324,10 @@ def planner_user(case: dict, prematch: bool = False) -> str:
     lines.append("【上一轮计划】")
     prev = case.get("previous_plan")
     lines.append(json.dumps(prev, ensure_ascii=False) if prev else "（无）")
+    # 上一轮是追问、查出 0 张或出错时，线上从工作区 last 带出这一行（设计稿 §10，G74）；查到结果时不带，
+    # 所以其余问句的输入与 p2 一字不差
+    if case.get("previous_outcome"):
+        lines.append(f"【上一轮结局】{case['previous_outcome']}，没有查到结果")
     lines.append(f"【本轮问题】{case['q']}")
     if prematch:
         from prematch import hint_text

@@ -83,7 +83,13 @@ class Cfg:
 
 
 def _load_cases(name: str) -> list[dict]:
-    return json.loads((CASES_DIR / name).read_text(encoding="utf-8"))["cases"]
+    cases = json.loads((CASES_DIR / name).read_text(encoding="utf-8"))["cases"]
+    # 超长输入：问句里的 {pad} 换成重复若干次的同一段合成文字（`q_pad: [文字, 次数]`），免得在对照集里抄几千字
+    for case in cases:
+        if "q_pad" in case:
+            text, times = case["q_pad"]
+            case["q"] = case["q"].replace("{pad}", text * times)
+    return cases
 
 
 PLAN_CASES = _load_cases("plan_cases.json")
@@ -256,7 +262,7 @@ async def run_plan(caller: Caller, case: dict, group: str) -> dict:
         except (ValueError, json.JSONDecodeError) as exc:
             errors = [f"不是合格的 JSON：{exc}"]
         if not errors and checks:
-            query_errors = resolve.query_checks(resolve.apply(plan, case["q"], case.get("previous_plan")), case["q"])
+            query_errors = resolve.query_checks(resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome")), case["q"])
         if errors or query_errors:
             first_plan = plan if not errors else None
             repair_msgs = [*messages, {"role": "assistant", "content": first["content"]},
@@ -589,7 +595,10 @@ def build_jobs(args: argparse.Namespace) -> list[tuple[str, str, str, int]]:
     parts = args.parts.split(",")
     groups = args.groups.split(",")
     aux = args.aux_groups.split(",")
-    plan_cases = PLAN_CASES[: args.limit] if args.limit else PLAN_CASES
+    plan_cases = PLAN_CASES
+    if args.only:
+        plan_cases = [c for c in plan_cases if c["id"].startswith(tuple(p.strip() for p in args.only.split(",") if p.strip()))]
+    plan_cases = plan_cases[: args.limit] if args.limit else plan_cases
     core = [c for c in plan_cases if c.get("core")]
     if "plan" in parts:
         for g in groups:
@@ -644,6 +653,8 @@ def _fmt(v: float | None, pct: bool = True) -> str:
 
 def _tag(case: dict) -> str:
     alt0 = scoring._alt_steps(case["expect"][0])[0]
+    if case.get("u"):
+        return f"通用输入·{case['u']}"
     if case["id"].startswith("M-"):
         return "不整齐输入"
     if case.get("history"):
@@ -687,6 +698,8 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
         json_ok = valid_first = parsed_first = all_ok = skill_ok = raw_ok = 0
         miss_n = miss = extra_n = extra = multi_n = multi_ok = 0
         reasoning_runs = think_runs = length_cut = http_err = query_bounced = 0
+        base_n = base_ok = biz_n = biz_intro = nb_n = nb_fetch = 0
+        u_dist: dict[str, dict[str, int]] = {}
         sigs: dict[str, list[str]] = {}
         for r in recs:
             case = PLAN_BY_ID[r["case"]]
@@ -711,7 +724,7 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
             plan = r.get("plan")
             if plan is None:
                 plan = _replan(r)
-            resolved = resolve.apply(plan, case["q"], case.get("previous_plan"))
+            resolved = resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome"))
             if r.get("query_errors") or (not GROUPS.get(group, {}).get("query_checks") and resolved is not None
                                          and resolve.query_checks(resolved, case["q"])):
                 query_bounced += 1
@@ -732,6 +745,23 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
             skill_ok += int(cats.get("技能", False))
             all_ok += int(res["all_ok"])
             tags.setdefault(_tag(case), []).append(int(res["all_ok"]))
+            # 通用输入（U 条）另记三件事：c4 原有问句的全对率（可与之前的运行比）、业务问句被当成非业务、
+            # 非业务输入写成了取数。「业务问句」= 期望里没有 introduce 的全部问句，含 c4 原有的
+            if not case.get("u"):
+                base_n += 1
+                base_ok += int(res["all_ok"])
+            allowed = _expected_skills(case)
+            got_skills = _plan_skills(resolved)
+            if "introduce" not in allowed:
+                biz_n += 1
+                biz_intro += "introduce" in got_skills
+            if case.get("u") == "非业务":
+                nb_n += 1
+                nb_fetch += bool((got_skills & _DATA_SKILLS) - allowed)
+            if case.get("u"):
+                label = _plan_label(resolved) if plan is not None else "没有合格的计划"
+                u_dist.setdefault(r["case"], {})
+                u_dist[r["case"]][label] = u_dist[r["case"]].get(label, 0) + 1
             kind = case.get("clarify", "none")
             if kind in ("model", "rule"):
                 miss_n += 1
@@ -769,8 +799,66 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
             "reasoning_runs": reasoning_runs, "reason_chars": statistics.mean(reason_chars) if reason_chars else None,
             "think_runs": think_runs, "length_cut": length_cut,
             "tags": {t: (_rate(sum(v), len(v)), len(v)) for t, v in sorted(tags.items())},
+            "base_all_ok": _rate(base_ok, base_n), "base_n": base_n,
+            "biz_intro": biz_intro, "biz_n": biz_n, "nb_fetch": nb_fetch, "nb_n": nb_n, "u_dist": u_dist,
         }
     return out, errors_rows
+
+
+_DATA_SKILLS = {"list_issues", "aggregate", "text_search", "custom_stats", "lookup_numbers", "issue_detail"}
+
+
+def _expected_skills(case: dict) -> set[str]:
+    """期望里任一种写法用到的技能。"""
+    return {s for alt in case["expect"] for step in scoring._alt_steps(alt)[0] for s in scoring._any_of(step["skill"])}
+
+
+def _plan_skills(plan: dict | None) -> set[str]:
+    return {s.get("skill") for s in (plan or {}).get("steps") or [] if isinstance(s, dict)}
+
+
+def _plan_label(plan: dict | None) -> str:
+    """一份计划的简写，如「introduce（超出范围）」「list_issues + text_search」「clarify（接不上上一轮）」。"""
+    parts = []
+    for s in (plan or {}).get("steps") or []:
+        if not isinstance(s, dict):
+            continue
+        p = s.get("params") or {}
+        detail = p.get("kind") or p.get("reason") if s.get("skill") in ("introduce", "clarify") else None
+        parts.append(f"{s.get('skill')}（{detail}）" if detail else str(s.get("skill")))
+    return " + ".join(parts) or "空计划"
+
+
+def _expect_label(case: dict) -> str:
+    alts = []
+    for alt in case["expect"]:
+        parts = []
+        for e in scoring._alt_steps(alt)[0]:
+            skill = "/".join(scoring._any_of(e["skill"]))
+            detail = e.get("kind") or e.get("reason")
+            parts.append(f"{skill}（{'/'.join(scoring._any_of(detail))}）" if detail else skill)
+        alts.append(" + ".join(parts))
+    return "；或 ".join(alts)
+
+
+def _short_q(q: str) -> str:
+    """报告表格里的问句：超长输入只留开头并注明字数。"""
+    return q if len(q) <= 30 else f"{q[:24]}……（共 {len(q)} 字）"
+
+
+def _u_section(plan_sum: dict[str, dict], group: str) -> list[str]:
+    """通用输入（U 条）每句在第一组里的规划结果分布，供定口径与要不要加代码兜底时看。"""
+    dist = plan_sum[group]["u_dist"]
+    if not dist:
+        return []
+    lines = ["", f"**通用输入（U 条）每句的规划结果（{group} 组，经代码处理后）**", "",
+             "| 编号 | 类别 | 问句 | 期望 | 各次结果 |", "|---|---|---|---|---|"]
+    for cid in sorted(dist):
+        case = PLAN_BY_ID[cid]
+        q = _short_q(case["q"])
+        got = "；".join(f"{k} ×{v}" for k, v in sorted(dist[cid].items(), key=lambda kv: -kv[1]))
+        lines.append(f"| {cid} | {case['u']} | {q.replace('|', '｜')} | {_expect_label(case)} | {got} |")
+    return lines
 
 
 def _common_cases_table(records: list[dict], groups: list[str]) -> list[str]:
@@ -790,12 +878,12 @@ def _common_cases_table(records: list[dict], groups: list[str]) -> list[str]:
             sigs = []
             for r in by[g][cid]:
                 plan = r.get("plan") or _replan(r)
-                good = plan is not None and scoring.score_plan(case, resolve.apply(plan, case["q"], case.get("previous_plan")))["all_ok"]
+                good = plan is not None and scoring.score_plan(case, resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome")))["all_ok"]
                 ok, n = ok + good, n + 1
                 if cid.startswith("M-"):
                     m_ok, m_n = m_ok + good, m_n + 1
                 if plan is not None:
-                    sigs.append(scoring.plan_signature(resolve.apply(plan, case["q"], case.get("previous_plan"))))
+                    sigs.append(scoring.plan_signature(resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome"))))
             if len(sigs) >= 2:
                 cons_n += 1
                 cons += len(set(sigs)) == 1
@@ -838,7 +926,7 @@ def _offline_code_sections() -> list[str]:
         expect_text = json.dumps(case["expect"], ensure_ascii=False).lower()
         for text, kinds, _ in ents:
             if text.lower() not in expect_text:
-                unused.append(f"| {case['id']} | {case['q']} | {text} | {'；'.join(kinds)} |")
+                unused.append(f"| {case['id']} | {_short_q(case['q'])} | {text} | {'；'.join(kinds)} |")
     lines += [f"- 有提示的问句 {with_hint} 条（共 {len(PLAN_CASES)} 条），共 {total} 条提示。",
               f"- 名字提示里期望没用到的 {len(unused)} 条：", "", "| 编号 | 问句 | 提示的词 | 提示说它是 |", "|---|---|---|---|", *unused, ""]
     return lines
@@ -889,6 +977,9 @@ def write_report(out_dir: Path, models: Any = None) -> dict:
             ("首次就合格", lambda s: _fmt(s["valid_first"])),
             ("被 §5.3 第 13、15 条校验拦下的运行（不打回的组为「按现规则会拦下」）", lambda s: str(s["query_bounced"])),
             ("整份计划全对（经代码处理，上面各项都按这个算）", lambda s: _fmt(s["all_ok"])),
+            ("整份计划全对（不含通用输入 U 条，可与 c4 的运行比）", lambda s: f"{_fmt(s['base_all_ok'])}（{s['base_n']} 次）"),
+            ("业务问句被写成 introduce（次 / 运行数，门槛 0）", lambda s: f"{s['biz_intro']} / {s['biz_n']}"),
+            ("非业务输入写成了期望之外的取数（次 / 运行数）", lambda s: f"{s['nb_fetch']} / {s['nb_n']}"),
             ("整份计划全对（模型原样）", lambda s: _fmt(s["raw_all_ok"])),
             ("参与一致性比较的问句数", lambda s: str(s["consistent_n"])),
             ("首次调用耗时 P50 / P99（秒）", lambda s: f"{_fmt(s['p50'], False)} / {_fmt(s['p99'], False)}"),
@@ -915,6 +1006,7 @@ def write_report(out_dir: Path, models: Any = None) -> dict:
             md.append(f"| {tag} | " + " | ".join(cells) + " |")
         if len(groups) > 1:
             md += _common_cases_table(parts["plan"], groups)
+        md += _u_section(plan_sum, groups[0])
         md.append("")
         md += _offline_code_sections()
 
@@ -1056,7 +1148,7 @@ def self_check() -> int:
         raw.unlink()
     cfg = Cfg(base_url="http://mock/v1", api_key="", model="mock-model", concurrency=8, timeout=30, self_check=True)
     args = argparse.Namespace(parts="plan,narrative,reflect,stats", groups="现状,现状+预匹配,现状+校验,关思考", aux_groups="现状",
-                              repeats=2, sub_repeats=2, aux_repeats=1, limit=0)
+                              repeats=2, sub_repeats=2, aux_repeats=1, limit=0, only="")
     transport = httpx.MockTransport(_mock_handler)
     bad = prepare_references(stats_tasks.TASKS)
     if bad:
@@ -1163,6 +1255,21 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
                      "params": {"time": t, "filters": [{"field": "机型", "value": {"ref": "s2.top1"}}]}}]},
          lambda p: len(p["steps"]) == 2 and p["steps"][1]["id"] == "s2"
          and p["steps"][1]["params"]["filters"][0]["value"] == {"ref": "s1.top1"}),
+        # 第 5 条后半：沿用上一轮的清单只为后一步提供范围时并进后一步；清单是本轮要的就不并
+        ("沿用的清单并进统计",
+         {"steps": [{"id": "s1", "skill": "list_issues", "when": None, "params": {
+             "time": [{"said": "今年", "basis": "建单", "from": "previous"}],
+             "filters": [{"field": "机型", "op": "是", "value": "A920", "from": "previous"}]}},
+             agg("s2", within={"ref": "s1.issues"}, filters=[{"field": "状态", "op": "是", "value": "已结案", "from": "user"}])]},
+         lambda p: len(p["steps"]) == 1 and p["steps"][0]["skill"] == "aggregate" and p["steps"][0]["id"] == "s1"
+         and "within" not in p["steps"][0]["params"] and [f["value"] for f in p["steps"][0]["params"]["filters"]] == ["A920", "已结案"]
+         and p["steps"][0]["params"]["time"][0]["from"] == "previous"),
+        ("本轮要的清单不并",
+         {"steps": [{"id": "s1", "skill": "list_issues", "when": None, "params": {
+             "time": [{"said": "今年", "basis": "建单", "from": "user"}],
+             "filters": [{"field": "机型", "op": "是", "value": "A920", "from": "user"}]}},
+             agg("s2", within={"ref": "s1.issues"}, filters=[{"field": "状态", "op": "是", "value": "已结案", "from": "user"}])]},
+         lambda p: [s["skill"] for s in p["steps"]] == ["list_issues", "aggregate"]),
     ]
     for label, plan, ok in cases:
         counts["aux"] += 1
@@ -1292,6 +1399,16 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
         got = resolve.apply(this_turn, "按问题类型统计这些单", previous)
         if got["steps"][0]["skill"] != want:
             problems.append(f"代码处理「接着统计这些单，{label}」不对：{json.dumps(got, ensure_ascii=False)[:300]}")
+    # 第 18 条：上一轮没有结果时，「其中」一类沿用上一轮的计划改为追问；只换条件的「那上个月呢」不改（G74）
+    inherit = {"steps": [agg("s1", filters=[{"field": "机型", "op": "是", "value": "A921", "from": "previous"}],
+                             group_by=["状态"])]}
+    for label, query, outcome, want in (("上一轮追问后「其中」", "其中按状态统计一下", "追问", "clarify"),
+                                        ("上一轮查到结果时「其中」照常", "其中按状态统计一下", None, "aggregate"),
+                                        ("上一轮追问后只换条件", "那上个月呢", "追问", "aggregate")):
+        counts["aux"] += 1
+        got = resolve.apply(inherit, query, None, outcome)
+        if got["steps"][0]["skill"] != want:
+            problems.append(f"代码处理「{label}」不对：{json.dumps(got, ensure_ascii=False)[:300]}")
     for today, half in ((dt.date(2026, 10, 26), "2026 年上半年"), (dt.date(2027, 3, 1), "2026 年上半年"),
                         (dt.date(2027, 7, 1), "2027 年上半年")):
         counts["aux"] += 1
@@ -1303,7 +1420,7 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
         for k, alt in enumerate(case["expect"]):
             counts["aux"] += 1
             exp = scoring.render_expected({**case, "expect": [alt]})
-            errs = resolve.query_checks(resolve.apply(exp, case["q"], case.get("previous_plan")), case["q"])
+            errs = resolve.query_checks(resolve.apply(exp, case["q"], case.get("previous_plan"), case.get("previous_outcome")), case["q"])
             if errs:
                 problems.append(f"校验误拒期望计划 {case['id']}（第 {k + 1} 种写法）：{errs}")
     must_bounce = [
@@ -1391,7 +1508,7 @@ def offline_checks() -> tuple[dict[str, int], list[str]]:
         for label, plan in scoring.harmless(case):
             counts["harmless"] += 1
             errs = scoring.validate_plan(plan)
-            res = scoring.score_plan(case, resolve.apply(plan, case["q"], case.get("previous_plan")))
+            res = scoring.score_plan(case, resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome")))
             if errs or not res["all_ok"]:
                 wrong = [k for k, v in res["categories"].items() if not v]
                 problems.append(f"{case['id']} 只改写法「{label}」却判错：{errs or wrong or res['clarify']}")
@@ -1467,6 +1584,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sub-repeats", type=int, default=3, help="其余各组每条 core 问句跑几次")
     ap.add_argument("--aux-repeats", type=int, default=3)
     ap.add_argument("--limit", type=int, default=0, help="每项只取前 N 条（试跑用）")
+    ap.add_argument("--only", default="", help="规划只跑编号以这些前缀开头的问句，逗号分隔，如 U-（其余各项不受影响）")
     ap.add_argument("--concurrency", type=int, default=2, help="同时发几个请求；耗时按这个负载量")
     ap.add_argument("--timeout", type=float, default=LLM_TIMEOUT, help="单次调用超时秒数，默认同线上 120")
     args = ap.parse_args(argv)
@@ -1577,7 +1695,7 @@ def write_smoke(out_dir: Path, full_jobs: list[tuple[str, str, str, int]] | None
         if r["part"] == "plan":
             ok_plan = "是" if r.get("plan") is not None else "否"
             full = "是" if r.get("plan") is not None and scoring.score_plan(
-                PLAN_BY_ID[r["case"]], resolve.apply(r["plan"], PLAN_BY_ID[r["case"]]["q"], PLAN_BY_ID[r["case"]].get("previous_plan")))["all_ok"] else "否"
+                PLAN_BY_ID[r["case"]], resolve.apply(r["plan"], PLAN_BY_ID[r["case"]]["q"], PLAN_BY_ID[r["case"]].get("previous_plan"), PLAN_BY_ID[r["case"]].get("previous_outcome")))["all_ok"] else "否"
         md.append(f"| {r['group']} | {r['part']} | {r['case']} | {a.get('error') or 'ok'} | {_fmt(a.get('latency'), False)} | "
                   f"{_fmt(a.get('ttft'), False)} | {u.get('prompt_tokens', '—')} / {u.get('completion_tokens', '—')} | "
                   f"{a.get('reasoning_chars', 0)} | {'是' if a.get('think_in_content') else '否'} | {a.get('finish_reason')} | {ok_plan} | {full} |")
