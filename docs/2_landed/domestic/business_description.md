@@ -343,14 +343,14 @@
 |---|---|
 | 机型、系列 | `ZCTracking_ProductNames.ProblemId = 主表.ID`，一张单可多机型 |
 | 整机生产订单 | 主表物料标识为空时，`ZCTracking_ProblemOrders.ProblemId = 主表.ID` |
-| 小板订单 | 主表物料标识为「物料」时，`ZCTracking_XBOrders.ProblemId = 主表.ID`；小板订单工厂按名称对 `PaxFactory.FactoryName`，料号对 `Inventory.cInvCode` |
+| 小板订单 | 主表物料标识为「物料」时，`ZCTracking_XBOrders.ProblemId = 主表.ID`；料号对 `Inventory.cInvCode`。订单工厂存的就是工厂名称，直接展示，不与国内工厂表关联（工厂名称有重复，按名称关联会让订单行翻倍，见「加工厂」同名的工厂码） |
 | 其他在线订单 | 不分物料标识，`ZCTracking_OtherOrder.ProblemId = 主表.ID`；工厂按工厂码对 `PaxFactory.FactoryID` |
 | 处理步骤 | `ZCTracking_ProblemSteplog.ProblemId = 主表.ID` |
 | 风险订单流程（退货 / 退库） | `ZCTracking_RiskStream.ProblemId = 主表.ID`；责任人 `UserID = Employee.ID` |
 | 并行阶段待办任务 | `tbTask.frecID = 主表.ID`（文本），`ftable` 为 `ZCTracking_ProblemSoftware3`（效果确认）或 `ZCTracking_PreventionConfirm`（预防对策确认），`fstat = '已接受'`；预防对策确认处理人 `fuserID` 转整数 `= Employee.ID` |
 | 加工厂 | `Factory = PaxFactory.FactoryID` → `FactoryName`；按名称筛时先按上文「加工厂」把名称对到工厂码。国内工厂表在 ERP 实例，与问题单不在同一实例 |
 | 物料 | `CInvCode = Inventory.cInvCode` → 物料名称、规格型号 |
-| 供应商 | `VenCode = tbIQCvendor.ferpcode` → 供应商名称 |
+| 供应商 | `VenCode = tbIQCvendor.ferpcode` → 供应商名称（空值不关联） |
 | CAR | 问题类型为物料问题且 `CARID` 有值时，`CARID = tbIQCreportOut.fid` |
 | 人员 | 各人员 ID 列 `= Employee.ID` → 姓名；文本型的问题跟进人、重启审核人、重启方案制定人需转整数；主状态处理人、IQC 成员直接用姓名列；风险订单责任人、待办任务人员经人员表翻成姓名 |
 | 部门 | `RDepartment = Department.ID`；`AllReDepartment` 各段 `= Department.ID`；人员所在部门 `Employee.Unit = Department.ID`（同名同姓时据此追问部门） |

@@ -107,11 +107,10 @@ erDiagram
     ZCTracking_ProblemList }o--o| tbIQCreportOut : "CARID = fid（仅物料问题）"
     ZCTracking_ProblemList }o--o| PaxFactory : "Factory = FactoryID（跨实例）"
     ZCTracking_ProblemList }o--o| Inventory : "CInvCode = cInvCode"
-    ZCTracking_ProblemList }o--o| tbIQCvendor : "VenCode = ferpcode"
+    ZCTracking_ProblemList }o--o| tbIQCvendor : "VenCode = ferpcode（空值不关联）"
     ZCTracking_ProblemList }o--o| Department : "RDepartment = ID"
     ZCTracking_ProblemList }o--o{ Department : "AllReDepartment 各段 = ID（多值）"
     ZCTracking_ProblemList }o--o{ Employee : "各人员 ID 列 = ID（部分为文本键）"
-    ZCTracking_XBOrders }o--o| PaxFactory : "Factory = FactoryName（跨实例，按名称）"
     ZCTracking_XBOrders }o--o| Inventory : "InvCode = cInvCode"
     ZCTracking_OtherOrder }o--o| PaxFactory : "Factory = FactoryID（跨实例）"
     ZCTracking_ProblemSteplog }o--o{ DocumentList : "FileUrl 各段 = ID（多值）"
@@ -166,7 +165,7 @@ erDiagram
 
 | 类型 | 关联 | 处理要点 |
 |---|---|---|
-| 跨实例 | 国内主表、其他在线订单、小板订单、海外主表 → 国内工厂 | 国内工厂在 ERP 实例，分开取再按工厂码（小板订单按工厂名称）对应 |
+| 跨实例 | 国内主表、其他在线订单、海外主表 → 国内工厂 | 国内工厂在 ERP 实例，分开取再按工厂码对应。小板订单的订单工厂存的就是工厂名称，直接展示，不与国内工厂表关联：国内工厂名称有重复（「柯洱斯」有两个码），按名称关联会让订单行翻倍 |
 | 多值 | 国内主状态处理人、IQC 成员、责任归属部门、步骤成员、步骤附件；巴西大机型、巴西加工厂；海外大机型、PN 列表、问题跟进人、当前责任人、步骤成员、附件 | 逗号分隔，逐段对应 |
 | JSON | 海外已选问题现象 → 标准现象 | `Key` 大于 0 的元素才指向标准现象 |
 | 文本键 | 待办任务业务记录 ID ↔ 国内主表 ID；待办任务人员、国内部分人员列 ↔ 人员 ID | 两边类型不同，需转换后对应 |

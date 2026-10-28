@@ -10,6 +10,8 @@
 
 - [x] **G1 业务逻辑梳理与落盘**：2026-10-23 完成（第四次复核清零并做完落盘精炼，见决策 2026-10-23「G1 四次复核修订」「G1 落盘精炼」）。口径在 `docs/2_landed/`（32 张表：31 张 `info`、1 张 `erp`），决策过程见 `docs/decisions/`，内网探测见 `docs/probes/`。业务方另有一批功能定义待投递，届时按同一流程补梳理。
   - 2026-10-24 梳理测试案例集时重新打开，新增 9 项当日全部关闭并落盘（决策 2026-10-24「测试案例梳理补充口径」），歧义清单再次清零。
+  - 2026-10-27 写 G4a 设计时重新打开，新增 G59–G64 当日全部关闭并落盘（决策 2026-10-27「G4a 设计时补的口径」及其补记）。
+  - 2026-10-28 按 G4a 评审、复评与 `2_landed` 全量复核新增 G65–G69，当日关闭并落盘（同一决策的补记），歧义清单再次清零。
   - **带入后续阶段**：
     - 权限：待办任务表的固定行规则为业务表名 `IN` 两个（`privileges.md`，探测 C8 已核对），G4a 要给这条规则用到的字段写 `field_mappings`，否则取数会被拒；`docs/platform-feedback/` 两份待平台答复，实现前三种出错情形只靠权限平台承诺兜住（业务方已接受）。
     - G3：权限分支在自动化测试通道验不到，要构造权限数据的单元测试，加四类真实账号人工验收。正式数据里目前没有国内当前状态的 IQC 段、进行中的退货 / 退库段，也没有巴西只有雷亚尔费用的单，这几条规则要构造数据测。`2_landed` 里示例问题的单号只示意问法，场景按钮与测试用例的单号另从正式镜像挑。
@@ -18,12 +20,16 @@
 - [x] **G2 数据现状勘察与治理决策**：2026-10-26 完成（独立评审修后，开发者复评通过）。决策见 `docs/decisions/2026-10-20-G2数据源与治理决策.md`（结构化直连 `info` / `erp`；文字查找建 `forge_mart_factory_issue`，每域 4 张表共 12 张，不设权限承载列），画像见 `docs/probes/`，评审见 `docs/reviews/`。
   - **带入后续阶段**：
     - 平台 / 运维：按 `docs/platform-feedback/2026-10-26-申请建产物库与上线前置.md` 在测试、正式两套环境建库、登记别名、配权限，必须早于装配含 mart 声明的版本；DBA 书面确认正式库版本与两张大表索引（首轮跑数前）；三份反馈待平台答复（都不阻塞上线）。
-    - G3：检索评测集（主题问句 + 业务方确认的应命中单），用来定分段规则（决策「检索评测」）。
+    - G3：检索评测集已落 `docs/testcases/检索评测集.md`（决策 2026-10-28）。分段的 `whole` / `field` / `field_split` 对比还没跑，默认仍是 `field_split`。
     - G4a / G4b：manifest 按决策「结论」写 `data_sources`（mart 别名的 `tables` 列 9 张）、`vectorize` 3 条（`metadata_columns` 不得后改）、`config_files`；mart 别名不填 `field_mappings`；查询流程按决策「查询期怎么用」「叙述原文的取数」细化；平台没把 `info` 默认库设为 `CoreINFO` 前，经 `info` 发出的 SQL 不用 `TRY_CONVERT` / `STRING_SPLIT`。
     - 上线：首轮跑数先全量重建，再 3 个向量化任务，再重启平台；统计行发回业务仓做决策「上线首轮核对」。
-- [ ] **G3 测试案例集**：种子问题集 → 编程助手扩展 → `docs/testcases/`（每条附参考 SQL/预期工具调用；自动化 golden 集 + 人工测试手册双产物）。golden 集用 `scripts/qa_test.py` 经平台 `/test` 通道在真实测试数据上跑，格式与断言原则见 [docs/dev/10](docs/dev/10-automated-testing.md)
-- [ ] **G4a 技术设计定稿**：落 `docs/decisions/YYYY-MM-DD-模块技术设计.md`（模板见 `docs/decisions/README.md`）——manifest 草案 + **`field_mappings` 逐列锚定**（协议权限字段 → 物理列；缺失 fail-closed 拒查、锚错列即越权，这是最该被人看一眼的地方）+ `handle()` 编排与事件序列 + SQL/沙箱边界 + 错误与降级。纯 `structured-query` 模块几十行足够；带 `governance-etl`/`semantic-retrieval`/`analysis-report` 的必须独立成文
-- [ ] **G4b 编码实现**：照 G4a 的设计写 manifest（intents/keywords/dependencies/**data_sources**/field_mappings）+ tools + 流式事件；**偏离设计要回改 G4a 文档**，别让代码与设计各说各话。data_sources 别名须与 G1 各表 `source` 并集一致、且平台侧 data_sources.json 已登记（否则平台拒绝启动）。**回给用户的内容按 [docs/dev/09 答案呈现规范](docs/dev/09-answer-presentation.md) 自检**：无意义字段（自增 ID 等）不返回、表名/字段名不外露、数据之外给合理分析、寒暄（「你好」「你能做什么」）报本板块能力与常用场景
+- [x] **G3 测试案例集**：2026-10-28 完成（开发者确认按现稿收口，案例集冻为 v1.0）。114 条 golden 在 `docs/testcases/golden/cases.json` 与 `golden/sql/`，人工手册在 `manual/首批.md`（33 条）和 `manual/其余.md`（81 条 + 权限 5 条）。权限 5 条不进 golden。检索评测集在 `docs/testcases/检索评测集.md`。验收写业务行为，不写调用次数和事件顺序。
+  - **带入后续阶段**：
+    - G5：`uv run python scripts/qa_test.py docs/testcases/golden/cases.json` 接真实测试数据；四类权限账号人工验收；分段 `whole` / `field` / `field_split` 的对比在平台测试环境跑，默认仍是 `field_split`。
+    - 参考 SQL 里能下推到数据库的语句，评审或对拍时在 `info` 上抽查即可，不要求 114 份都先跑通。澄清和不取数的文件没有可执行查询。
+- [x] **G4a 技术设计定稿**：2026-10-28 完成（独立评审修后复评通过）。设计见 `docs/decisions/2026-10-27-模块技术设计.md`，评审见 `docs/reviews/`，规划器实测工具在 `scripts/planner_spike/`。
+  - **带入后续阶段**：问平台前缀缓存、反代与客户端超时、测试环境网关进程数（设计 §19 T8）；G4b 起 spike 改为调用 `src` 的计划格式与规整（设计 §1.3）。
+- [ ] **G4b 编码实现**（可以开工；新会话从 `docs/handoffs/2026-10-28-G4b编码启动指令.md` 起步，分片、完成标准与进度见 `docs/handoffs/2026-10-27-G4b编码任务单.md`）：照 G4a 的设计写 manifest（intents/keywords/dependencies/**data_sources**/field_mappings）+ tools + 流式事件；**偏离设计要回改 G4a 文档**，别让代码与设计各说各话。data_sources 别名须与 G1 各表 `source` 并集一致、且平台侧 data_sources.json 已登记（否则平台拒绝启动）。**回给用户的内容按 [docs/dev/09 答案呈现规范](docs/dev/09-answer-presentation.md) 自检**：无意义字段（自增 ID 等）不返回、表名/字段名不外露、数据之外给合理分析、寒暄（「你好」「你能做什么」）报本板块能力与常用场景
 - [ ] **G5 评测与对拍**：golden 集达标（`uv run python scripts/qa_test.py docs/testcases/golden/cases.json`，接真实测试数据）+ 数字口径对拍 + 人工测试手册验收
 - [ ] **G6 发布**：tag 触发 CI 发 wheel → 平台装配仓 bump 版本 → 部署
   - **发布前必做**：按 `docs/2_landed/privileges.md`「上线前核对」，用权限平台准备的四类真实账号逐条核对权限配置（自动化测试通道不验权限）。
