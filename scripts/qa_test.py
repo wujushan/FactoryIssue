@@ -10,8 +10,9 @@
     uv run python scripts/qa_test.py cases.json --only mat-001 --trace
 
 平台侧协议、api-key 怎么申请、断言该锚在哪：见 docs/dev/10-automated-testing.md。
-本脚本是**起点不是终点**——用例的 expect 只覆盖最常用的几类断言，业务上更精细的口径
-（合计=分项之和、换个问法结果一致…）请直接在这里加分支，或另写自己的 runner。
+本脚本覆盖 golden 常用断言：路由、澄清、取数条数上下限、列名（含禁列）、
+单元格包含、图表类型、正文包含/排除、建议按钮形状。合计＝分项之和这类关系
+若还要对表内数字验算，请在 `check()` 里加分支。
 
 ⚠️ 它打的是真实模型与真实库：慢、有并发上限，别拿它当压测工具。
 """
@@ -40,10 +41,43 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     return cases
 
 
+def _visible_text(body: dict[str, Any]) -> str:
+    """用户看得到的文字：正文、澄清、建议按钮。表格单元格另走 `_table_text`。"""
+    parts = [body.get("answer") or ""]
+    for key in ("clarify", "suggestions"):
+        if body.get(key) is not None:
+            parts.append(json.dumps(body[key], ensure_ascii=False))
+    return "\n".join(parts)
+
+
+def _table_text(tables: list[dict[str, Any]]) -> str:
+    chunks: list[str] = []
+    for table in tables:
+        chunks.extend(str(column) for column in table.get("columns") or [])
+        for row in table.get("rows") or []:
+            if isinstance(row, dict):
+                chunks.extend(str(value) for value in row.values())
+            elif isinstance(row, (list, tuple)):
+                chunks.extend(str(value) for value in row)
+            else:
+                chunks.append(str(row))
+    return "\n".join(chunks)
+
+
+def _table_requires_output(table_spec: dict[str, Any]) -> bool:
+    return any(
+        table_spec.get(key) is not None
+        for key in ("count", "columns", "columns_present", "row_count", "min_rows", "cell_contains")
+    )
+
+
 def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
     """跑一条用例的断言，返回失败原因列表（空 = 通过）。
 
     每条失败信息都带上**实际值**：CI 日志里只说「断言失败」等于没说。
+    `clarify: true` 表示本轮就该追问。`columns_present` / `cell_contains` /
+    `forbidden_columns` 看全部表，不锚定第几张、列顺序。`suggestions: true`
+    只检查按钮形状，不检查个数。
     """
     expect = case.get("expect") or {}
     failures: list[str] = []
@@ -52,11 +86,18 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
         failures.append(f"模块报错：{body['error']}")
     if (want := expect.get("module")) and body.get("module") != want:
         failures.append(f"路由到 {body.get('module')!r}，预期 {want!r}")
-    if expect.get("no_clarify", True) and body.get("clarify"):
+    if expect.get("clarify") is True:
+        if not body.get("clarify"):
+            failures.append("预期本轮追问，但没有给出澄清")
+    elif expect.get("no_clarify", True) and body.get("clarify"):
         # 澄清 = 本轮压根没答（答前阻断）。默认视为失败：数据用例的前提是它真的答了。
-        failures.append(f"被判为问题不明确（澄清轮），未产出答案：{body['clarify'].get('question', '')}")
-    if (least := expect.get("min_queries")) is not None and body.get("query_count", 0) < least:
-        failures.append(f"只执行了 {body.get('query_count', 0)} 条 SQL，预期至少 {least} 条")
+        question = body["clarify"].get("question", "") if isinstance(body["clarify"], dict) else ""
+        failures.append(f"被判为问题不明确（澄清轮），未产出答案：{question}")
+    query_count = body.get("query_count", 0)
+    if (least := expect.get("min_queries")) is not None and query_count < least:
+        failures.append(f"只执行了 {query_count} 条 SQL，预期至少 {least} 条")
+    if (most := expect.get("max_queries")) is not None and query_count > most:
+        failures.append(f"执行了 {query_count} 条 SQL，预期至多 {most} 条")
 
     tables = body.get("tables") or []
     if table_spec := expect.get("tables"):
@@ -67,6 +108,14 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
             for column in table_spec.get("columns") or []:
                 if column not in first.get("columns", []):
                     failures.append(f"表缺列 {column!r}（实际列：{first.get('columns')}）")
+            names = [column for table in tables for column in (table.get("columns") or [])]
+            for column in table_spec.get("columns_present") or []:
+                if column not in names:
+                    failures.append(f"各表列名都没有 {column!r}（实际列：{names}）")
+            forbidden = set(table_spec.get("forbidden_columns") or [])
+            leaked = [column for column in names if column in forbidden]
+            if leaked:
+                failures.append(f"表头出现不许给用户的列 {leaked}")
             if (rows := table_spec.get("row_count")) is not None:
                 actual = len(first.get("rows") or [])
                 if actual != rows:
@@ -75,21 +124,92 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
                 actual = len(first.get("rows") or [])
                 if actual < least_rows:
                     failures.append(f"表只有 {actual} 行，预期至少 {least_rows} 行")
-        elif table_spec:
+            rendered = _table_text(tables)
+            for needle in table_spec.get("cell_contains") or []:
+                if needle not in rendered:
+                    failures.append(f"表格里没有 {needle!r}")
+        elif _table_requires_output(table_spec):
             failures.append("本轮没有产出任何表格")
 
+    charts = body.get("charts") or []
+    if chart_spec := expect.get("charts"):
+        if (least_charts := chart_spec.get("min_count")) is not None and len(charts) < least_charts:
+            failures.append(f"产出 {len(charts)} 张图，预期至少 {least_charts} 张")
+        allowed = chart_spec.get("types")
+        if allowed and charts and not any(chart.get("chart_type") in allowed for chart in charts):
+            got = [chart.get("chart_type") for chart in charts]
+            failures.append(f"图类型 {got}，预期至少一张属于 {allowed}")
+
     answer = body.get("answer") or ""
+    visible = _visible_text(body)
     for needle in expect.get("answer_contains") or []:
         if needle not in answer:
             failures.append(f"答案未包含 {needle!r}")
-    # 呈现规范（docs/dev/09）：表名/字段名/数据源别名不许出现在给用户的正文里
+    for needle in expect.get("visible_contains") or []:
+        if needle not in visible:
+            failures.append(f"用户可见内容未包含 {needle!r}")
+    anywhere = visible + "\n" + _table_text(tables)
+    if anywhere_needles := expect.get("anywhere_contains"):
+        for needle in anywhere_needles:
+            if needle not in anywhere:
+                failures.append(f"正文和表格里都没有 {needle!r}")
+    if any_needles := expect.get("anywhere_contains_any"):
+        if not any(needle in anywhere for needle in any_needles):
+            failures.append(f"正文和表格里都没有其中任一项 {any_needles!r}")
+    if expect.get("no_tables") and tables:
+        failures.append(f"本轮不该出表，实际 {len(tables)} 张")
+    if (cap := expect.get("max_total_rows")) is not None:
+        total_rows = sum(len(table.get("rows") or []) for table in tables)
+        if total_rows > cap:
+            failures.append(f"各表合计 {total_rows} 行，预期不超过 {cap} 行")
+    # 呈现规范（docs/dev/09）：表名/字段名/数据源别名不许出现在给用户的文字里
     for needle in expect.get("answer_not_contains") or []:
-        if needle in answer:
+        if needle in visible:
             failures.append(f"答案不该出现 {needle!r}（呈现规范，见 docs/dev/09）")
     if (least_len := expect.get("answer_min_length")) is not None and len(answer) < least_len:
         failures.append(f"答案仅 {len(answer)} 字，预期至少 {least_len} 字（数据之外要给分析）")
 
+    if expect.get("suggestions") is True:
+        items = body.get("suggestions")
+        if not isinstance(items, list) or not items:
+            failures.append(f"没有可点的建议按钮（实际：{items!r}）")
+        else:
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    failures.append(f"建议按钮第 {index + 1} 项不是对象")
+                    continue
+                missing = [key for key in ("id", "name", "label", "query") if not item.get(key)]
+                if missing:
+                    failures.append(f"建议按钮第 {index + 1} 项缺 {missing}")
+    if suggestion_needles := expect.get("suggestion_contains"):
+        suggestion_text = json.dumps(body.get("suggestions"), ensure_ascii=False)
+        for needle in suggestion_needles:
+            if needle not in suggestion_text:
+                failures.append(f"建议按钮里没有 {needle!r}")
+
     return failures
+
+
+def case_turns(case: dict[str, Any]) -> list[dict[str, Any]]:
+    """一条用例要依次发送的轮次。没有 `turns` 时就是本条 `query` 一轮。"""
+    raw = case.get("turns")
+    if not raw:
+        turn: dict[str, Any] = {"query": case["query"]}
+        for field in ("target", "user_id"):
+            if case.get(field):
+                turn[field] = case[field]
+        return [turn]
+    turns: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, str):
+            item = {"query": item}
+        turn = {"query": item["query"]}
+        for field in ("target", "user_id"):
+            value = item.get(field, case.get(field))
+            if value:
+                turn[field] = value
+        turns.append(turn)
+    return turns
 
 
 def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool) -> int:
@@ -112,24 +232,36 @@ def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool) -> int
     passed, failed = 0, []
     for case in cases:
         case_id = case.get("id") or case.get("query", "")[:20]
-        payload = {
-            "query": case["query"],
-            "include_trace": trace,
-        }
-        # 数据用例一律带 target 直达模块：路由是独立变量，混进来会让失败原因有两种可能
-        for field in ("target", "conversation_id", "user_id"):
-            if case.get(field):
-                payload[field] = case[field]
-
+        # 多轮用例按顺序发，后一轮带上一轮返回的 conversation_id。断言只看最后一轮。
+        conversation_id = None
+        body = None
+        problems: list[str] = []
         started = time.monotonic()
-        resp = client.post("/test/chat", json=payload)
+        for index, turn in enumerate(case_turns(case)):
+            payload: dict[str, Any] = {"query": turn["query"], "include_trace": trace}
+            for field in ("target", "user_id"):
+                if turn.get(field):
+                    payload[field] = turn[field]
+            if conversation_id:
+                payload["conversation_id"] = conversation_id
+            resp = client.post("/test/chat", json=payload)
+            if resp.status_code != 200:
+                problems = [f"第 {index + 1} 轮 HTTP {resp.status_code}: {resp.text[:300]}"]
+                body = None
+                break
+            body = resp.json()
+            conversation_id = body.get("conversation_id")
+            if index < len(case_turns(case)) - 1 and body.get("error"):
+                problems = [f"前置轮报错：{body['error']}"]
+                break
         elapsed = time.monotonic() - started
-        if resp.status_code != 200:
-            failed.append((case_id, [f"HTTP {resp.status_code}: {resp.text[:300]}"], None))
-            print(f"✗ {case_id}  HTTP {resp.status_code}")
+        if problems:
+            failed.append((case_id, problems, body))
+            print(f"✗ {case_id}  ({elapsed:.1f}s)")
+            for problem in problems:
+                print(f"    - {problem}")
             continue
-
-        body = resp.json()
+        assert body is not None
         problems = check(case, body)
         if problems:
             failed.append((case_id, problems, body))

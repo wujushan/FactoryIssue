@@ -1,0 +1,4024 @@
+{
+  "_comment": [
+    "109 条。种子 v0.9.5 里验证方式为 A 或 A+B 的全部案例。",
+    "权限 5 条只在 docs/testcases/manual/其余.md。",
+    "断言只锁口径和呈现，不锁表张数、列顺序、调用次数和某天的行数。"
+  ],
+  "cases": [
+    {
+      "id": "CN-001",
+      "query": "2026 年 6 月国内 A920PRO 的软件问题都有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "张"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "问题类型",
+            "不良率",
+            "不良数量",
+            "问题描述"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-001.sql"
+    },
+    {
+      "id": "CN-002",
+      "query": "2025 年国内有多少起软件问题？把每张单的责任部门列出来",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "张",
+          "统计口径",
+          "责任归属部门"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "责任归属部门"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-002.sql"
+    },
+    {
+      "id": "CN-003",
+      "query": "现在国内还有哪些单停着线没重启？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "不限建单时间",
+          "停线中",
+          "重启审核中",
+          "重启审核通过",
+          "责任人填写重启方案"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-003.sql"
+    },
+    {
+      "id": "CN-004",
+      "query": "帮我找国内 A930 涉及设计更改的问题单",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "张"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "问题类型"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-004.sql"
+    },
+    {
+      "id": "CN-005",
+      "query": "国内 A8900 在首次量产爬坡阶段出过哪些问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "首次量产爬坡",
+          "产品在制属性"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-005.sql"
+    },
+    {
+      "id": "CN-006",
+      "query": "2026 年国内 L1400 停过线的问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "停线日期"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "停线状态",
+            "停线日期"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-006.sql"
+    },
+    {
+      "id": "CN-007",
+      "query": "国内 PCB 油墨凸起这种异常以前有过吗？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "语义",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "不保证完整"
+        ],
+        "max_total_rows": 10
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-007.sql"
+    },
+    {
+      "id": "CN-008",
+      "query": "2026 年国内 Q80 因为料带变形开裂、没法贴片的单是哪张？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2606037"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-008.sql"
+    },
+    {
+      "id": "CN-009",
+      "query": "国内 IM30 入库发现 IMEI 号重复，当时分析的原因是什么？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "详情",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2510027"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-009.sql"
+    },
+    {
+      "id": "CN-010",
+      "query": "国内 A6650 去年一共多少起问题？各类型占多少？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题类型",
+            "单数",
+            "占比（%）"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-010.sql"
+    },
+    {
+      "id": "CN-011",
+      "query": "今年上半年国内惠州的三个工厂一共出了多少问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "澄清",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "clarify": true,
+        "max_queries": 0,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "visible_contains": [
+          "柯洱斯",
+          "亮亮",
+          "惠州百富"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-011.sql"
+    },
+    {
+      "id": "CN-012",
+      "query": "国内 A960 煲机时屏幕显示异常，是哪张单？后来怎么解决的？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "详情",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2604021"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-012.sql"
+    },
+    {
+      "id": "CN-013",
+      "query": "2025 年国内那起煲机后发现开机电量虚高的单，单号是多少？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2507021"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-013.sql"
+    },
+    {
+      "id": "CN-014",
+      "query": "2026 年上半年国内哪个机型问题最多？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "各计一次"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "机型",
+            "单数"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "bar"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-014.sql"
+    },
+    {
+      "id": "CN-015",
+      "query": "2026 年 1 到 6 月国内跟供应商普瑞特有关的单有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "供应商名称"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-015.sql"
+    },
+    {
+      "id": "CN-016",
+      "query": "2026 年上半年国内因为结构问题、不良率 100% 的单有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "结构问题"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "不良率"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-016.sql"
+    },
+    {
+      "id": "CN-017",
+      "query": "2026 年上半年国内高展光电物料不良的单有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "物料问题"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "供应商名称"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-017.sql"
+    },
+    {
+      "id": "CN-018",
+      "query": "截止 2026 年 6 月，国内 A800 的单里责任归属研发一部的有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "研发一部"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "责任归属部门"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-018.sql"
+    },
+    {
+      "id": "CN-019",
+      "query": "截止 2026 年 6 月，国内 A920PRO 有哪些跟磁卡有关的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2208016",
+          "ZC2204045",
+          "ZC2112027",
+          "磁卡"
+        ],
+        "suggestions": true
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-019.sql"
+    },
+    {
+      "id": "CN-020",
+      "query": "2025 年第四季度国内电池卡扣相关的问题，把料号和问题描述列出来",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2512023",
+          "ZC2511025",
+          "电池卡扣"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "料号",
+            "问题描述"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-020.sql"
+    },
+    {
+      "id": "CN-021",
+      "query": "列出 2025 年国内 A920 的问题，要问题类型、问题描述、发生时间、问题责任人",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "问题类型",
+            "问题描述",
+            "建单时间",
+            "责任人"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-021.sql"
+    },
+    {
+      "id": "CN-022",
+      "query": "ZC2604018 说 A30 按键手感差，原因是什么？后来改了什么？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2604018",
+          "原因",
+          "措施"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-022.sql"
+    },
+    {
+      "id": "CN-023",
+      "query": "25 年到现在，国内 A800 跟 ESIM 有关的单有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2511032",
+          "ZC2509039",
+          "eSIM"
+        ],
+        "suggestions": true,
+        "answer_contains": [
+          "统计口径"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-023.sql"
+    },
+    {
+      "id": "CN-024",
+      "query": "统计 2026 年上半年国内问题按责任部门的数量",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "各计一次"
+        ],
+        "anywhere_contains": [
+          "无需定责",
+          "未定责"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "责任归属部门",
+            "单数"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-024.sql"
+    },
+    {
+      "id": "CN-025",
+      "query": "软件、硬件、结构三类，24 年和 25 年国内数量的环比增减怎么样？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "硬件问题",
+          "软件问题",
+          "结构问题"
+        ],
+        "answer_contains": [
+          "2025 年全年与 2024 年全年对比"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "增减量",
+            "变化率"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-025.sql"
+    },
+    {
+      "id": "CN-026",
+      "query": "2026 年第一季度国内责任归属于工程部的单有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "生产工程部"
+        ],
+        "suggestions": true,
+        "suggestion_contains": [
+          "看该部门跟进的单"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "责任归属部门"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-026.sql"
+    },
+    {
+      "id": "CN-027",
+      "query": "国内 A8900 2026 上半年按问题分类统计一下",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "A8900"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题类型",
+            "单数"
+          ],
+          "cell_contains": [
+            "硬件问题",
+            "软件问题",
+            "物料问题",
+            "资料问题",
+            "工厂制程",
+            "结构问题",
+            "制程优化"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "pie"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-027.sql"
+    },
+    {
+      "id": "CN-028",
+      "query": "2025 年国内各工厂停线次数",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "停线日期"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "加工厂",
+            "单数"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-028.sql"
+    },
+    {
+      "id": "CN-029",
+      "query": "2026 上半年柯洱斯、亮亮、惠州百富各提交了多少单？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "加工厂",
+            "单数"
+          ],
+          "cell_contains": [
+            "柯洱斯",
+            "亮亮",
+            "惠州百富"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "bar"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-029.sql"
+    },
+    {
+      "id": "CN-030",
+      "query": "2026 上半年国内按问题类型统计数量",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题类型",
+            "单数"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-030.sql"
+    },
+    {
+      "id": "CN-031",
+      "query": "2026 年国内高展光电的单，柯洱斯、亮亮、惠州百富三家工厂分别是多少？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "高展光电",
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "加工厂",
+            "单数"
+          ],
+          "cell_contains": [
+            "柯洱斯",
+            "亮亮",
+            "惠州百富"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-031.sql"
+    },
+    {
+      "id": "CN-032",
+      "query": "截止 2026 年 6 月，A8900 今年在亮亮工厂有多少单？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "A8900",
+          "亮亮"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-032.sql"
+    },
+    {
+      "id": "CN-033",
+      "query": "上周国内还有哪些没结案、等级 A 及以上的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题等级",
+            "当前状态"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-033.sql"
+    },
+    {
+      "id": "CN-034",
+      "query": "2026 年 9 月结案的国内单平均多久结案？30 天以内、31 到 90 天、91 天以上的各几张？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "结案确认",
+          "中位数"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-034.sql"
+    },
+    {
+      "id": "CN-035",
+      "query": "2026 年国内停过线的单里，已经重启的平均停了几天？还有几张没重启？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "停线日期"
+        ],
+        "anywhere_contains": [
+          "没重启"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-035.sql"
+    },
+    {
+      "id": "CN-036",
+      "query": "马万军手上还有哪些国内单没结？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "马万军",
+          "当前责任人"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-036.sql"
+    },
+    {
+      "id": "CN-037",
+      "query": "国内生产工程部跟进的单里，哪些是物料问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains_any": [
+          "未计入",
+          "不指定跟进部门"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-037.sql"
+    },
+    {
+      "id": "CN-038",
+      "query": "以前国内有没有用换料解决过外壳开裂的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "换料",
+          "不保证"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-038.sql"
+    },
+    {
+      "id": "CN-039",
+      "query": "最近一年国内有没有涉及音频（喇叭、蜂鸣器）的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "音频"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-039.sql"
+    },
+    {
+      "id": "CN-040",
+      "query": "国内有没有出现过开机花屏，当时是怎么处理的？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "文本检索",
+      "data_path": "语义",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "不保证完整"
+        ],
+        "max_total_rows": 10
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-040.sql"
+    },
+    {
+      "id": "CN-041",
+      "query": "搜一下国内问题描述里同时有「打印」和「USB」的问题",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "打印",
+          "USB",
+          "问题描述"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-041.sql"
+    },
+    {
+      "id": "CN-042",
+      "query": "CAR 编号 CAR202610059 对应哪张制程单？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "查单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "CAR202610059"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-042.sql"
+    },
+    {
+      "id": "CN-043",
+      "query": "200209010001203 是国内哪些单的物料或 PN？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "查单",
+      "data_path": "结构化",
+      "verification": "A+B",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "200209010001203",
+          "料号"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-043.sql"
+    },
+    {
+      "id": "CN-044",
+      "query": "国内底座的问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "底座"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-044.sql"
+    },
+    {
+      "id": "CN-045",
+      "query": "国内有没有电池起火这类安全问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "A+",
+          "起火"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-045.sql"
+    },
+    {
+      "id": "CN-046",
+      "query": "把上个月国内的问题全部导出给我",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "导出",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "24 小时",
+          "附件"
+        ],
+        "max_total_rows": 20,
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "问题类型",
+            "不良率",
+            "不良数量",
+            "问题描述"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-046.sql"
+    },
+    {
+      "id": "CN-047",
+      "query": "2026 年上半年国内 A8900 的合计不良率是多少？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "不参与"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-047.sql"
+    },
+    {
+      "id": "CN-048",
+      "query": "订单 230939 关联了哪些制程问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "查单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "230939",
+          "生产订单"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "问题类型",
+            "当前状态",
+            "机型"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-048.sql"
+    },
+    {
+      "id": "CN-049",
+      "query": "把这单的完整处理过程列出来，中间被驳回过几次？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "驳回"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "操作人",
+            "操作时间",
+            "类型",
+            "内容",
+            "附件"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-049.sql",
+      "turns": [
+        {
+          "query": "ZC2609017 这张单现在到哪一步了？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "把这单的完整处理过程列出来，中间被驳回过几次？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "CN-050",
+      "query": "这单的停线重启方案和审核意见是什么？重启日期是哪天？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A+B",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "重启"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-050.sql",
+      "turns": [
+        {
+          "query": "ZC2608015 这张单的停线情况是什么？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "这单的停线重启方案和审核意见是什么？重启日期是哪天？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "CN-051",
+      "query": "2026 年上半年国内制程问题按月看是什么趋势？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "单数"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "line"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-051.sql"
+    },
+    {
+      "id": "CN-052",
+      "query": "2026 年上半年国内的问题等级分布怎么样？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题等级",
+            "单数"
+          ],
+          "cell_contains": [
+            "A+",
+            "未填"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "pie"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-052.sql"
+    },
+    {
+      "id": "CN-053",
+      "query": "这张物料单为什么机型显示「物料」？它的影响数量怎么没有？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "物料"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-053.sql",
+      "turns": [
+        {
+          "query": "ZC2604012 这张单是什么情况？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "这张物料单为什么机型显示「物料」？它的影响数量怎么没有？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "CN-054",
+      "query": "这单的 5Why 是怎么分析的？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A+B",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题",
+            "原因"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-054.sql",
+      "turns": [
+        {
+          "query": "ZC2606010 这张单的原因是怎么写的？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "这单的 5Why 是怎么分析的？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "CN-055",
+      "query": "2026 年国内有没有涉及非接的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "非接"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-055.sql"
+    },
+    {
+      "id": "CN-056",
+      "query": "国内有没有漏电的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "漏电",
+          "歧义"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-056.sql"
+    },
+    {
+      "id": "CN-057",
+      "query": "国内有没有涉及打印的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "打印",
+          "打印机盖"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-057.sql"
+    },
+    {
+      "id": "CN-058",
+      "query": "国内改善措施里提到换料的单有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "换料",
+          "改善措施"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-058.sql"
+    },
+    {
+      "id": "CN-059",
+      "query": "ZC2608038 这张单帮我查一下。",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "查单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "no_tables": true,
+        "answer_contains": [
+          "没有找到单号为 ZC2608038 的问题单（已删除的单查不到），请核对单号"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-059.sql"
+    },
+    {
+      "id": "BR-001",
+      "query": "2024 年 Q3 巴西 TT 工厂 A 级的硬件问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "问题等级",
+            "状态"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-001.sql"
+    },
+    {
+      "id": "BR-002",
+      "query": "BR2609002 现在到哪一步了？谁在跟？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "BR2609002",
+          "不提供当前责任人",
+          "跟进人"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-002.sql"
+    },
+    {
+      "id": "BR-003",
+      "query": "巴西现在还有停线没重启的单吗？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "停线重启"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-003.sql"
+    },
+    {
+      "id": "BR-004",
+      "query": "巴西 2026 年涉及费用的单子一共花了多少美元？扣款多少？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "美元",
+          "扣款"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-004.sql"
+    },
+    {
+      "id": "BR-005",
+      "query": "巴西需要回 8D 的物料问题有哪些？改善措施写了什么？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "8D"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-005.sql"
+    },
+    {
+      "id": "BR-006",
+      "query": "巴西 CA 工厂都出过哪些机型的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "机型"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "机型"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-006.sql"
+    },
+    {
+      "id": "BR-007",
+      "query": "巴西今年按问题类型统计一下",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题类型",
+            "单数"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-007.sql"
+    },
+    {
+      "id": "BR-008",
+      "query": "这单的责任人是谁？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "不提供当前责任人",
+          "跟进人"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-008.sql",
+      "turns": [
+        {
+          "query": "BR2510012 现在到哪一步了？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "这单的责任人是谁？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "BR-009",
+      "query": "巴西系统里现在有几张草稿没提交？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "待提交"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-009.sql"
+    },
+    {
+      "id": "BR-010",
+      "query": "投诉单号 CLAIM-0037/26 对应哪张单？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "查单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "CLAIM-0037/26"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-010.sql"
+    },
+    {
+      "id": "BR-011",
+      "query": "这单的 PN 怎么显示未填？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "未填"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-011.sql",
+      "turns": [
+        {
+          "query": "BR2605006 这张单的 PN 是什么？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "这单的 PN 怎么显示未填？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "BR-012",
+      "query": "这单的 5Why 和库存处理数量是什么？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "5Why",
+          "库存处理"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-012.sql",
+      "turns": [
+        {
+          "query": "BR2608004 这张单处理得怎么样了？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "这单的 5Why 和库存处理数量是什么？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "OS-001",
+      "query": "海外有没有 A+ 的问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-001.sql"
+    },
+    {
+      "id": "OS-002",
+      "query": "HW2512001 选了哪些现象？可能原因是什么？现在谁在处理？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "HW2512001",
+          "候选",
+          "当前责任人"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-002.sql"
+    },
+    {
+      "id": "OS-003",
+      "query": "HW2511002 涉及哪些发货单？订单数量合计多少？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "详情",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "HW2511002",
+          "合计"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "序号",
+            "PO",
+            "发货单号",
+            "发货日期",
+            "PN",
+            "发货版本",
+            "生产版本",
+            "订单数量",
+            "备注"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-003.sql"
+    },
+    {
+      "id": "OS-004",
+      "query": "发货单号 2406648 是哪张海外单？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "查单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "2406648",
+          "发货单"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-004.sql"
+    },
+    {
+      "id": "OS-005",
+      "query": "海外已完成、IQC 意见为退回仓库的物料问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "状态",
+            "IQC 意见"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-005.sql"
+    },
+    {
+      "id": "OS-006",
+      "query": "海外 2024 年以来按加工厂统计单数和未结案数",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "未结案"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "加工厂",
+            "单数"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "bar"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-006.sql"
+    },
+    {
+      "id": "OS-007",
+      "query": "海外单上记的国内工厂都有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "国内工厂",
+          "加工厂"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-007.sql"
+    },
+    {
+      "id": "OS-008",
+      "query": "把海外所有单的不良率合成一个平均值",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "不汇总"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "不良率"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-008.sql"
+    },
+    {
+      "id": "OS-009",
+      "query": "海外 A 系列的问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "系列",
+          "机型"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-009.sql"
+    },
+    {
+      "id": "XC-001",
+      "query": "上个月三个域一共出了多少张问题单？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "合计"
+        ],
+        "anywhere_contains": [
+          "国内",
+          "巴西",
+          "海外",
+          "待提交",
+          "已终止"
+        ],
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "bar"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-001.sql"
+    },
+    {
+      "id": "XC-002",
+      "query": "2026 年按问题类型统计一下",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "合计"
+        ],
+        "anywhere_contains": [
+          "国内",
+          "巴西",
+          "海外"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-002.sql"
+    },
+    {
+      "id": "XC-003",
+      "query": "2026 年三个域一起按问题等级统计",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题等级",
+            "单数"
+          ],
+          "cell_contains": [
+            "A+",
+            "未填"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "pie"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-003.sql"
+    },
+    {
+      "id": "XC-004",
+      "query": "最近 14 天出现了哪些制程问题？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "国内",
+          "巴西",
+          "海外"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-004.sql"
+    },
+    {
+      "id": "XC-005",
+      "query": "ZC2609012、BR2608005 现在到哪了？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "查单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "ZC2609012",
+          "BR2608005"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "当前状态"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-005.sql"
+    },
+    {
+      "id": "XC-006",
+      "query": "2026 年上半年三个域按机型看，哪个机型问题最多？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "各计一次"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "机型",
+            "单数"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "bar"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-006.sql"
+    },
+    {
+      "id": "XC-007",
+      "query": "2026 年上半年三个域合起来的不良率是多少？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "国内",
+          "巴西",
+          "海外"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-007.sql"
+    },
+    {
+      "id": "XC-008",
+      "query": "帮我查下制程问题",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "国内",
+          "巴西",
+          "海外"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-008.sql"
+    },
+    {
+      "id": "XC-009",
+      "query": "统计一下制程问题",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "澄清",
+      "data_path": "不取数",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "clarify": true,
+        "max_queries": 0,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "visible_contains": [
+          "今年",
+          "近 30 天",
+          "上半年"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-009.sql"
+    },
+    {
+      "id": "XC-010",
+      "query": "伊朗工厂的问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "澄清",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "clarify": true,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "min_queries": 1,
+        "visible_contains": [
+          "伊朗"
+        ],
+        "anywhere_contains": [
+          "未命中"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-010.sql"
+    },
+    {
+      "id": "XC-011",
+      "query": "李飞的问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "澄清",
+      "data_path": "不取数",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "clarify": true,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "min_queries": 1,
+        "visible_contains": [
+          "李飞",
+          "部门"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-011.sql"
+    },
+    {
+      "id": "XC-012",
+      "query": "202501011234 是什么单？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "澄清",
+      "data_path": "不取数",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "max_queries": 0,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "clarify": true,
+        "visible_contains": [
+          "问题编号",
+          "投诉单号"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-012.sql"
+    },
+    {
+      "id": "XC-013",
+      "query": "ZC2509 是哪张单？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "澄清",
+      "data_path": "不取数",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "max_queries": 0,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "clarify": true,
+        "visible_contains": [
+          "序号"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-013.sql"
+    },
+    {
+      "id": "XC-014",
+      "query": "你好，你能帮我查什么？",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "能力",
+      "data_path": "不取数",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "max_queries": 0,
+        "suggestions": true,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "问题单清单",
+          "单张单详情",
+          "停线查询",
+          "跟进人与当前责任人",
+          "汇总统计",
+          "涉及某个话题",
+          "类似问题",
+          "关键词搜索",
+          "按编号查单",
+          "域专项"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-014.sql"
+    },
+    {
+      "id": "XC-015",
+      "query": "能帮我把这张单结案吗？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "能力",
+      "data_path": "不取数",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "max_queries": 0,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "不能",
+          "当前状态"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-015.sql"
+    },
+    {
+      "id": "XC-016",
+      "query": "随便列一批上个月的国内问题",
+      "target": "FACTORY_ISSUE",
+      "batch": "首批",
+      "level": "P0",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "张"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题编号",
+            "机型",
+            "问题类型",
+            "不良率",
+            "不良数量",
+            "问题描述"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-016.sql"
+    },
+    {
+      "id": "XC-018",
+      "query": "上个月国内 A920PRO 的软件问题有哪些？另外巴西的物料问题也帮我列一下。",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "国内",
+          "巴西",
+          "软件问题",
+          "物料问题"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-018.sql"
+    },
+    {
+      "id": "XC-019",
+      "query": "A8900 今年出了多少问题？按类型分一下。",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "A8900"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-019.sql"
+    },
+    {
+      "id": "XC-020",
+      "query": "上个月 A8900 的，按类型统计，再按工厂统计。",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "问题类型",
+          "加工厂",
+          "A8900"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-020.sql"
+    },
+    {
+      "id": "XC-021",
+      "query": "把今年 A8900 的单拉出来，再看看里面停过线的有几张。",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "停线",
+          "A8900"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-021.sql"
+    },
+    {
+      "id": "XC-022",
+      "query": "上个月问题最多的机型是哪个？把它的单列出来，不良率最高那张的原因是什么？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "原因"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-022.sql"
+    },
+    {
+      "id": "XC-023",
+      "query": "如果这个月比上个月多，就告诉我是哪类多了；没多就不用列。",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "本月截至今天"
+        ],
+        "suggestions": true,
+        "suggestion_contains": [
+          "按上月同期比"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-023.sql"
+    },
+    {
+      "id": "XC-024",
+      "query": "2026 年上半年国内，除了物料问题，其他类型各多少？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "问题类型",
+            "单数"
+          ],
+          "cell_contains": [
+            "硬件问题",
+            "软件问题",
+            "资料问题",
+            "工厂制程",
+            "结构问题",
+            "制程优化"
+          ]
+        },
+        "charts": {
+          "min_count": 1,
+          "types": [
+            "pie"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-024.sql"
+    },
+    {
+      "id": "XC-025",
+      "query": "不是 A920，是 A920PRO。",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "A920PRO",
+          "重查"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-025.sql",
+      "turns": [
+        {
+          "query": "列出 2025 年国内 A920 的问题，要问题类型和问题描述",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "不是 A920，是 A920PRO。",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "XC-026",
+      "query": "那上个月呢？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "anywhere_contains": [
+          "上个月",
+          "沿用"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-026.sql",
+      "turns": [
+        {
+          "query": "2026 年 6 月国内 A920PRO 的软件问题都有哪些？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "那上个月呢？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
+    },
+    {
+      "id": "XC-027",
+      "query": "6 月建单、7 月结案的单有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "清单",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径",
+          "建单",
+          "结案"
+        ],
+        "anywhere_contains": [
+          "国内",
+          "巴西",
+          "海外"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-027.sql"
+    },
+    {
+      "id": "XC-028",
+      "query": "2026 年 A920 和 A920PRO 哪个问题多？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "A920PRO"
+        ],
+        "tables": {
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ],
+          "columns_present": [
+            "机型",
+            "单数"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-028.sql"
+    },
+    {
+      "id": "XC-029",
+      "query": "A920 最近咋样？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "近 30 天",
+          "A920"
+        ],
+        "suggestions": true,
+        "suggestion_contains": [
+          "近 90 天",
+          "今年"
+        ],
+        "anywhere_contains": [
+          "未结案",
+          "停线"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-029.sql"
+    },
+    {
+      "id": "XC-031",
+      "query": "26 年出现的非接相关问题有哪些？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P0",
+      "result_form": "文本检索",
+      "data_path": "混合",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "answer_contains": [
+          "统计口径"
+        ],
+        "anywhere_contains": [
+          "非接",
+          "国内",
+          "巴西",
+          "海外"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-031.sql"
+    }
+  ]
+}
