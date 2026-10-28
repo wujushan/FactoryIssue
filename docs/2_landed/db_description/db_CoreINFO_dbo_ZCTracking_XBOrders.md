@@ -18,5 +18,5 @@
 | Qty | decimal | 订单数量 | — | — |
 | InQty | decimal | 入库数量 | — | — |
 | NoQty | decimal | 未入库数量 | — | — |
-| Factory | nvarchar | 订单工厂 | 存工厂**名称**（不是工厂码，与主表、其他在线订单不同） | `paxbase.dbo.PaxFactory.FactoryName` |
+| Factory | nvarchar | 订单工厂 | 存工厂**名称**（不是工厂码，与主表、其他在线订单不同），直接展示 | 不关联：国内工厂表里名称有重复（「柯洱斯」有两个码），按名称关联会让订单行翻倍 |
 | Description | nvarchar | 订单类别 | 管理页面写作「订单类别」；页面上的「描述」列是物料描述 | — |

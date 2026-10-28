@@ -40,7 +40,7 @@
 | ReStartSchemeUser | nvarchar(255) | 重启方案制定人 | 一名员工 ID，文本型，需转整数关联；无效值按空 | `info.dbo.Employee.ID` |
 | ReStartExamineUser | nvarchar(255) | 重启审核人 | 一名员工 ID，文本型，需转整数关联；无效值按空 | `info.dbo.Employee.ID` |
 | CInvCode | nvarchar(255) | 料号 | 涉及物料编码 | `info.dbo.Inventory.cInvCode` |
-| VenCode | nvarchar(255) | 供应商编号 | 可空 | `info.dbo.tbIQCvendor.ferpcode` |
+| VenCode | nvarchar(255) | 供应商编号 | 可空 | `info.dbo.tbIQCvendor.ferpcode`（空值不关联） |
 | MemberList | nvarchar(525) | （内部字段，不返回） | 主状态处理人 ID，逗号分隔 | `info.dbo.Employee.ID` |
 | MemberListName | nvarchar(525) | 主状态处理人 | 主状态环节的处理人姓名，逗号分隔，与 `MemberList` 一一对应；随最新处理节点变化，直接展示，不另查人员表。按人匹配用 `MemberList` 里的员工 ID。回答中不单列本列，按当前状态、当前责任人给出，本列在其中占哪一行见国内业务描述「当前状态」「当前责任人」 | — |
 | RDepartment | int | 问题跟进部门 | 被指定跟进处理本单的部门，即问题跟进人所在部门。只有指定了问题跟进人的类型才有值 | `info.dbo.Department.ID` |

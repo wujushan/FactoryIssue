@@ -6,8 +6,8 @@
   第 4 条写法统一；第 6 条检索文字里去掉条件值。第 5 条「详情并进前一步」在执行层，这里不模拟。
 - 改口径、判据可证明：第 7 条名字归类；第 8 条写成时间的状态改回条件；第 9 条「X 各款」；第 10 条栏目要点名；
   第 11 条安全问题两路；第 17 条汇总缺时间改为追问。
-- 校验、打回重写：第 12 条格式（`scoring.validate_plan`）；第 13、15 条见 `query_checks()`；第 14 条要等线上的
-  时间换算模块，第 16 条只记日志，这里都不模拟。
+- 校验、打回重写：第 12 条格式（`scoring.validate_plan`）；第 7 条的校验一半、第 13、15 条见 `query_checks()`；
+  第 14 条要等线上的时间换算模块，第 16 条只记日志，这里都不模拟。
 
 名字对库线上查的是库里的取值；这里用 `CATALOG` 示意几类取值，只放对照集问句里出现的名字。
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from datetime import date
 from typing import Any
 
 from common import norm, norm_field
@@ -90,14 +91,30 @@ CATALOG = {
 }
 
 
-# 用户说了是哪一类的词：问句里出现模型所选那一类的类别词，就是用户说了类别，对不上时不改类（交 §6.5 追问）
+# 类别词：用户说了是哪一类。「跟进」同时是人员与部门的类别词（总述「某部门跟进的」即跟进部门）
 _CLASS_WORDS = {
     "工厂": ("工厂", "加工厂"),
     "人": ("跟进人", "跟进", "负责", "责任人", "处理人", "经办", "手上", "手里"),
-    "部门": ("部门",),
+    "部门": ("部门", "跟进"),
     "供应商": ("供应商", "厂商", "供方", "供应"),
     "系列": ("系列",),
 }
+_WORD_GROUPS: dict[str, set[str]] = {}
+for _g, _ws in _CLASS_WORDS.items():
+    for _w in _ws:
+        _WORD_GROUPS.setdefault(norm(_w), set()).add(_g)
+_WORDS_LONGEST_FIRST = sorted(_WORD_GROUPS, key=len, reverse=True)
+_GROUP_LABEL = {"工厂": "加工厂", "人": "人员", "部门": "部门", "供应商": "供应商", "系列": "系列"}
+
+
+def _class_words_in(q: str) -> set[str]:
+    """问句（已归一）里出现的类别词。长词先认、认过的去掉：「跟进人」不再算一次「跟进」。"""
+    found: set[str] = set()
+    for w in _WORDS_LONGEST_FIRST:
+        if w in q:
+            found.add(w)
+            q = q.replace(w, "\x00")
+    return found
 
 
 def _name_key(text: str, group: str) -> str:
@@ -117,33 +134,85 @@ def _found(value: str, group: str) -> bool:
     return any(v == _name_key(c, group) for c in CATALOG[group])
 
 
-def _regroup(step: dict, query: str | None) -> None:
+def _move(p: dict, f: dict, group: str) -> None:
+    new_field = _NAME_GROUPS[group][0]
+    old_field = f.get("field")
+    f["field"] = new_field
+    gb = p.get("group_by")
+    if isinstance(gb, list):
+        p["group_by"] = [new_field if norm_field(g) == norm_field(old_field) else g for g in gb]
+
+
+def _regroup(step: dict, query: str | None) -> dict | None:
+    """就地改类；只给名称、完全相同的不止一类时返回追问步骤（线上由 §6.5 给选项）。"""
     if not query:  # 要看问句里有没有类别词，没有问句时不改
-        return
-    q = norm(query)
+        return None
+    words = _class_words_in(norm(query))
     p = step.get("params") or {}
     for f in p.get("filters") or []:
         if not isinstance(f, dict):
             continue
-        field = norm_field(f.get("field"))
-        group = _FIELD_GROUP.get(field)
+        group = _FIELD_GROUP.get(norm_field(f.get("field")))
         values = f.get("value")
         if group is None or isinstance(values, dict) or values in (None, ""):
             continue
         values = values if isinstance(values, list) else [values]
-        if not all(isinstance(v, str) for v in values) or all(_found(v, group) for v in values):
+        if not all(isinstance(v, str) for v in values):
             continue
-        if any(norm(w) in q for w in _CLASS_WORDS[group]):
+        if not words:
+            # 用户只给了名称：数所有取值都完全相同的有几类
+            matched = [g for g in CATALOG if all(_found(v, g) for v in values)]
+            if len(matched) >= 2:
+                said = "、".join(values)
+                return {"id": "s1", "skill": "clarify", "when": None, "params": {
+                    "reason": "名称对上多类", "question": f"「{said}」指的是哪一个？",
+                    "options": [f"{said}：{_GROUP_LABEL[g]}" for g in matched]}}
+            if len(matched) == 1 and matched[0] != group:
+                _move(p, f, matched[0])
             continue
-        others = [g for g in CATALOG if g != group and all(_found(v, g) for v in values)]
-        if len(others) != 1:
+        if all(_found(v, group) for v in values):
             continue
-        new_field = _NAME_GROUPS[others[0]][0]
-        old_field = f.get("field")
-        f["field"] = new_field
-        gb = p.get("group_by")
-        if isinstance(gb, list):
-            p["group_by"] = [new_field if norm_field(g) == norm_field(old_field) else g for g in gb]
+        own = {w for w in words if group in _WORD_GROUPS[w]}
+        # 有所选那一类的类别词：不改类，只有「跟进」这种同时指两类的词在两类之间改；只有别的类的类别词：照旧
+        candidates = {g for w in own for g in _WORD_GROUPS[w]} if own else set(CATALOG)
+        others = [g for g in candidates if g != group and all(_found(v, g) for v in values)]
+        if len(others) == 1:
+            _move(p, f, others[0])
+    return None
+
+
+# 第 7 条的校验一半：名字紧挨着某一类的类别词（「普瑞特工厂」「供应商普瑞特」「跟进人是柯洱斯」），计划却放进另一类
+_BRIDGE = r"(?:是|为|:)?$"
+
+
+def _adjacent_groups(q: str, value: str) -> tuple[str, set[str]] | None:
+    v = norm(value)
+    if len(v) < 2:
+        return None
+    for m in re.finditer(re.escape(v), q):
+        after, before = q[m.end():], q[:m.start()]
+        for w in _WORDS_LONGEST_FIRST:
+            if after.startswith(w) or re.search(re.escape(w) + _BRIDGE, before):
+                return w, _WORD_GROUPS[w]
+    return None
+
+
+def _class_checks(steps: list[dict], query: str) -> list[str]:
+    q = norm(query)
+    errors: list[str] = []
+    for s in steps:
+        for f in _as_list((s.get("params") or {}).get("filters")):
+            if not isinstance(f, dict):
+                continue
+            group = _FIELD_GROUP.get(norm_field(f.get("field")))
+            if group is None:
+                continue
+            for v in _as_list(f.get("value")):
+                hit = _adjacent_groups(q, v) if isinstance(v, str) else None
+                if hit and group not in hit[1]:
+                    said = "或".join(_GROUP_LABEL[g] for g in sorted(hit[1]))
+                    errors.append(f"问句里「{v}」紧挨着「{hit[0]}」，用户说的是{said}，{s.get('id')} 却把它放进了{f.get('field')}")
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -335,14 +404,20 @@ def _safety_rule(plan: dict, query: str | None) -> None:
 # 第 17 条 汇总统计没给时间：改为追问（总述「必要澄清项」第一行）。判据看计划结构：
 #    整份计划没有一项时间；有一步统计（aggregate / custom_stats）不在前一步的结果里算、不引用前一步；
 #    条件与分组里也没有当前状态类的（停线中、未结案、待提交、当前责任人、处理环节）——问当前状态的不追问。
-#    另看问句：用户明说不限时间（「所有单」「至今」「都出过哪些」）时不追问（G66，总述「必要澄清项」）
+#    另看问句：用户明说不限时间（「所有单」「至今」「不限时间」）时不追问（G66、G67，总述「必要澄清项」）；
+#    计划沿用了上一轮的条件、而上一轮本来就没有时间时也不追问（G67）
 _CURRENT_STATUS = {norm(v) for v in ("未结案", "停线中", "进行中", "没结案", "未完成", "待处理", "待提交", "草稿")}
-_ALL_TIME = re.compile(r"(?:所有|全部)(?:的)?(?:问题)?单|历来|至今|迄今|有史以来|一直以来|累计|历史上"
-                       r"|都(?:出过|有过|有哪些|有什么|是哪些)")
+_ALL_TIME = re.compile(r"(?:所有|全部)(?:的)?(?:问题)?单|(?:不限|所有|全部)(?:的)?(?:时间|日期)|历来|至今|迄今|有史以来"
+                       r"|一直以来|累计|历史上|都(?:出过|有过|有哪些|有什么|是哪些)")
 _CURRENT_FIELDS = {norm_field(f) for f in ("当前责任人",)}
-_CURRENT_GROUPS = {norm_field(f) for f in ("当前责任人", "处理环节")}
-MISSING_TIME_CLARIFY = {"reason": "缺时间", "question": "要统计哪个时间段？",
-                        "options": ["今年", "近 30 天", "2026 年上半年"]}  # 选项取自总述「必要澄清项」示例回答
+_CURRENT_GROUPS = {norm_field(f) for f in ("当前责任人", "处理环节", "状态", "停线状态", "结案与否")}
+
+
+def missing_time_clarify(today: date | None = None) -> dict:
+    """追问时间的选项由代码给（总述「必要澄清项」示例回答）：上半年 7 月起为今年的、1–6 月为去年的。"""
+    today = today or date.today()
+    half = f"{today.year if today.month >= 7 else today.year - 1} 年上半年"
+    return {"reason": "缺时间", "question": "要统计哪个时间段？", "options": ["今年", "近 30 天", half, "不限时间"]}
 
 
 def _is_current_state(p: dict) -> bool:
@@ -354,14 +429,32 @@ def _is_current_state(p: dict) -> bool:
             return True
         if field == "状态" and {norm(v) for v in _as_list(f.get("value")) if isinstance(v, str)} & _CURRENT_STATUS:
             return True
+    if [norm(m) for m in _as_list(p.get("metrics"))] == [norm("未结案数")]:
+        return True
     return any(norm_field(g) in _CURRENT_GROUPS for g in _as_list(p.get("group_by")))
 
 
-def _missing_time_rule(plan: dict, query: str | None) -> None:
+def _uses_previous(obj: Any) -> bool:
+    if isinstance(obj, dict):
+        return obj.get("from") == "previous" or any(_uses_previous(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_uses_previous(v) for v in obj)
+    return False
+
+
+def _has_time(plan: dict | None) -> bool:
+    steps = [s for s in (plan or {}).get("steps") or [] if isinstance(s, dict)]
+    return any(_as_list((s.get("params") or {}).get("time")) for s in steps)
+
+
+def _missing_time_rule(plan: dict, query: str | None, previous: dict | None = None) -> None:
     if not query or _ALL_TIME.search(query):  # 要看问句里有没有明说不限时间，没有问句时不改
         return
+    if _has_time(plan):
+        return
     steps = [s for s in plan.get("steps") or [] if isinstance(s, dict)]
-    if any(_as_list((s.get("params") or {}).get("time")) for s in steps):
+    # 线上读工作区 turn 里上一轮的执行计划；读不到时照常追问
+    if previous is not None and _uses_previous(steps) and not _has_time(previous):
         return
     for s in steps:
         p = s.get("params") or {}
@@ -369,7 +462,7 @@ def _missing_time_rule(plan: dict, query: str | None) -> None:
             continue
         if p.get("within") is not None or _has_ref(p) or _is_current_state(p):
             continue
-        plan["steps"] = [{"id": "s1", "skill": "clarify", "when": None, "params": copy.deepcopy(MISSING_TIME_CLARIFY)}]
+        plan["steps"] = [{"id": "s1", "skill": "clarify", "when": None, "params": missing_time_clarify()}]
         return
 
 
@@ -536,6 +629,7 @@ def query_checks(plan: dict, query: str) -> list[str]:
                 errors.append(f"问句里「{t['said']}」后面是「{hit}」这件事，{s.get('id')} 这项时间的日期依据应为{hit}")
     if any(s.get("skill") in ("introduce", "clarify") for s in steps):
         return errors
+    errors += _class_checks(steps, query)
     blob = norm(json.dumps(plan.get("steps"), ensure_ascii=False))
     nums = find_numbers(query)
     for raw, kind, _ in nums:
@@ -556,15 +650,25 @@ def unicodedata_half(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def apply(plan: dict | None, query: str | None = None) -> dict | None:
-    """返回处理后的计划副本（不改原计划）。`query` 是本轮用户原话；不给时只做不看问句的那几条。"""
+def _time_options(out: dict) -> dict:
+    """模型自己写的「缺时间」追问，选项也换成代码给的那一套（§5.3 第 17 条）。"""
+    for s in out.get("steps") or []:
+        if isinstance(s, dict) and s.get("skill") == "clarify" and isinstance(s.get("params"), dict) \
+                and norm(s["params"].get("reason")) == norm("缺时间"):
+            s["params"]["options"] = missing_time_clarify()["options"]
+    return out
+
+
+def apply(plan: dict | None, query: str | None = None, previous: dict | None = None) -> dict | None:
+    """返回处理后的计划副本（不改原计划）。`query` 是本轮用户原话，不给时只做不看问句的那几条；
+    `previous` 是上一轮的计划（线上为工作区里上一轮的执行计划），只有第 17 条用。"""
     if plan is None:
         return None
     out = copy.deepcopy(plan)
     clarify = next((s for s in out.get("steps") or [] if isinstance(s, dict) and s.get("skill") == "clarify"), None)
     if clarify is not None and len(out.get("steps") or []) > 1:
         out["steps"] = [{**clarify, "id": "s1", "when": None}]
-        return out
+        return _time_options(out)
     for step in out.get("steps") or []:
         if not isinstance(step, dict):
             continue
@@ -575,8 +679,11 @@ def apply(plan: dict | None, query: str | None = None) -> dict | None:
         _strip_condition_values(step)
         if step.get("skill") == "text_search" and p.get("topic"):
             p["topic_scope"] = topic_scope(p["topic"])
-        _regroup(step, query)
+        ask = _regroup(step, query)
+        if ask is not None:
+            out["steps"] = [ask]
+            return out
     _safety_rule(out, query)
     merge_duplicate_aggregates(out)
-    _missing_time_rule(out, query)
-    return out
+    _missing_time_rule(out, query, previous)
+    return _time_options(out)

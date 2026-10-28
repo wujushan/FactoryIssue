@@ -256,7 +256,7 @@ async def run_plan(caller: Caller, case: dict, group: str) -> dict:
         except (ValueError, json.JSONDecodeError) as exc:
             errors = [f"不是合格的 JSON：{exc}"]
         if not errors and checks:
-            query_errors = resolve.query_checks(resolve.apply(plan, case["q"]), case["q"])
+            query_errors = resolve.query_checks(resolve.apply(plan, case["q"], case.get("previous_plan")), case["q"])
         if errors or query_errors:
             first_plan = plan if not errors else None
             repair_msgs = [*messages, {"role": "assistant", "content": first["content"]},
@@ -316,9 +316,21 @@ def allowed_numbers(case: dict) -> set[float]:
     return allowed
 
 
-# 「这两类」「那两张」是指代前文点过名的两项，不查；「这三张」「那五家」照查（设计稿 §8.3，G4a 评审 I7）
+# 「这三张」「那五家」照查；「这两张」本句前文用「和」「与」「、」点过名时指那两项，不查，否则照查
+# （设计稿 §8.3，G4a 评审 I7、复评「小」）
 _CN_NUM_CLAIM = re.compile(r"(?<![这那])" + _CN_NUM.pattern)
-_CN_NUM_AFTER_DEM = re.compile(r"(?<=[这那])([三四五六七八九十][零一二两三四五六七八九十]*)(?=[张个条起项家类次天倍名成])")
+_CN_NUM_AFTER_DEM = re.compile(r"(?<=[这那])([两三四五六七八九十][零一二两三四五六七八九十]*)(?=[张个条起项家类次天倍名成])")
+
+
+def _demonstrative_values(plain: str) -> list[int]:
+    out = []
+    for m in _CN_NUM_AFTER_DEM.finditer(plain):
+        if m.group(1) == "两" and re.search(r"[和与、]", plain[:m.start()]):
+            continue
+        v = _cn_to_int(m.group(1))
+        if v is not None:
+            out.append(v)
+    return out
 # 约数与比值的说法：只能是模型自己算的，事实里没有同样的说法就删句
 _APPROX = re.compile(r"[\d一二两三四五六七八九十]+(?:\.\d+)?\s*(?:倍|成(?![为功本品果立员熟型绩长交都分])|个?百分点)"
                      r"|翻倍|翻了?[一两]?[番倍]|(?:一|过|近|大|超过?|将近|接近)半(?![年月天])|半数|[上中下]旬")
@@ -384,7 +396,7 @@ def check_narrative(case: dict, text: str) -> dict:
         free = _ordinal_free(plain, max_rank)
         values = [float(x) for x in _NUM.findall(free)]
         values += [v for v in (_cn_to_int(x) for x in _CN_NUM_CLAIM.findall(free)) if v is not None]
-        values += [v for v in (_cn_to_int(x) for x in _CN_NUM_AFTER_DEM.findall(plain)) if v is not None]
+        values += _demonstrative_values(plain)
         if values or _DATE_TOKEN.search(s):
             with_numbers += 1
         found += [v for v in values if not any(abs(v - a) < 1e-9 for a in allowed)]
@@ -699,7 +711,7 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
             plan = r.get("plan")
             if plan is None:
                 plan = _replan(r)
-            resolved = resolve.apply(plan, case["q"])
+            resolved = resolve.apply(plan, case["q"], case.get("previous_plan"))
             if r.get("query_errors") or (not GROUPS.get(group, {}).get("query_checks") and resolved is not None
                                          and resolve.query_checks(resolved, case["q"])):
                 query_bounced += 1
@@ -778,12 +790,12 @@ def _common_cases_table(records: list[dict], groups: list[str]) -> list[str]:
             sigs = []
             for r in by[g][cid]:
                 plan = r.get("plan") or _replan(r)
-                good = plan is not None and scoring.score_plan(case, resolve.apply(plan, case["q"]))["all_ok"]
+                good = plan is not None and scoring.score_plan(case, resolve.apply(plan, case["q"], case.get("previous_plan")))["all_ok"]
                 ok, n = ok + good, n + 1
                 if cid.startswith("M-"):
                     m_ok, m_n = m_ok + good, m_n + 1
                 if plan is not None:
-                    sigs.append(scoring.plan_signature(resolve.apply(plan, case["q"])))
+                    sigs.append(scoring.plan_signature(resolve.apply(plan, case["q"], case.get("previous_plan"))))
             if len(sigs) >= 2:
                 cons_n += 1
                 cons += len(set(sigs)) == 1
@@ -1206,11 +1218,19 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
         ("说了类别却对不上时不改类", "跟进人是柯洱斯的单有哪些",
          {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "柯洱斯"}])]},
          lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
-        ("对上两类时不改类", "亮亮的单有哪些",
-         {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "亮亮"}])]},
-         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
+        *[(f"只给名称、对上两类时追问（模型放进{field}）", "亮亮今年多少单",
+           {"steps": [agg("s1", time=[{"said": "今年"}], filters=[{"field": field, "op": "是", "value": "亮亮"}])]},
+           lambda p: [s["skill"] for s in p["steps"]] == ["clarify"]
+           and {"亮亮：加工厂", "亮亮：供应商"} <= set(p["steps"][0]["params"]["options"]))
+          for field in ("加工厂", "供应商", "跟进人")],
         ("只是包含不算对上", "百富的单有哪些",
          {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "百富"}])]},
+         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
+        ("「跟进」同时指人员与部门", "工程部跟进的单有哪些",
+         {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "工程部"}])]},
+         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进部门"),
+        ("说了「跟进人」时不改到部门", "跟进人是工程部的单有哪些",
+         {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "工程部"}])]},
          lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
         # 第 17 条：汇总没给时间改为追问；问当前状态、引用前一步时不追问
         ("汇总缺时间改为追问", "各加工厂的合计不良率排一下",
@@ -1231,6 +1251,30 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
         ("「所有工厂」不算不限时间", "所有工厂的合计不良率排一下",
          {"steps": [agg("s1", group_by=["加工厂"], metrics=["合计不良率"], ranking=True)]},
          lambda p: [s["skill"] for s in p["steps"]] == ["clarify"]),
+        # 第 17 条复评后（G67）：问当前状态的分布、只问未结案数、明说「不限时间」一类都不追问
+        *[(f"问当前状态不追问（{label}）", query, {"steps": [agg("s1", **params)]},
+           lambda p: p["steps"][0]["skill"] == "aggregate")
+          for label, query, params in (
+              ("按状态", "现在各状态各有多少单", {"group_by": ["状态"]}),
+              ("按停线状态", "停线中和已经重启的各有多少单", {"group_by": ["停线状态"]}),
+              ("按结案与否", "已结案和未结案的各有多少", {"group_by": ["结案与否"]}),
+              ("只问未结案数", "各工厂现在还有多少没结案的", {"group_by": ["加工厂"], "metrics": ["未结案数"]}),
+              ("停线中", "现在还有多少单停线", {"filters": [{"field": "状态", "op": "是", "value": "停线中"}]}),
+          )],
+        ("单数和未结案数照常追问", "按加工厂统计单数和未结案数",
+         {"steps": [agg("s1", group_by=["加工厂"], metrics=["单数", "未结案数"])]},
+         lambda p: [s["skill"] for s in p["steps"]] == ["clarify"]),
+        *[(f"明说不限时间不追问（{query}）", query, {"steps": [agg("s1", group_by=[dim])]},
+           lambda p: p["steps"][0]["skill"] == "aggregate")
+          for query, dim in (("不限时间，按问题类型统计一下", "问题类型"), ("所有时间里各工厂的问题数", "加工厂"),
+                             ("全部时间按机型统计", "机型"))],
+        ("P-07 照旧追问", "除了物料问题，其他类型各多少？",
+         {"steps": [agg("s1", filters=[{"field": "问题类型", "op": "不是", "value": "物料问题"}], group_by=["问题类型"])]},
+         lambda p: [s["skill"] for s in p["steps"]] == ["clarify"] and "不限时间" in p["steps"][0]["params"]["options"]),
+        ("模型写的缺时间追问也用代码的选项", "统计一下制程问题",
+         {"steps": [{"id": "s1", "skill": "clarify", "when": None,
+                     "params": {"reason": "缺时间", "question": "统计哪段时间？", "options": ["今年"]}}]},
+         lambda p: p["steps"][0]["params"]["options"] == resolve.missing_time_clarify()["options"]),
     ]
     for label, query, plan, ok in with_query:
         counts["aux"] += 1
@@ -1238,12 +1282,28 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
         if not ok(got):
             problems.append(f"代码处理「{label}」不对：{json.dumps(got, ensure_ascii=False)[:300]}")
 
+    # 第 17 条：接着上一轮的结果统计，上一轮本来没给时间时不追问；上一轮有时间、计划却没抄来时照常追问（G67）
+    prev_no_time = {"steps": [lst("s1", domains={"value": ["国内"], "from": "user"})]}
+    prev_timed = {"steps": [lst("s1", time=[{"said": "今年", "basis": "建单", "from": "user"}])]}
+    this_turn = {"steps": [agg("s1", domains={"value": ["国内"], "from": "previous"}, group_by=["问题类型"])]}
+    for label, previous, want in (("上一轮没给时间", prev_no_time, "aggregate"), ("上一轮有时间", prev_timed, "clarify"),
+                                  ("工作区读不到上一轮", None, "clarify")):
+        counts["aux"] += 1
+        got = resolve.apply(this_turn, "按问题类型统计这些单", previous)
+        if got["steps"][0]["skill"] != want:
+            problems.append(f"代码处理「接着统计这些单，{label}」不对：{json.dumps(got, ensure_ascii=False)[:300]}")
+    for today, half in ((dt.date(2026, 10, 26), "2026 年上半年"), (dt.date(2027, 3, 1), "2026 年上半年"),
+                        (dt.date(2027, 7, 1), "2027 年上半年")):
+        counts["aux"] += 1
+        if resolve.missing_time_clarify(today)["options"] != ["今年", "近 30 天", half, "不限时间"]:
+            problems.append(f"追问时间的选项按当天生成不对（{today}）")
+
     # 校验第 13、15 条：期望计划（任一种写法）一律不能被拦（被拦就是误拒）；几种该拦的必须拦下
     for case in PLAN_CASES:
         for k, alt in enumerate(case["expect"]):
             counts["aux"] += 1
             exp = scoring.render_expected({**case, "expect": [alt]})
-            errs = resolve.query_checks(resolve.apply(exp, case["q"]), case["q"])
+            errs = resolve.query_checks(resolve.apply(exp, case["q"], case.get("previous_plan")), case["q"])
             if errs:
                 problems.append(f"校验误拒期望计划 {case['id']}（第 {k + 1} 种写法）：{errs}")
     must_bounce = [
@@ -1252,6 +1312,11 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
          {"steps": [agg("s1", time=[{"said": "6 月", "basis": "结案"}, {"said": "7 月", "basis": "建单"}])]}),
         ("问句里的机型没进计划", "A960 屏幕闪烁以前有过吗", {"steps": [txt("s1", mode="类似问题", phenomenon="屏幕闪烁")]}),
         ("问句里的问题编号没进计划", "ZC2608038 现在谁在处理", {"steps": [lst("s1")]}),
+        ("名字紧挨着类别词却放进另一类", "普瑞特工厂的物料问题",
+         {"steps": [lst("s1", filters=[{"field": "供应商", "op": "是", "value": "普瑞特"},
+                                       {"field": "问题类型", "op": "是", "value": "物料问题"}])]}),
+        ("类别词在前、隔着「是」", "跟进人是柯洱斯的单有哪些",
+         {"steps": [lst("s1", filters=[{"field": "加工厂", "op": "是", "value": "柯洱斯"}])]}),
     ]
     for label, query, plan in must_bounce:
         counts["aux"] += 1
@@ -1276,6 +1341,10 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
     if resolve.query_checks(resolve.apply({"steps": [agg("s1", time=[{"said": "今年", "basis": "建单"}])]}, "今年国内结案的单有多少"),
                             "今年国内结案的单有多少"):
         problems.append("校验误拦「事件词不紧跟时间」")
+    counts["aux"] += 1
+    q = "供应商普瑞特的物料问题"
+    if resolve.query_checks(resolve.apply({"steps": [lst("s1", filters=[{"field": "供应商", "op": "是", "value": "普瑞特"}])]}, q), q):
+        problems.append("校验误拦「名字紧挨着的类别词与计划一致」")
 
     # 号码直通：命中的必须恰好是这些问句，且直通出的计划判对
     want_shortcut = {f"M-0{i}" for i in range(1, 10)} | {"CN-042", "CN-048", "CN-059", "BR-010", "XC-012", "V-36", "V-37"}
@@ -1322,7 +1391,7 @@ def offline_checks() -> tuple[dict[str, int], list[str]]:
         for label, plan in scoring.harmless(case):
             counts["harmless"] += 1
             errs = scoring.validate_plan(plan)
-            res = scoring.score_plan(case, resolve.apply(plan, case["q"]))
+            res = scoring.score_plan(case, resolve.apply(plan, case["q"], case.get("previous_plan")))
             if errs or not res["all_ok"]:
                 wrong = [k for k, v in res["categories"].items() if not v]
                 problems.append(f"{case['id']} 只改写法「{label}」却判错：{errs or wrong or res['clarify']}")
@@ -1359,6 +1428,9 @@ def offline_checks() -> tuple[dict[str, int], list[str]]:
         # T10：「第 N 名」只在 N 不超过事实里最长的列表时放行
         if max(_list_lengths(case["facts"]), default=0) < 99 and 99.0 not in allowed_numbers(case):
             must_flag.append("它排在第九十九名。")
+        # 「这两张」前文没点过名时照查（复评「小」）：事实里没有 2 这个值、也没有两项的列表时必须拦下
+        if 2.0 not in allowed_numbers(case):
+            must_flag.append("这两张最需要关注。")
         for sentence in must_flag:
             counts["aux"] += 1
             if not check_narrative(case, sentence)["bad"]:
@@ -1505,7 +1577,7 @@ def write_smoke(out_dir: Path, full_jobs: list[tuple[str, str, str, int]] | None
         if r["part"] == "plan":
             ok_plan = "是" if r.get("plan") is not None else "否"
             full = "是" if r.get("plan") is not None and scoring.score_plan(
-                PLAN_BY_ID[r["case"]], resolve.apply(r["plan"], PLAN_BY_ID[r["case"]]["q"]))["all_ok"] else "否"
+                PLAN_BY_ID[r["case"]], resolve.apply(r["plan"], PLAN_BY_ID[r["case"]]["q"], PLAN_BY_ID[r["case"]].get("previous_plan")))["all_ok"] else "否"
         md.append(f"| {r['group']} | {r['part']} | {r['case']} | {a.get('error') or 'ok'} | {_fmt(a.get('latency'), False)} | "
                   f"{_fmt(a.get('ttft'), False)} | {u.get('prompt_tokens', '—')} / {u.get('completion_tokens', '—')} | "
                   f"{a.get('reasoning_chars', 0)} | {'是' if a.get('think_in_content') else '否'} | {a.get('finish_reason')} | {ok_plan} | {full} |")
