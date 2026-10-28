@@ -1,6 +1,6 @@
 # 业务术语表
 
-> `manifest.glossary` 的唯一信源；改本文件须同步 `src/factory_issue_module/module.py` 的 `glossary`。
+> `manifest.glossary` 的唯一信源：模块在导入时读本文件生成 `glossary`（`src/factory_issue_module/landed.py`），代码里没有第二份，改本文件即可。表头与列数不要改，改了模块加载即失败。
 
 | 规范词 | 别称 | 口径定义 |
 |---|---|---|

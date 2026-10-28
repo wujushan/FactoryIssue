@@ -17,7 +17,7 @@
 | `business_description.md` | **必须** | 库/表/字段在业务场景中的关联关系、用户关注的查询场景、常见查询示例；须**明确声明数据量**（涉及多少张表、每张表约多少行——G2 治理决策与取数/沙箱策略据此判断） |
 | `dirty_data.md` | 可选（存在脏数据时） | 历史遗留/不规则/需特殊解析处理的数据描述 |
 | `privileges.md` | 可选（有权限管控要求时） | 本业务需要的行级/列级权限管控机制描述 |
-| `glossary.md` | 可选（有业务术语时） | 业务术语表，一行一术语：**规范词 / 别称 / 口径定义**（对应 `GlossaryTerm` 的 term/aliases/definition），供线上助手做术语理解与归一。**是 `manifest.glossary` 的唯一信源**，改此文件须同步 manifest（`module.py` 已留槽位）——沿用 `db_description ↔ field_mappings` 的「文档信源 + manifest 机器读」范式。有业务术语时才新建（缺省不建，不占 G1 闸门） |
+| `glossary.md` | 可选（有业务术语时） | 业务术语表，一行一术语：**规范词 / 别称 / 口径定义**（对应 `GlossaryTerm` 的 term/aliases/definition），供线上助手做术语理解与归一。**是 `manifest.glossary` 的唯一信源**，模块在导入时读此文件生成 manifest 的 `glossary`（`landed.py`），代码里不另写一份——沿用 `db_description ↔ field_mappings` 的「文档信源 + manifest 机器读」范式。有业务术语时才新建（缺省不建，不占 G1 闸门） |
 
 ## 本模块的文件布局
 
