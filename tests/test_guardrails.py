@@ -10,7 +10,7 @@
 - 按钮形状：`suggestions` 与 `clarify` 的每个选项都是带 id、name、label、query 的对象，label 不超过 15 字。
 - 只有一条 system 且在最前：假模型每次调用都查（`fakes.FakeLLM.check_messages`），这里再兜一遍。
 
-链接参数的片段不进日志（§9.1）随 S2 的 `present/links.py` 加进来。
+盐值、密钥的片段不进日志（§9.1）随 S3、S4 用到它们时加进来；站点地址来自模块配置 `link_sites.toml`，不是凭据。
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import ast
 import re
 from pathlib import Path
 
+import cn_data
 import pytest
 import scopes
 from fakes import MANIFEST, FakeLLM, Harness, make_harness, run
@@ -44,11 +45,45 @@ SCENARIOS: list[tuple[str, dict | None, str]] = [
 ]
 
 
+_CN = {"value": ["国内"], "from": "user"}
+_T30 = [{"said": "近 30 天", "basis": "建单", "from": "user"}]
+_NARR = "共 4 张，硬件问题最多。最需要关注的是 ZC9901001。"
+
+
+def _plan(skill: str, **params) -> dict:
+    return {"understanding": "x", "alternatives": [],
+            "steps": [{"id": "s1", "skill": skill, "when": None, "params": params}]}
+
+
+#: S2 起接上的技能：（说明, 权限, 问句, 模型回复）。用国内假数据（`tests/cn_data.py`）跑。
+EXEC_SCENARIOS: list[tuple[str, dict, str, list]] = [
+    ("国内清单", scopes.account_jia(), "近 30 天国内的问题有哪些", [_plan("list_issues", domains=_CN, time=_T30), _NARR]),
+    ("国内清单·点名列", scopes.account_jia(), "列出近 30 天国内的单号、处理人、当前状态、责任人、结案时间、手机号",
+     [_plan("list_issues", domains=_CN, time=_T30, columns=["单号", "处理人", "当前状态", "责任人", "结案时间", "手机号"]),
+      _NARR]),
+    ("国内按类型统计", scopes.account_jia(), "近 30 天国内按问题类型统计",
+     [_plan("aggregate", domains=_CN, time=_T30, group_by=["问题类型"], metrics=["单数", "占比"]), _NARR]),
+    ("国内按工厂与责任部门", scopes.account_jia(), "近 30 天国内按工厂、责任部门统计",
+     [_plan("aggregate", domains=_CN, time=_T30, group_by=["加工厂", "责任归属部门"]), _NARR, _NARR]),
+    ("国内概况", scopes.account_jia(), "近 30 天国内平均多久结案、停了多久",
+     [_plan("aggregate", domains=_CN, time=_T30, metrics=["结案周期", "停线时长", "合计不良率"]), _NARR]),
+    ("全放开·不点域", scopes.GREEN, "近 30 天的问题有哪些", [_plan("list_issues", time=_T30), _NARR]),
+    ("国内·机型对不上", scopes.account_jia(), "国内 Z999 的问题",
+     [_plan("list_issues", domains=_CN, filters=[{"field": "机型", "op": "是", "value": "Z999", "from": "user"}])]),
+]
+
+
 async def _all_events() -> list[tuple[str, Harness, list[Event]]]:
     out = []
     for name, privileges, query in SCENARIOS:
         h = make_harness(privileges, resolved=privileges is not None)
         out.append((name, h, await run(h, query)))
+    for name, privileges, query, replies in EXEC_SCENARIOS:
+        h = make_harness(privileges, llm_replies=replies)
+        cn_data.load(h)
+        events = await run(h, query)
+        assert any(e.type in (EventType.TABLE, EventType.CLARIFY) for e in events), name
+        out.append((name, h, events))
     for domains in ([], [Domain.DOMESTIC], list(DOMAINS)):
         access = gate.DomainAccess(
             domains=frozenset(domains), car=False, text_search=frozenset(domains)
@@ -212,7 +247,8 @@ def _aggregation_hits(sources: list[tuple[str, ast.Module]]) -> list[str]:
 def _executor_import_hits(sources: list[tuple[str, ast.Module]]) -> list[str]:
     hits = []
     for rel, tree in sources:
-        if rel == "stats/runner.py":
+        # runner 按源码文本拼脚本；lib、tasks 自己之间的 import 在拼接时去掉，本来就是执行器的代码
+        if rel == "stats/runner.py" or rel.startswith(("stats/lib/", "stats/tasks/")):
             continue
         for node in ast.walk(tree):
             mods: list[str] = []

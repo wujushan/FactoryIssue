@@ -33,6 +33,7 @@ from forge_platform.policy import PolicyLLM  # noqa: E402  与线上 ctx.llm 同
 from forge_sandbox import run_script  # noqa: E402
 
 import prompts  # noqa: E402
+from factory_issue_module.present import narrative as _narrative  # noqa: E402
 import resolve  # noqa: E402
 import scoring  # noqa: E402
 import stats_tasks  # noqa: E402
@@ -284,144 +285,20 @@ async def run_plan(caller: Caller, case: dict, group: str) -> dict:
             "plan": plan, "errors": errors, "query_errors": query_errors}
 
 
-_NUM = re.compile(r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?(?![A-Za-z0-9])")
-_CN_NUM = re.compile(r"([两三四五六七八九十][零一二两三四五六七八九十]*)(?=[张个条起项家类次天倍名成])")
-_CN_DIGIT = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
-_LEAK = re.compile(r"[A-Za-z]+_[A-Za-z0-9_]+|dbo\.|\bSELECT\b|\bFROM\s", re.I)
-_ISSUE_NO = re.compile(r"(?<![A-Za-z0-9])(?:ZC|BR|HW)\d{7}(?![0-9])", re.I)
-
-
-def _cn_to_int(s: str) -> int | None:
-    if "十" not in s:
-        return _CN_DIGIT.get(s) if len(s) == 1 else None
-    left, _, right = s.partition("十")
-    tens = _CN_DIGIT.get(left, 1) if left else 1
-    ones = _CN_DIGIT.get(right, 0) if right else 0
-    return tens * 10 + ones
-
-
-def _list_lengths(obj: Any) -> set[int]:
-    """事实里每个列表的项数。线上由沙箱模板给 facts 的每个列表附上项数（设计稿 §8.1、§8.3，T10），这里模拟它。"""
-    out: set[int] = set()
-    if isinstance(obj, dict):
-        for v in obj.values():
-            out |= _list_lengths(v)
-    elif isinstance(obj, list):
-        out.add(len(obj))
-        for v in obj:
-            out |= _list_lengths(v)
-    return out
+# 写分析的核数 S2 起调 src（`factory_issue_module.present.narrative`，设计 §8.3），这里只按对照集的形状转接；
+# 名字核对用合成主数据（mockdata.CATALOG）当本轮的主数据，与迁移前 spike 自己那份逐条相同（离线重算核对过）。
+_list_lengths = _narrative._list_lengths
 
 
 def allowed_numbers(case: dict) -> set[float]:
-    """问句、说明、表格、事实里出现过的数，阿拉伯数字与汉字数（「三个域」）都算；事实里各列表的项数也算。"""
-    text = " ".join([case["q"], case.get("note", ""), case.get("table", ""), json.dumps(case["facts"], ensure_ascii=False)])
-    allowed = {float(x) for x in re.findall(r"\d+(?:\.\d+)?", text)}
-    allowed |= {float(v) for v in (_cn_to_int(x) for x in _CN_NUM.findall(text)) if v is not None}
-    allowed |= {float(n) for n in _list_lengths(case["facts"])}
-    return allowed
-
-
-# 「这三张」「那五家」照查；「这两张」本句前文用「和」「与」「、」点过名时指那两项，不查，否则照查
-# （设计稿 §8.3，G4a 评审 I7、复评「小」）
-_CN_NUM_CLAIM = re.compile(r"(?<![这那])" + _CN_NUM.pattern)
-_CN_NUM_AFTER_DEM = re.compile(r"(?<=[这那])([两三四五六七八九十][零一二两三四五六七八九十]*)(?=[张个条起项家类次天倍名成])")
-
-
-def _demonstrative_values(plain: str) -> list[int]:
-    out = []
-    for m in _CN_NUM_AFTER_DEM.finditer(plain):
-        if m.group(1) == "两" and re.search(r"[和与、]", plain[:m.start()]):
-            continue
-        v = _cn_to_int(m.group(1))
-        if v is not None:
-            out.append(v)
-    return out
-# 约数与比值的说法：只能是模型自己算的，事实里没有同样的说法就删句
-_APPROX = re.compile(r"[\d一二两三四五六七八九十]+(?:\.\d+)?\s*(?:倍|成(?![为功本品果立员熟型绩长交都分])|个?百分点)"
-                     r"|翻倍|翻了?[一两]?[番倍]|(?:一|过|近|大|超过?|将近|接近)半(?![年月天])|半数|[上中下]旬")
-# 日期：年、月、日要在事实里出现过，或落在事实给的起止范围内
-_DATE_TOKEN = re.compile(r"(\d{4})\s*年|(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号])?")
-_SRC_DATE = re.compile(r"(\d{4})-(\d{1,2})(?:-(\d{1,2}))?")
-_SRC_RANGE = re.compile(r"(\d{4})-(\d{1,2})(?:-\d{1,2})?\s*(?:至|到|~|-)\s*(\d{4})-(\d{1,2})")
-# 点名的机型、工厂、部门、供应商、系列要在事实、表格或问句里出现（人员与常用词撞名，不查）
-_ENTITY_KINDS = ("机型", "系列", "加工厂", "部门", "供应商")
-
-
-def _date_sources(source: str) -> tuple[set[int], set[int], set[int]]:
-    years = {int(y) for y in re.findall(r"(\d{4})\s*年", source)}
-    months = {int(m) for m in re.findall(r"(?<!\d)(\d{1,2})\s*月", source)}
-    days = {int(d) for d in re.findall(r"(?<!\d)(\d{1,2})\s*[日号]", source)}
-    for y, m, d in _SRC_DATE.findall(source):
-        years.add(int(y))
-        months.add(int(m))
-        if d:
-            days.add(int(d))
-    for y1, m1, y2, m2 in _SRC_RANGE.findall(source):
-        start, end = int(y1) * 12 + int(m1) - 1, int(y2) * 12 + int(m2) - 1
-        for k in range(start, min(end, start + 36) + 1):
-            years.add(k // 12)
-            months.add(k % 12 + 1)
-    return years, months, days
-# 「前两名」「前 3 名」「第三名」是表格里的名次；「A 和 B 两类」数的是本句刚点过名的几项。都不是统计出来的数，不查。
-# 「第 N 名」只在 N 不超过事实里最长的列表时不查（T10）：排名表只有 3 行却说「第五名」，照查
-_ORDINAL = re.compile(r"前\s*(?:\d+|[两三四五六七八九十]+)\s*[名位]")
-_NTH = re.compile(r"第\s*(\d+|[一二两三四五六七八九十]+)\s*[名位]")
-_ENUM_TWO = re.compile(r"([^，。；]*[和与、][^，。；]*?)两(?=[个类张家项名])")
-
-
-def _ordinal_free(sentence: str, max_rank: int = 0) -> str:
-    def nth(m: re.Match) -> str:
-        raw = m.group(1)
-        n = int(raw) if raw.isdigit() else _cn_to_int(raw)
-        return "" if n is not None and 1 <= n <= max_rank else m.group(0)
-
-    return _ENUM_TWO.sub(r"\1", _NTH.sub(nth, _ORDINAL.sub("", sentence)))
+    """问句、说明、表格、事实里出现过的数；事实里各列表的项数也算。"""
+    return _narrative.allowed_numbers(case["q"], case.get("note"), case.get("table"), case["facts"])
 
 
 def check_narrative(case: dict, text: str) -> dict:
-    from prematch import find_entities
+    import mockdata
 
-    allowed = allowed_numbers(case)
-    max_rank = max(_list_lengths(case["facts"]), default=0)
-    body = scoring._THINK.sub("", text or "")
-    sentences = [s for s in re.split(r"[。！？；\n]+", body) if s.strip()]
-    raw_source = " ".join([case["q"], case.get("note", ""), case.get("table", ""),
-                           json.dumps(case["facts"], ensure_ascii=False)])
-    source = raw_source.upper()
-    years, months, days = _date_sources(raw_source)
-    with_numbers, bad = 0, []
-    for s in sentences:
-        found: list[Any] = []
-        # 日期单独查，查过的从句子里去掉，免得年月日里的数再按「数」查一遍
-        for m in _DATE_TOKEN.finditer(s):
-            y, mo, d = m.group(1), m.group(2), m.group(3)
-            if (y and int(y) not in years) or (mo and int(mo) not in months) or (d and int(d) not in days):
-                found.append(m.group(0).replace(" ", ""))
-        plain = _DATE_TOKEN.sub(" ", s)
-        free = _ordinal_free(plain, max_rank)
-        values = [float(x) for x in _NUM.findall(free)]
-        values += [v for v in (_cn_to_int(x) for x in _CN_NUM_CLAIM.findall(free)) if v is not None]
-        values += _demonstrative_values(plain)
-        if values or _DATE_TOKEN.search(s):
-            with_numbers += 1
-        found += [v for v in values if not any(abs(v - a) < 1e-9 for a in allowed)]
-        found += [m.group(0) for m in _APPROX.finditer(s) if m.group(0) not in raw_source]
-        if found:
-            bad.append({"句子": s.strip(), "事实里没有的数": found})
-    # 问题编号里的数字不在上面查（前面紧挨字母），单独查：正文里点名的单号必须出现在问句、表格或事实里（设计稿 §8.3）
-    for s in sentences:
-        fake = [n for n in _ISSUE_NO.findall(s) if n.upper() not in source]
-        fake += [name for name, kinds, _ in find_entities(s)
-                 if any(k.startswith(_ENTITY_KINDS) for k in kinds) and name.upper() not in source]
-        if fake:
-            bad.append({"句子": s.strip(), "事实里没有的数": fake})
-    # 线上按设计会把含出处不明数字的句子删掉：首句（直接回应用户的那句）被删、或删完剩不下几句，回答就残了
-    bad_set = {b["句子"] for b in bad}
-    first_bad = bool(sentences) and sentences[0].strip() in bad_set
-    return {"sentences": len(sentences), "with_numbers": with_numbers, "bad": bad,
-            "leaks": _LEAK.findall(body), "chars": len(body),
-            "first_bad": first_bad, "left": len(sentences) - len(bad_set)}
+    return _narrative.check(case["q"], case.get("note"), case.get("table"), case["facts"], text, mockdata.CATALOG)
 
 
 async def run_narrative(caller: Caller, case: dict, group: str) -> dict:

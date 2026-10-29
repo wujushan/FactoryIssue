@@ -255,6 +255,20 @@ def domains() -> tuple[DomainInfo, ...]:
     )
 
 
+@cache
+def problem_types() -> dict[str, tuple[str, ...]]:
+    """总述「跨域归并」的问题类型表：类型 → 有这个类型的域（「国内」「巴西」「海外」）。"""
+    where = f"{_SUMMARY}「跨域归并」"
+    body = section(read(_SUMMARY), "### 跨域归并", where=where)
+    table = table_with_header(body, ("问题类型", "国内", "巴西", "海外"), where=where)
+    out: dict[str, tuple[str, ...]] = {}
+    for name, *marks in table.rows:
+        if any(m not in ("✓", _EMPTY_CELL) for m in marks):
+            raise LandedParseError(f"{where}「{name}」一行只能写 ✓ 或 —")
+        out[name] = tuple(d for d, m in zip(table.header[1:], marks, strict=True) if m == "✓")
+    return out
+
+
 # ---------------------------------------------------------------- 三份配置默认值的原文
 
 
@@ -346,6 +360,7 @@ def _parse_all() -> None:
     _clarify_rows()
     _analysis_rows()
     domains()
+    problem_types()
     table_docs()
 
 

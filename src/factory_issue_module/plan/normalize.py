@@ -3,7 +3,7 @@
 规则编号同设计 §5.3：
 - 不改口径、直接改写：第 1 条话题范围（`topic_scope`）；第 2 条合并重复统计；第 3 条追问与取数混在一起时只留追问；
   第 4 条写法统一；第 5 条后半「沿用的清单并进后一步」（`fold_previous_list`）；第 6 条检索文字里去掉条件值。
-  第 5 条前半「详情并进前一步」在执行层（S2 起）。
+  第 5 条前半「详情并进前一步」在执行层（S4 随详情接上）。
 - 改口径、判据可证明：第 7 条名字归类；第 8 条写成时间的状态改回条件；第 9 条「X 各款」；第 10 条栏目要点名；
   第 11 条安全问题两路；第 17 条汇总缺时间改为追问；第 18 条上一轮没有结果时「其中」改为追问。
 - 校验、打回重写：第 12 条格式在 `plan/schema.py`；第 7 条的校验一半、第 13、14、15 条在 `tagged_checks`
@@ -827,6 +827,23 @@ def time_checks(steps: list[dict], query: str, today: date) -> list[str]:
             if not any(timespan.same_time(p, s, today) for s in said)]
 
 
+def basis_mismatches(plan: dict, query: str) -> list[tuple[str, str, str, str]]:
+    """第 13 条：[(步骤编号, 时间原话, 计划里的日期依据, 问句里紧跟的事件词定的依据)]。
+
+    校验与执行共用：修一次仍不一致时按计划执行，开头写明按什么日期理解，并给另一种理解的按钮（S2 起）。
+    """
+    out: list[tuple[str, str, str, str]] = []
+    for s in [s for s in plan.get("steps") or [] if isinstance(s, dict)]:
+        for t in _as_list((s.get("params") or {}).get("time")):
+            if not isinstance(t, dict) or not t.get("said"):
+                continue
+            hit = _event_basis(query, str(t["said"]))
+            basis = str(t.get("basis") or "建单")
+            if hit and norm(basis) != norm(hit):
+                out.append((str(s.get("id")), str(t["said"]), basis, hit))
+    return out
+
+
 def tagged_checks(
     plan: dict, query: str, entities: Mapping[str, Sequence[str]], today: date | None = None
 ) -> list[tuple[int, str]]:
@@ -836,13 +853,8 @@ def tagged_checks(
     """
     errors: list[tuple[int, str]] = []
     steps = [s for s in plan.get("steps") or [] if isinstance(s, dict)]
-    for s in steps:
-        for t in _as_list((s.get("params") or {}).get("time")):
-            if not isinstance(t, dict) or not t.get("said"):
-                continue
-            hit = _event_basis(query, str(t["said"]))
-            if hit and norm(t.get("basis") or "建单") != norm(hit):
-                errors.append((13, f"问句里「{t['said']}」后面是「{hit}」这件事，{s.get('id')} 这项时间的日期依据应为{hit}"))
+    for sid, said, _basis, hit in basis_mismatches(plan, query):
+        errors.append((13, f"问句里「{said}」后面是「{hit}」这件事，{sid} 这项时间的日期依据应为{hit}"))
     if any(s.get("skill") in ("introduce", "clarify") for s in steps):
         return errors
     errors += [(7, e) for e in _class_checks(steps, query)]

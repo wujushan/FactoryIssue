@@ -280,6 +280,25 @@ def make_harness(
                    workspace=ws, config=config, files=files, retrieval=retrieval)
 
 
+def data_queries(harness: Harness) -> list[Query]:
+    """取业务数据的 SQL：各域主表、子表（连主表的）、待办任务、存货、CAR 报告。
+
+    不含规划前取的主数据（机型取值清单、部门、工厂、供应商、按姓名取人，`domains/shared.py`）：那是第 4–6 步
+    对库要的取值清单，不算「取数」。
+    """
+    from factory_issue_module.declarations import CAR_TABLE, DOMAINS, TASK_TABLE
+
+    masters = {table_tail(d.master_table) for d in DOMAINS}
+    subs = {table_tail(t) for d in DOMAINS for t in d.sub_tables}
+    others = {table_tail(TASK_TABLE), table_tail(CAR_TABLE), "Inventory"}
+    out = []
+    for q in harness.queries:
+        head = q.tables[0] if q.tables else ""
+        if head in masters or head in others or (head in subs and " JOIN " in q.sql.upper()):
+            out.append(q)
+    return out
+
+
 async def run(harness: Harness, query: str) -> list[Any]:
     from forge_core.module import ModuleRequest
 

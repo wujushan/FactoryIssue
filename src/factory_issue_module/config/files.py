@@ -1,4 +1,6 @@
-"""配置文件（设计 §11）：五份 `config_files` 的解析、校验、缓存与回退。
+"""配置文件（设计 §11）：六份 `config_files` 的解析、校验、缓存与回退。
+
+`link_sites.toml`（本环境 INFO 站点地址）随环境不同，没有内置默认值，没传时不生成链接。
 
 - 上传的内容与内置默认值走同一套解析函数；`validate_config()` 就是「解析一遍，出错即拒绝保存」，
   报错文字原样显示在 Console 的上传框里，所以都写成管理员看得懂的话。
@@ -10,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -24,6 +27,7 @@ from factory_issue_module.declarations import (
     ANSWER_PARAMS,
     DEPT_ALIASES,
     FACTORY_REGIONS,
+    LINK_SITES,
     SEGMENTATION,
     TOPIC_TERMS,
 )
@@ -101,6 +105,15 @@ class NameTable:
     def items_of(self, name: str) -> tuple[str, ...] | None:
         key = compact(name)
         return next((items for n, items in self.entries if compact(n) == key), None)
+
+
+@dataclass(frozen=True)
+class LinkSites:
+    """本环境 INFO 站点的地址（`link_rules.md`）：`https://主机名[:端口]` 形式，没配为 None（不生成链接）。"""
+
+    issue: str | None = None
+    brazil: str | None = None
+    attachment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -344,6 +357,40 @@ def answer_params_from(data: Mapping[str, Any]) -> AnswerParams:
     return AnswerParams(**ints, rerank_score_threshold=threshold, custom_stats_enabled=enabled)
 
 
+#: issue 必须先列：brazil、attachment 不写时与它相同
+_SITE_KEYS = ("issue", "brazil", "attachment")
+_SITE = re.compile(r"^(?:(?P<scheme>https?)://)?(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?)(?::(?P<port>\d{1,5}))?$")
+
+
+def _site(key: str, value: Any) -> str:
+    """站点地址 → `scheme://主机名[:端口]`；没写协议按 https（`link_rules.md`）。"""
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigFormatError(f"{key} 要写站点地址的字符串，如 {key} = \"info.example.com\"，现在是 {value!r}")
+    text = value.strip()
+    if text.endswith("/"):
+        raise ConfigFormatError(f"{key} 末尾不要带 /：{text}")
+    m = _SITE.match(text)
+    if m is None:
+        raise ConfigFormatError(
+            f"{key} 只写主机名（可带端口），不写路径与参数，如 info.example.com 或 10.1.2.3:8080；现在是 {text}"
+        )
+    port = m.group("port")
+    if port is not None and not 0 < int(port) <= 65535:
+        raise ConfigFormatError(f"{key} 的端口 {port} 不在 1–65535 之间")
+    return f"{m.group('scheme') or 'https'}://{m.group('host')}" + (f":{port}" if port else "")
+
+
+def parse_link_sites(text: str) -> LinkSites:
+    return link_sites_from(_toml(text))
+
+
+def link_sites_from(data: Mapping[str, Any]) -> LinkSites:
+    _only_keys("", data, _SITE_KEYS)
+    sites = {k: _site(k, data[k]) for k in _SITE_KEYS if k in data}
+    issue = sites.get("issue")
+    return LinkSites(issue=issue, brazil=sites.get("brazil", issue), attachment=sites.get("attachment", issue))
+
+
 # ---------------------------------------------------------------- 槽位、默认值、读取
 
 
@@ -361,6 +408,8 @@ SLOTS: dict[str, _Slot] = {
         parse_factory_regions, parse_factory_regions(defaults.factory_regions_text())
     ),
     ANSWER_PARAMS: _Slot(parse_answer_params, answer_params_from({})),
+    #: 站点地址随环境不同，没有内置默认值：没传时不生成链接
+    LINK_SITES: _Slot(parse_link_sites, link_sites_from({})),
 }
 
 _cache: dict[tuple[str, int], Any] = {}

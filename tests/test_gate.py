@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 import scopes
-from fakes import MANIFEST, make_harness, run
+from fakes import MANIFEST, data_queries, make_harness, run
 from forge_core.events import EventType
 
 from factory_issue_module import landed
@@ -131,7 +131,7 @@ async def test_partial_domain_planner_call_failed_answers_not_understood_with_bu
     events = await run(h, "上个月国内的问题有哪些")
     assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS]
     assert errors.NOT_UNDERSTOOD in _text(events)
-    assert h.queries == [] and len(h.llm.calls) == 1
+    assert data_queries(h) == [] and len(h.llm.calls) == 1
 
 
 # ---------------------------------------------------------------- 能力介绍的组成（J-P04 的有权一半在 S1 经规划器）

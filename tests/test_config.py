@@ -16,6 +16,7 @@ from factory_issue_module.declarations import (
     ANSWER_PARAMS,
     DEPT_ALIASES,
     FACTORY_REGIONS,
+    LINK_SITES,
     SEGMENTATION,
     TOPIC_TERMS,
 )
@@ -32,12 +33,13 @@ def validate(name: str, text: str) -> None:
 # ---------------------------------------------------------------- 内置默认值与源文件一致
 
 
-def test_declared_config_files_are_the_five_slots():
+def test_declared_config_files_are_the_six_slots():
     assert [s.name for s in MANIFEST.config_files] == [
-        TOPIC_TERMS, SEGMENTATION, DEPT_ALIASES, FACTORY_REGIONS, ANSWER_PARAMS,
+        TOPIC_TERMS, SEGMENTATION, DEPT_ALIASES, FACTORY_REGIONS, ANSWER_PARAMS, LINK_SITES,
     ]
     assert set(files.SLOTS) == {s.name for s in MANIFEST.config_files}
-    assert not any(s.required for s in MANIFEST.config_files)
+    # 只有站点地址标必填：它随环境不同、没有内置默认值，没传时平台启动告警一次（不阻断）
+    assert [s.name for s in MANIFEST.config_files if s.required] == [LINK_SITES]
 
 
 def test_topic_terms_default_is_the_landed_list():
@@ -223,6 +225,36 @@ def test_answer_params_accepts_and_rejects():
     ]:
         with pytest.raises(ConfigFormatError, match=message):
             validate(ANSWER_PARAMS, text)
+
+
+def test_link_sites_default_is_empty_no_link():
+    assert files.default(LINK_SITES) == files.LinkSites()
+
+
+def test_link_sites_accepts_host_port_and_scheme():
+    s = files.parse_link_sites('issue = "info.example.test"\n')
+    assert s == files.LinkSites("https://info.example.test", "https://info.example.test", "https://info.example.test")
+    s = files.parse_link_sites('issue = "10.1.2.3:8080"\nbrazil = "http://br.example.test"\n')
+    assert (s.issue, s.brazil, s.attachment) == ("https://10.1.2.3:8080", "http://br.example.test",
+                                                 "https://10.1.2.3:8080")
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ('issue = "info.example.test/"\n', "末尾"),
+        ('issue = "info.example.test/#/QualityManage"\n', "不写路径"),
+        ('issue = "ftp://info.example.test"\n', "不写路径"),
+        ('issue = "info.example.test:70000"\n', "端口"),
+        ('issue = ""\n', "字符串"),
+        ("issue = 1\n", "字符串"),
+        ('site = "info.example.test"\n', "不认识"),
+        ('issue = \n', "TOML"),
+    ],
+)
+def test_link_sites_rejects(text, message):
+    with pytest.raises(ConfigFormatError, match=message):
+        validate(LINK_SITES, text)
 
 
 def test_unknown_config_name_is_not_rejected():

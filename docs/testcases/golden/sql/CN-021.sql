@@ -4,10 +4,11 @@
 -- 对应断言：docs/testcases/golden/cases.json 里同编号的 expect
 
 -- 建单时间 [2025-01-01, 2026-01-01)；机型完整名称等于 A920。
+-- 「发生时间」= 现场发现日期（决策 2026-10-29「发生时间按现场发现日期」），只作展示列；「2025 年」仍按建单时间筛。
 -- 责任人：硬件/软件/结构/制程优化→环节 3；物料→10；资料→4；工厂制程→6。
 -- 同一环节最新一条：操作时间最晚，同一时间取后录入（ID 较大）。
 -- 结案后改过问题分类时改按原问题类型取，该分支无真实样本，不在本 SQL 里分叉。
-SELECT p.Numbers, p.ProblemType, p.AddDate, owner.AddUser
+SELECT p.Numbers, p.ProblemType, p.FoundDate, p.AddDate, owner.AddUser
 FROM CoreINFO.dbo.ZCTracking_ProblemList AS p
 OUTER APPLY (
     SELECT TOP (1) s.AddUser

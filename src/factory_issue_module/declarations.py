@@ -163,6 +163,7 @@ SEGMENTATION = "segmentation.toml"
 DEPT_ALIASES = "dept_aliases.md"
 FACTORY_REGIONS = "factory_regions.md"
 ANSWER_PARAMS = "answer_params.toml"
+LINK_SITES = "link_sites.toml"
 
 CONFIG_FILES: list[ConfigFileSpec] = [
     ConfigFileSpec(
@@ -196,5 +197,15 @@ CONFIG_FILES: list[ConfigFileSpec] = [
             "judge_max（「可能相关」每域最多判断几张）、rerank_max（每域最多重排几张）、"
             "rerank_score_threshold（重排分阈值，不写即不启用）、custom_stats_enabled（是否允许临时统计）"
         ),
+    ),
+    ConfigFileSpec(
+        name=LINK_SITES,
+        description=(
+            "本环境 INFO 站点的地址，用来生成问题编号、CAR 报告、附件的跳转链接；测试环境与正式环境各传各的。"
+            "TOML：issue = \"主机名\"（国内、海外制程单与国内 CAR 报告页面）；brazil（巴西制程单）、"
+            "attachment（附件预览）两项不写时与 issue 相同。值写主机名，可带端口，不带末尾的 /；"
+            "站点只有 http 时写成 http://主机名。没传时不生成链接，问题编号照常显示为文字"
+        ),
+        required=True,
     ),
 ]

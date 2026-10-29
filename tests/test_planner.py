@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 import scopes
-from fakes import MANIFEST, make_harness, run
+from fakes import MANIFEST, data_queries, make_harness, run
 from forge_core.events import EventType
 
 from factory_issue_module.config import files
@@ -125,7 +125,7 @@ async def test_rule_hits_are_returned():
 def test_system_has_no_date_and_is_cached():
     system = prompt.planner_system(MANIFEST, TOPICS)
     assert system is prompt.planner_system(MANIFEST, TOPICS)
-    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.1"
+    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.2"
     assert "一部今年有哪些问题" in system
 
 
@@ -221,7 +221,7 @@ async def test_jp04_partial_domain_greeting_via_planner():
     assert text.count(errors.APPLY_TO_VIEW) == 2 and "国内" in text
     for rec in events[1].data["recommendations"]:
         assert "巴西" not in rec["query"] and "海外" not in rec["query"]
-    assert h.queries == [] and len(h.llm.calls) == 1
+    assert data_queries(h) == [] and len(h.llm.calls) == 1
 
 
 @pytest.mark.parametrize(("kind", "answer"), [("只读请求", errors.READ_ONLY), ("超出范围", errors.OUT_OF_SCOPE)])
@@ -229,7 +229,7 @@ async def test_introduce_out_of_scope(kind: str, answer: str):
     h = make_harness(scopes.account_jia(), llm_replies=[plan_of(step("introduce", kind=kind))])
     events = await run(h, "帮我把 ZC9910001 结案")
     assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS] and answer in _text(events)
-    assert h.queries == []
+    assert data_queries(h) == []
 
 
 async def test_model_clarify_is_one_clarify_event():
@@ -254,14 +254,16 @@ async def test_unknown_time_clarifies_without_fetching():
     h = make_harness(scopes.account_jia(), llm_replies=[reply])
     events = await run(h, "国庆以来国内有多少单")
     assert _types(events) == [EventType.CLARIFY] and "国庆以来" in events[0].data["question"]
-    assert h.queries == []
+    assert data_queries(h) == []
 
 
-async def test_executable_skill_answers_not_ready_until_s2():
-    h = make_harness(scopes.account_jia(), llm_replies=[LIST_LAST_MONTH])
-    events = await run(h, "上个月国内的问题有哪些")
+async def test_skill_not_yet_wired_answers_not_ready():
+    """详情、按号查单、文字查找随 S3–S6 接上；在那之前答「暂时还答不了」，不取业务数据。"""
+    reply = plan_of(step("text_search", mode="关键词", terms=["花屏"]))
+    h = make_harness(scopes.account_jia(), llm_replies=[reply])
+    events = await run(h, "搜一下花屏")
     assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS] and errors.NOT_READY in _text(events)
-    assert h.queries == []
+    assert data_queries(h) == []
 
 
 async def test_rule18_reads_last_from_workspace_and_history():

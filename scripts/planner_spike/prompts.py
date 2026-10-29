@@ -1,8 +1,8 @@
 """规划器实测用的提示词。规划、写分析、反思、临时统计四种调用各一套。
 
-- 业务口径的信源是 docs/2_landed：术语表、说法清单、初步分析维度在运行时从那里读，不在这里复写。
+- 业务口径的信源是 docs/2_landed：术语表、说法清单、初步分析维度由 src 在导入时从那里读，这里不复写。
 - 规划提示 S1 起由 `src/factory_issue_module/plan/prompt.py` 持有（设计 §1.3 末条），这里只转接；
-  写分析、反思、临时统计三套仍在这里，随 G4b 各片迁到 src。
+  写分析 S2 起同样由 `src/factory_issue_module/present/narrative.py` 持有；反思、临时统计两套仍在这里，随 S7 迁到 src。
 - 规划提示只拼术语表（`glossary_section`），不拼「必要澄清项」：那张表里重名、多工厂、系列对不上等
   情形要查库才知道，由程序判断，交给模型只会让它乱追问。
 - 平台红线段由 `forge_platform.policy.PolicyLLM` 并进首条 system，与线上 `ctx.llm` 完全一样（见 spike.py）。
@@ -13,18 +13,16 @@ from __future__ import annotations
 import json
 import re
 
-from forge_core.module import AnalysisDimension, GlossaryTerm, ModuleManifest
-from forge_core.prompting import analysis_section
 
 from factory_issue_module.config import files as _config_files
 from factory_issue_module.declarations import TOPIC_TERMS
 from factory_issue_module.module import FactoryIssueModule
 from factory_issue_module.plan import prompt as _plan_prompt
+from factory_issue_module.present import narrative as _narrative
 from factory_issue_module.plan.schema import (  # noqa: F401  scoring 从这里取枚举
     BASES, FILTER_FIELDS, GROUP_DIMS, METRICS, OPS, REF_OUTPUTS, SKILLS, SORT_FIELDS, SORT_ORDERS, TEXT_MODES,
 )
 
-from common import LANDED
 
 # p0 → p1（2026-10-27，按 p0 实测的固定错法改）：话题范围改由程序对照话题清单判断，模型不再填；
 # 加 approach（问做法时用户说的具体做法）；补结案日期、「X 各型号」、同一统计不拆步、
@@ -63,43 +61,6 @@ def _md_table(md: str, heading: str) -> list[list[str]]:
             continue
         rows.append(cells)
     return rows[1:]  # 去掉表头
-
-
-def load_glossary() -> list[GlossaryTerm]:
-    md = (LANDED / "glossary.md").read_text(encoding="utf-8")
-    terms: list[GlossaryTerm] = []
-    for line in md.splitlines():
-        s = line.strip()
-        if not s.startswith("|") or s.startswith("| 规范词") or set(s) <= set("|-: "):
-            continue
-        cells = [c.strip() for c in s.strip("|").split("|")]
-        if len(cells) < 3:
-            continue
-        aliases = [] if cells[1] in ("", "—", "-") else [a.strip() for a in cells[1].split("、") if a.strip()]
-        terms.append(GlossaryTerm(term=cells[0], aliases=aliases, definition=cells[2]))
-    return terms
-
-
-_CHART = {"柱状": "bar", "饼图": "pie", "折线": "line"}
-
-
-def load_analysis_dimensions() -> list[AnalysisDimension]:
-    md = (LANDED / "business_description.md").read_text(encoding="utf-8")
-    dims = []
-    for cells in _md_table(md, "## 初步分析维度"):
-        if len(cells) >= 3:
-            dims.append(AnalysisDimension(name=cells[0], description=cells[1], chart=_CHART.get(cells[2], "")))
-    return dims
-
-
-def draft_manifest() -> ModuleManifest:
-    """实测用的 manifest 草案：只填提示要用的三项，其余随 G4b。"""
-    return ModuleManifest(
-        code="FACTORY_ISSUE",
-        name="制程问题查询助手",
-        glossary=load_glossary(),
-        analysis_dimensions=load_analysis_dimensions(),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -179,37 +140,17 @@ def repair_user(errors: list[str]) -> str:
 # 写分析
 # ---------------------------------------------------------------------------
 
-NARRATIVE_MODULE_SYSTEM = """你是「制程问题查询助手」的回答撰写人。程序已经查好数据、算好数字，并已把表格和图表展示给用户。你只写表格下面的一段分析文字。
-
-要求：
-1. 第一句直接回应用户的问题：有几张、有没有、哪个最多、是否增加。
-2. 只能使用【事实】里出现的数字，不自己做任何计算：不求和、不求差、不算百分比、不数行数。事实里没有的数字就不说。下面几种也算自己计算，不要写：
-   - 把几项加起来说（「两类合计七成以上」「后三类不足四分之一」）；
-   - 自己定一个整数当门槛（「连续三个月 30 单以上」「均超过 10 单」「超过一半」）；
-   - 换算单位（把「91 天及以上」说成「超过三个月」）。
-   要说集中程度时，用【事实】里给的占比或合计；没有就只说「主要集中在物料问题和硬件问题」，不带数。
-   - 「一半」「三成」「翻倍」「几个百分点」这类约数与比值，【事实】里没有同样的说法就不写；
-   - 日期只用【事实】里的年、月、日，不写「中旬」「月初」这类更细的说法。
-3. 说重点：集中在哪、最需要关注的是哪几张（点名问题编号）、一句结论。不要把表格逐行复述。点名的机型、系列、工厂、部门只用【事实】或表格里出现过的，不自己归纳（如把几个机型说成「A 系列」）。
-4. 用业务说法，不出现英文代码、数据库表名或字段名。
-5. 不写统计口径，程序会另附。
-6. 写 3 到 6 句话，不用标题，不用列表，不用 Markdown。
-7. 【说明】里有程序做过的调整（如放宽了时间范围、按什么理解），要在开头一句说清楚。"""
+# 写分析的提示 S2 起由 src 持有（`factory_issue_module.present.narrative`，设计 §8.3），这里只转接；
+# system 与迁移前 spike 自己拼的逐字相同（迁移时核对过）。
+NARRATIVE_MODULE_SYSTEM = _narrative.NARRATIVE_MODULE_SYSTEM
 
 
 def narrative_system() -> str:
-    return NARRATIVE_MODULE_SYSTEM + "\n\n" + analysis_section(draft_manifest())
+    return _narrative.narrative_system(FactoryIssueModule.manifest)
 
 
 def narrative_user(case: dict) -> str:
-    parts = [f"【用户问题】{case['q']}"]
-    table = case.get("table")
-    if table:
-        parts.append(f"【已展示的表格】{table}")
-    if case.get("note"):
-        parts.append(f"【说明】{case['note']}")
-    parts.append("【事实】" + json.dumps(case["facts"], ensure_ascii=False))
-    return "\n".join(parts)
+    return _narrative.narrative_user(case["q"], case.get("table"), case.get("note"), case["facts"])
 
 
 # ---------------------------------------------------------------------------
