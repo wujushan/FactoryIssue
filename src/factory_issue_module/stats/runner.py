@@ -26,6 +26,8 @@ LIB_FILES = (
     "stats/lib/common.py",
     "stats/lib/views.py",
     "stats/lib/derive_domestic.py",
+    "stats/lib/derive_brazil.py",
+    "stats/lib/derive_overseas.py",
     "stats/lib/domains.py",
 )
 TASK_FILES = {"list": "stats/tasks/list.py", "aggregate": "stats/tasks/aggregate.py"}

@@ -20,13 +20,14 @@ from factory_issue_module.turn import errors
 NARR = "共 4 张，硬件问题最多。其中未结案 3 张。"
 
 
-async def test_m1_only_brazil_before_s3_is_not_a_failed_turn():
-    """M1：巴西适配器 S3 才接上；三域都有权、只问巴西时答「暂时还答不了」并附按钮，不发整轮失败。"""
+async def test_m1_only_brazil_is_answered_by_the_brazil_adapter():
+    """M1：S2 时只问巴西答「暂时还答不了」；S3 接上巴西适配器后照常查，查不到时答没有查到单，不发整轮失败。"""
     reply = plan(step("list_issues", domains={"value": ["巴西"], "from": "user"}, time=RECENT30))
     h, events = await _go("近 30 天巴西的问题有哪些", [reply], privileges=scopes.GREEN)
     assert EventType.ERROR not in _types(events)
-    assert errors.NOT_READY in _text(events)
-    assert _types(events)[-1] is EventType.SUGGESTIONS
+    text = _text(events)
+    assert errors.NOT_READY not in text and "巴西" in text and "没有查到单" in text
+    assert any(q.tables[0] == "BrazilProblemList" for q in h.queries if q.tables)
 
 
 async def test_m2_overview_caliber_defines_closed_and_stopped():

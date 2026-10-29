@@ -1,5 +1,5 @@
 """一轮的编排（设计 §4.2）。S1 接上第 1–7 步；S2 接上国内清单与统计的第 6、8、9 步（`turn/execute.py`），
-其余技能随 S3–S6，写工作区随 S5。
+S3 接上巴西、海外与跨域合并；其余技能随 S4–S6，写工作区随 S5。
 
 1. 权限前置（`gate.resolve`）；拿不到可用的权限判断时按「没拿到权限」答，三个域都不出数。
 2. 代码先接住的两种，都不调模型、不取数：
@@ -34,7 +34,7 @@ from factory_issue_module.declarations import (
     LINK_SITES,
     TOPIC_TERMS,
 )
-from factory_issue_module.domains import domestic, shared
+from factory_issue_module.domains import base, shared
 from factory_issue_module.domains.base import Ask
 from factory_issue_module.plan import clarify, timespan
 from factory_issue_module.plan.planner import PlanInputs, Planner
@@ -130,8 +130,8 @@ async def run_turn(
     answer = await config_files.load(ctx, ANSWER_PARAMS)
     sites = await config_files.load(ctx, LINK_SITES)
     turn = execute.Turn(ctx=ctx, manifest=manifest, access=access, master=master, answer=answer,
-                        resolver=domestic.Resolver(master=master, dept_aliases=dept_aliases, regions=regions,
-                                                   entities=entities, today=today),
+                        resolver=base.Resolver(master=master, dept_aliases=dept_aliases, regions=regions,
+                                               entities=entities, today=today, query=request.query),
                         query=request.query, today=today, result=result, entities=entities, sites=sites)
     prepared = execute.prepare(result.plan, spans, turn)
     if isinstance(prepared, Ask):

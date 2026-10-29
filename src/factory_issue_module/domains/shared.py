@@ -1,11 +1,18 @@
-"""主数据（设计 §4.2 第 4–6 步、§6.2「主数据」、§6.5）。S2 只取国内的；巴西、海外随 S3。
+"""主数据（设计 §4.2 第 4–6 步、§6.2「主数据」、§6.5）。国内 S2；巴西、海外 S3。
 
 每轮规划之前按可查的域取一次，给三处用：
 - 规划器（`plan/planner.py::PlanInputs`）：`classes`（第 7 条名字归类：类 → 库里的名字，部门简称、国内工厂的地区
   说法也放进对应的类）、`entities`（第 15 条与对不上时的选项：名字 → 它在库里属于哪几类；类别列表里有「机型」
   的才参与机型校验）、`machines`（号码直通不把写了连字符的机型当 PN / PO）。
 - 第 6 步名字对库（`plan/names.py`）：机型、系列、工厂、部门、供应商的取值清单，人员按姓名另取。
-- 执行：部门、工厂、供应商整表都小，取一次当翻译表交给沙箱。
+- 执行：部门、工厂、供应商、产品整表都小，取一次当翻译表交给沙箱。
+
+各域取哪些（只取可查的域要用的）：
+- 国内：国内机型子表的机型与系列（去重）、国内工厂（`erp`）、供应商。
+- 巴西：产品主数据（大机型名称与系列，480 行）、巴西工厂（12 行）、供应商。
+- 海外：产品主数据、海外主表上出现过的加工厂（海外工厂直接存名称、是闭集，没有单独的工厂表；未删除的单）、
+  国内工厂（海外单上另记一列国内工厂）。
+- 部门三域共用。
 
 人员表 1.5 万行，不整表取：规划前只按问句里可能是人名的片段（2–4 个汉字的连续片段、英文词）取姓名完全相同的
 人；计划里沿用上一轮、问句里没有的姓名到第 6 步再按姓名取。某张表取不到（无权或出错）时当它是空的，记日志。
@@ -37,6 +44,9 @@ MODELS = "CoreINFO.dbo.ZCTracking_ProductNames"
 EMPLOYEE = "info.dbo.Employee"
 DEPARTMENT = "info.dbo.Department"
 VENDOR = "info.dbo.tbIQCvendor"
+PRODUCT = "info.dbo.ProductName"
+BR_FACTORY = "info.dbo.Brazil_Factory"
+OS_MAIN = Domain.OVERSEAS.master_table
 
 #: entities 里各类的叫法（「TT：巴西的加工厂」这类选项的后半句）；第 15 条只认「机型」这一项
 KIND_MACHINE = "机型"
@@ -45,6 +55,8 @@ KIND_DEPT = "部门"
 KIND_PERSON = "人员"
 KIND_SUPPLIER = "供应商"
 KIND_CN_FACTORY = "国内的加工厂"
+KIND_BR_FACTORY = "巴西的加工厂"
+KIND_OS_FACTORY = "海外的加工厂"
 
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff]{2,}")
 _WORD = re.compile(r"[A-Za-z][A-Za-z.\-']+")
@@ -61,10 +73,17 @@ class Person:
 @dataclass
 class MasterData:
     domains: frozenset[Domain] = frozenset()
+    #: 可查的域的机型名称合起来（规划器、号码直通用）；各域自己的在 `machines_of`
     machines: list[str] = field(default_factory=list)
     series: list[str] = field(default_factory=list)
+    #: 各域的机型、系列取值：国内取机型子表，巴西、海外取产品主数据（大机型）；海外系列不作查询条件
+    machines_of: dict[Domain, list[str]] = field(default_factory=dict)
+    series_of: dict[Domain, list[str]] = field(default_factory=dict)
     #: 国内工厂：(工厂码, 名称)；同名的几个码都在
     factories: list[tuple[str, str]] = field(default_factory=list)
+    #: 巴西工厂名称、海外单上出现过的加工厂名称
+    br_factories: list[str] = field(default_factory=list)
+    os_factories: list[str] = field(default_factory=list)
     departments: list[tuple[int, str]] = field(default_factory=list)
     #: 供应商：(编号, 名称)
     suppliers: list[tuple[str, str]] = field(default_factory=list)
@@ -72,13 +91,14 @@ class MasterData:
     #: 机型 → 它的系列（「A920 系列」对不上时说明 A920 属于哪个系列）
     machine_series: dict[str, str] = field(default_factory=dict)
     frames: dict[str, pd.DataFrame] = field(default_factory=dict)
-    #: 没取到的主数据（models、departments、factories、suppliers、people）：取数出错或无权。对库要用它时那一段
-    #: 答「这一部分暂时没查到」，不答成「没有找到这个名字」（设计 §14）
+    #: 没取到的主数据（models、products、factories、br_factories、os_factories、departments、suppliers、people）：
+    #: 取数出错或无权。对库要用它时那一段答「这一部分暂时没查到」，不答成「没有找到这个名字」（设计 §14）
     failed: set[str] = field(default_factory=set)
 
     # ------------------------------------------------------------------ 给规划器
 
     def factory_names(self) -> list[str]:
+        """国内工厂的名称（同名的码合成一个）。"""
         return base.unique(name for _code, name in self.factories)
 
     def dept_names(self) -> list[str]:
@@ -87,15 +107,22 @@ class MasterData:
     def supplier_names(self) -> list[str]:
         return base.unique(name for _code, name in self.suppliers)
 
+    def machines_in(self, domain: Domain) -> list[str]:
+        return self.machines_of.get(domain, [])
+
+    def series_in(self, domain: Domain) -> list[str]:
+        return self.series_of.get(domain, [])
+
     def classes(self, dept_aliases: NameTable | None, regions: NameTable | None) -> dict[str, list[str]]:
         """第 7 条：类 → 库里的名字（可查的域）。类名同 `plan/normalize.py::NAME_GROUPS`。"""
         factories = self.factory_names()
         if regions is not None and factories:
             factories += [name for name, _items in regions.entries]
+        factories += [*self.br_factories, *self.os_factories]
         depts = self.dept_names()
         if dept_aliases is not None and depts:
             depts += [item for _name, items in dept_aliases.entries for item in items]
-        return {"工厂": factories, "人": base.unique(p.name for p in self.people), "部门": depts,
+        return {"工厂": base.unique(factories), "人": base.unique(p.name for p in self.people), "部门": depts,
                 "供应商": self.supplier_names(), "系列": list(self.series)}
 
     def entities(self, dept_aliases: NameTable | None, regions: NameTable | None) -> dict[str, list[str]]:
@@ -113,6 +140,8 @@ class MasterData:
         put(self.factory_names(), KIND_CN_FACTORY)
         if regions is not None and self.factories:
             put((name for name, _items in regions.entries), KIND_CN_FACTORY)
+        put(self.br_factories, KIND_BR_FACTORY)
+        put(self.os_factories, KIND_OS_FACTORY)
         put(self.dept_names(), KIND_DEPT)
         if dept_aliases is not None and self.departments:
             put((item for _name, items in dept_aliases.entries for item in items), KIND_DEPT)
@@ -187,28 +216,65 @@ async def people_by_name(ctx: Any, names: Sequence[str], departments: Mapping[in
     return out
 
 
+def _texts(frame: pd.DataFrame | None, col: str) -> list[str]:
+    return base.unique(str(x).strip() for x in base.column(frame, col) if x is not None)
+
+
+def overseas_factory_spec() -> dict[str, Any]:
+    """海外加工厂的取值清单：海外主表上出现过的加工厂（未删除的单，去重）。"""
+    return {"source": INFO, "from": OS_MAIN, "select": ["Factory"], "distinct": True,
+            "filter": {"logic": "AND", "groups": [{"logic": "AND", "conditions": [
+                base.cond("IsDelete", "EQ", 0)]}]}}
+
+
 async def load(ctx: Any, domains: Iterable[Domain], query: str) -> MasterData:
-    """按可查的域取一次主数据（S2：国内）。"""
+    """按可查的域取一次主数据。"""
     doms = frozenset(domains)
     master = MasterData(domains=doms)
-    if Domain.DOMESTIC not in doms:
+    if not doms:
         return master
     bad = master.failed
-    models, depts, factories, vendors = await asyncio.gather(
-        _safe(ctx, "models", {"source": INFO, "from": MODELS, "select": ["ProductName", "Series"], "distinct": True},
-              bad),
-        _safe(ctx, "departments", {"source": INFO, "from": DEPARTMENT, "select": ["ID", "Name"]}, bad),
-        _safe(ctx, "factories", {"source": ERP, "from": FACTORY_TABLE, "select": ["FactoryID", "FactoryName"]}, bad),
-        _safe(ctx, "suppliers", {"source": INFO, "from": VENDOR, "select": ["ferpcode", "fname"]}, bad),
-    )
-    master.machines = base.unique(str(x).strip() for x in base.column(models, "ProductName") if x is not None)
-    master.series = base.unique(str(x).strip() for x in base.column(models, "Series") if x is not None)
-    for m, s in zip(base.column(models, "ProductName"), base.column(models, "Series"), strict=False):
-        if m is not None and s is not None and str(s).strip():
-            master.machine_series.setdefault(str(m).strip(), str(s).strip())
+    cn, br, os_ = Domain.DOMESTIC in doms, Domain.BRAZIL in doms, Domain.OVERSEAS in doms
+    wanted: dict[str, dict[str, Any]] = {
+        "departments": {"source": INFO, "from": DEPARTMENT, "select": ["ID", "Name"]},
+    }
+    if cn:
+        wanted["models"] = {"source": INFO, "from": MODELS, "select": ["ProductName", "Series"], "distinct": True}
+    if cn or os_:
+        wanted["factories"] = {"source": ERP, "from": FACTORY_TABLE, "select": ["FactoryID", "FactoryName"]}
+    if cn or br:
+        wanted["suppliers"] = {"source": INFO, "from": VENDOR, "select": ["ferpcode", "fname"]}
+    if br or os_:
+        wanted["products"] = {"source": INFO, "from": PRODUCT, "select": ["ID", "ProductName", "Series"]}
+    if br:
+        wanted["br_factories"] = {"source": INFO, "from": BR_FACTORY, "select": ["FactoryName"]}
+    if os_:
+        wanted["os_factories"] = overseas_factory_spec()
+    got = dict(zip(wanted, await asyncio.gather(*(_safe(ctx, k, s, bad) for k, s in wanted.items())), strict=True))
+    models, products = got.get("models"), got.get("products")
+    if cn:
+        master.machines_of[Domain.DOMESTIC] = _texts(models, "ProductName")
+        master.series_of[Domain.DOMESTIC] = _texts(models, "Series")
+    if br or os_:
+        names = _texts(products, "ProductName")
+        for d in (Domain.BRAZIL, Domain.OVERSEAS):
+            if d in doms:
+                master.machines_of[d] = names
+        if br:
+            master.series_of[Domain.BRAZIL] = _texts(products, "Series")
+    master.machines = base.unique(n for d in (Domain.DOMESTIC, Domain.BRAZIL, Domain.OVERSEAS)
+                                  for n in master.machines_of.get(d, []))
+    master.series = base.unique(n for d in (Domain.DOMESTIC, Domain.BRAZIL) for n in master.series_of.get(d, []))
+    for frame in (models, products):
+        for m, s in zip(base.column(frame, "ProductName"), base.column(frame, "Series"), strict=False):
+            if m is not None and s is not None and str(s).strip():
+                master.machine_series.setdefault(str(m).strip(), str(s).strip())
+    factories, depts, vendors = got.get("factories"), got["departments"], got.get("suppliers")
     master.factories = [(str(c).strip(), str(n).strip()) for c, n in
                         zip(base.column(factories, "FactoryID"), base.column(factories, "FactoryName"), strict=False)
                         if c is not None and n is not None]
+    master.br_factories = _texts(got.get("br_factories"), "FactoryName")
+    master.os_factories = _texts(got.get("os_factories"), "Factory")
     master.departments = [(i[0], str(n).strip()) for i, n in
                           ((base.int_keys([x]), y) for x, y in zip(base.column(depts, "ID"), base.column(depts, "Name"),
                                                                    strict=False))
@@ -216,6 +282,9 @@ async def load(ctx: Any, domains: Iterable[Domain], query: str) -> MasterData:
     master.suppliers = [(str(c).strip(), str(n).strip()) for c, n in
                         zip(base.column(vendors, "ferpcode"), base.column(vendors, "fname"), strict=False)
                         if c is not None and str(c).strip() and n is not None]
-    master.frames = {"departments": depts, "factories": factories, "vendors": vendors}
+    master.frames = {"departments": depts}
+    for name, frame in (("factories", factories), ("vendors", vendors), ("products", products)):
+        if frame is not None:
+            master.frames[name] = frame
     master.people = await people_by_name(ctx, name_candidates(query), dict(master.departments), master.failed)
     return master

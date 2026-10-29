@@ -10,7 +10,8 @@
 - 按钮形状：`suggestions` 与 `clarify` 的每个选项都是带 id、name、label、query 的对象，label 不超过 15 字。
 - 只有一条 system 且在最前：假模型每次调用都查（`fakes.FakeLLM.check_messages`），这里再兜一遍。
 
-盐值、密钥的片段不进日志（§9.1）随 S3、S4 用到它们时加进来；站点地址来自模块配置 `link_sites.toml`，不是凭据。
+- 巴西链接用的两项值（§9.1）的片段不进日志、不进事件，出错时日志只有异常类型（S3 起；附件摘要的盐值随 S4）。
+  站点地址来自模块配置 `link_sites.toml`，不是凭据。
 """
 
 from __future__ import annotations
@@ -19,9 +20,10 @@ import ast
 import re
 from pathlib import Path
 
-import cn_data
 import pytest
+import s3_data
 import scopes
+import structlog
 from fakes import MANIFEST, FakeLLM, Harness, make_harness, run
 from forge_core.events import Event, EventType
 
@@ -48,6 +50,7 @@ SCENARIOS: list[tuple[str, dict | None, str]] = [
 _CN = {"value": ["国内"], "from": "user"}
 _T30 = [{"said": "近 30 天", "basis": "建单", "from": "user"}]
 _NARR = "共 4 张，硬件问题最多。最需要关注的是 ZC9901001。"
+_SITES = 'issue = "info.test.local"'
 
 
 def _plan(skill: str, **params) -> dict:
@@ -70,6 +73,28 @@ EXEC_SCENARIOS: list[tuple[str, dict, str, list]] = [
     ("全放开·不点域", scopes.GREEN, "近 30 天的问题有哪些", [_plan("list_issues", time=_T30), _NARR]),
     ("国内·机型对不上", scopes.account_jia(), "国内 Z999 的问题",
      [_plan("list_issues", domains=_CN, filters=[{"field": "机型", "op": "是", "value": "Z999", "from": "user"}])]),
+    # S3：巴西、海外与跨域合并（三域假数据 `tests/s3_data.py`）
+    ("巴西清单·点名列", scopes.GREEN, "近 30 天巴西的单号、投诉单号、加工厂、跟进人、当前状态、当前责任人、PN",
+     [_plan("list_issues", domains={"value": ["巴西"], "from": "user"}, time=_T30,
+            columns=["单号", "投诉单号", "加工厂", "跟进人", "当前状态", "当前责任人", "PN"]), _NARR]),
+    ("海外清单·点名列", scopes.GREEN, "近 30 天海外的单号、物料、国内工厂、当前责任人、责任人",
+     [_plan("list_issues", domains={"value": ["海外"], "from": "user"}, time=_T30,
+            columns=["单号", "物料", "国内工厂", "当前责任人", "责任人"]), _NARR]),
+    ("巴西费用", scopes.GREEN, "近 30 天巴西花了多少美元、雷亚尔，扣款多少",
+     [_plan("aggregate", domains={"value": ["巴西"], "from": "user"}, time=_T30,
+            metrics=["费用美元", "费用雷亚尔", "扣款"]), _NARR]),
+    ("三域按类型", scopes.GREEN, "近 30 天按问题类型统计",
+     [_plan("aggregate", time=_T30, group_by=["问题类型"], metrics=["单数", "占比"]), _NARR]),
+    ("三域概况·不良率", scopes.GREEN, "近 30 天三个域多少单、不良率多少、多久结案",
+     [_plan("aggregate", time=_T30, metrics=["合计不良率", "结案周期"]), _NARR]),
+    ("三域按状态", scopes.GREEN, "近 30 天各状态多少单",
+     [_plan("aggregate", time=_T30, group_by=["状态"]), _NARR]),
+    ("三域对比时段", scopes.GREEN, "近 30 天与去年对比",
+     [_plan("aggregate", compare="时段", group_by=["问题类型"],
+            time=[{"said": "去年", "basis": "建单", "from": "user"}, {"said": "近 30 天", "basis": "建单",
+                                                                    "from": "user"}]), _NARR]),
+    ("三域·伊朗工厂", scopes.GREEN, "伊朗工厂的问题有哪些？",
+     [_plan("list_issues", filters=[{"field": "加工厂", "op": "是", "value": "伊朗工厂", "from": "user"}])]),
 ]
 
 
@@ -79,8 +104,8 @@ async def _all_events() -> list[tuple[str, Harness, list[Event]]]:
         h = make_harness(privileges, resolved=privileges is not None)
         out.append((name, h, await run(h, query)))
     for name, privileges, query, replies in EXEC_SCENARIOS:
-        h = make_harness(privileges, llm_replies=replies)
-        cn_data.load(h)
+        h = make_harness(privileges, llm_replies=replies, config_files={"link_sites.toml": _SITES})
+        s3_data.load(h)
         events = await run(h, query)
         assert any(e.type in (EventType.TABLE, EventType.CLARIFY) for e in events), name
         out.append((name, h, events))
@@ -314,3 +339,49 @@ def test_static_checks_catch_crafted_violations():
     assert lines == {"stats/custom.py:1", "stats/custom.py:2"}
     assert len(_raw_query_hits([("domains/x.py", bad)])) == 2
     assert _raw_query_hits([("jobs/x.py", bad)]) == []
+
+
+# ---------------------------------------------------------------- 巴西链接用的两项值不进日志（§9.1）
+
+#: 还没写进代码时用这一组测（不是十六进制字母，免得与链接里的结果偶然重合）
+_STAND_IN = (b"QxQyQzQwQvQuQtQsQrQqQpQoQnQmQlQk", b"ZyZxZwZvZuZtZsZr")
+
+
+def _fragments(pair: tuple[bytes, bytes], size: int = 6) -> list[str]:
+    out = []
+    for value in pair:
+        text = value.decode("ascii")
+        out += [text[i : i + size] for i in range(len(text) - size + 1)]
+    return out
+
+
+async def test_link_values_never_reach_logs_or_events(monkeypatch, caplog, capsys):
+    """巴西链接：走正常路径与出错路径各一次，日志（structlog、标准 logging、标准输出）与事件里都没有这两项值的片段；
+    出错时日志只记异常类型。代码里已经有值时测真值，没有时用一组替身。"""
+    from factory_issue_module.present import _blk, _p7
+
+    pair = _p7.pair() or _STAND_IN
+    monkeypatch.setattr(_p7, "pair", lambda: pair)
+    reply = [_plan("list_issues", domains={"value": ["巴西"], "from": "user"}, time=_T30), _NARR]
+    sites = 'issue = "info.test.local"\nbrazil = "br.test.local"'
+    events: list[Event] = []
+    with structlog.testing.capture_logs() as logs:
+        h = make_harness(scopes.GREEN, llm_replies=list(reply), config_files={"link_sites.toml": sites})
+        s3_data.load(h)
+        ok_events = await run(h, "近 30 天巴西的问题有哪些")
+        events += ok_events
+
+        def broken(data: bytes, a: bytes, b: bytes) -> bytes:
+            raise ValueError(f"坏了 {a!r} {b!r}")
+
+        monkeypatch.setattr(_blk, "seal", broken)
+        h2 = make_harness(scopes.GREEN, llm_replies=list(reply), config_files={"link_sites.toml": sites})
+        s3_data.load(h2)
+        events += await run(h2, "近 30 天巴西的问题有哪些")
+    assert any("BrazilProblem/AddBrazilProblemPage" in str(c) for t in (e for e in ok_events if e.type is EventType.TABLE)
+               for row in t.data["rows"] for c in row)
+    failed = [r for r in logs if r.get("event") == "factory_issue_link_param_failed"]
+    assert failed and all(set(r) <= {"event", "log_level", "error", "timestamp"} and r["error"] == "ValueError"
+                          for r in failed)
+    seen = repr(logs) + caplog.text + "".join(capsys.readouterr()) + repr([e.data for e in events])
+    assert [f for f in _fragments(pair) if f in seen] == []

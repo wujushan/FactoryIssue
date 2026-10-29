@@ -220,8 +220,8 @@ def cn_view(data, E, desc_text):
         if restart is not None and stop is not None:
             stop_days = int((restart.normalize() - stop.normalize()).days)
         rows.append({
-            "_id": pid, "_type": t, "_status": s, "_done": done, "_rejected": s == E["rejected"],
-            "_closed_label": "已结案" if done else "未结案",
+            "_id": pid, "_type": t, "_status": s, "_done": done, "_unclosed": not done, "_rejected": s == E["rejected"],
+            "_closed_label": "已结案" if done else "未结案", "_stat": None, "_not_stopped": stop_code == 3,
             "_pn_codes": fi_unique([str(o.get("PartNumber")).strip() for o in orders.get(pid, [])
                                     if not fi_blank(o.get("PartNumber"))]),
             "_pn_names": fi_unique([str(o.get("PartName")).strip() for o in orders.get(pid, [])

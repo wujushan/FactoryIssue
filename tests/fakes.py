@@ -283,8 +283,8 @@ def make_harness(
 def data_queries(harness: Harness) -> list[Query]:
     """取业务数据的 SQL：各域主表、子表（连主表的）、待办任务、存货、CAR 报告。
 
-    不含规划前取的主数据（机型取值清单、部门、工厂、供应商、按姓名取人，`domains/shared.py`）：那是第 4–6 步
-    对库要的取值清单，不算「取数」。
+    不含规划前取的主数据（机型取值清单、部门、工厂、供应商、产品、按姓名取人，`domains/shared.py`）：那是第 4–6 步
+    对库要的取值清单，不算「取数」。海外加工厂的取值清单取自海外主表（只取去重的加工厂一列），同样不算。
     """
     from factory_issue_module.declarations import CAR_TABLE, DOMAINS, TASK_TABLE
 
@@ -294,9 +294,18 @@ def data_queries(harness: Harness) -> list[Query]:
     out = []
     for q in harness.queries:
         head = q.tables[0] if q.tables else ""
+        if is_factory_list(q):
+            continue
         if head in masters or head in others or (head in subs and " JOIN " in q.sql.upper()):
             out.append(q)
     return out
+
+
+def is_factory_list(q: Query) -> bool:
+    """海外加工厂的取值清单（`shared.overseas_factory_spec`）：只取去重的加工厂一列。"""
+    sql = re.sub(r"\s+", " ", q.sql.upper())
+    return bool(q.tables) and q.tables[0] == "OverseasProblemDetail" and "SELECT DISTINCT" in sql \
+        and re.search(r"SELECT DISTINCT \S*\[?FACTORY\]? FROM", sql) is not None
 
 
 async def run(harness: Harness, query: str) -> list[Any]:

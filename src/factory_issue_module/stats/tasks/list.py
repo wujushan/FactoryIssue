@@ -14,15 +14,19 @@ LS_SORT = {"建单时间": "_add", "现场发现日期": "_found", "停线日期
            "不良率": "_rate_value", "不良数量": "_bad", "影响数量": "_impact"}
 
 
-def ls_facts(v, P, cond_kinds):
+def ls_facts(v, P, cond_kinds, blind=()):
+    """分析用的事实。`blind` 是靠没取到的主数据才写得出来的列，不按它们分（否则全是「未填」）。"""
     pairs_type, _f, _t = fi_rank(vw_counts(v, "type"))
-    pairs_factory, _f, _t = fi_rank(vw_counts(v, "factory"))
-    pairs_machine, _f, _t = fi_rank(vw_counts(v, "_machines", multi=True), 5)
-    unclosed = v[~v["_done"].astype(bool)] if len(v) else v
+    unclosed = v[v["_unclosed"].astype(bool)] if len(v) else v
     stopped = v[v["_stopped_now"].astype(bool)] if len(v) else v
-    facts = {"张数": int(len(v)), "按问题类型": [list(p) for p in pairs_type],
-             "按加工厂": [list(p) for p in pairs_factory], "按机型（前五）": [list(p) for p in pairs_machine[:5]],
-             "未结案": int(len(unclosed)), "停线中": int(len(stopped))}
+    facts = {"张数": int(len(v)), "按问题类型": [list(p) for p in pairs_type]}
+    if "factory" not in blind:
+        pairs_factory, _f, _t = fi_rank(vw_counts(v, "factory"))
+        facts["按加工厂"] = [list(p) for p in pairs_factory]
+    if "_machines" not in blind:
+        pairs_machine, _f, _t = fi_rank(vw_counts(v, "_machines", multi=True), 5)
+        facts["按机型（前五）"] = [list(p) for p in pairs_machine[:5]]
+    facts.update({"未结案": int(len(unclosed)), "停线中": int(len(stopped))})
     rejected = int(v["_rejected"].astype(bool).sum()) if len(v) else 0
     if rejected:
         facts["未结案中生产角色驳回、流程已结束"] = rejected
@@ -59,6 +63,7 @@ def run(data):
         cols = L["columns"][dom]
         head = v.head(int(L["table_rows"]))
         rows = [[r[c] for c in cols] for _, r in head.iterrows()]
+        names = P["names"][dom]
         cond_kinds = [k for c in P["conds"].get(dom) or [] for k, _v in (c.get("items") or [])]
         caliber = {"未计入": missing}
         if len(v):
@@ -68,10 +73,10 @@ def run(data):
             if "停线中" in cond_kinds:
                 caliber["停线中且已完成"] = int(v[v["_stopped_now"].astype(bool)]["_done"].astype(bool).sum())
         breakdowns = vw_breakdowns(v, P.get("breakdowns", {}).get(dom))
-        facts = ls_facts(v, P, cond_kinds) if len(v) else {"张数": 0}
+        facts = ls_facts(v, P, cond_kinds, P.get("blind", {}).get(dom) or []) if len(v) else {"张数": 0}
         if breakdowns:
             facts["分取值"] = breakdowns
-        segments.append({"domain": dom, "table": {"columns": [P["names"][c] for c in cols], "rows": rows},
+        segments.append({"domain": dom, "table": {"columns": [names[c] for c in cols], "rows": rows},
                          "breakdowns": breakdowns,
                          "found": found, "listed": int(len(v)), "shown": int(len(head)),
                          "ids_shown": [int(x) for x in head["_id"].tolist()] if len(head) else [],
@@ -89,4 +94,8 @@ def run(data):
                     best = {"domain": dom, "id": int(top["_id"]), "number": top["_number"],
                             "rate": float(top["_rate_value"])}
     refs = {"issues": issues, "count": total_all, "max_defect_rate_issue": best}
-    return {"segments": segments, "refs": refs, "missing_domains": missing_domains, "total": total_all}
+    # 三域一起列清单时开头给各域张数与合计（总述「跨域规则」清单呈现）
+    by_domain = [[s["domain"], s["found"]] for s in segments]
+    found_total = sum(n for _d, n in by_domain)
+    return {"segments": segments, "refs": refs, "missing_domains": missing_domains, "total": total_all,
+            "found_total": found_total, "by_domain": by_domain, "few_total": found_total <= 2}

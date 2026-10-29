@@ -10,9 +10,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from factory_issue_module.config.files import AnswerParams
+from factory_issue_module.declarations import Domain
 from factory_issue_module.domains import enums
-from factory_issue_module.domains.base import DomainStep
-from factory_issue_module.domains.domestic import COLUMN_NEEDS, SORT_NEEDS
 from factory_issue_module.plan import schema
 from factory_issue_module.present import columns
 
@@ -23,7 +22,7 @@ _FILTER_COLUMNS = {
     "当前责任人": ["current_state", "current_people"], "责任人": ["responsible"], "责任归属部门": ["resp_dept"],
     "产品在制属性": ["output_status"], "影响数量": ["impact_qty"], "发现工位": ["station"],
     "是否设计变更": ["design_change"], "IQC意见": ["iqc_opinion"], "原因分类": ["reason_class"],
-    "处理结果": ["design_result"],
+    "处理结果": ["design_result"], "国内工厂": ["cn_factory"], "是否需要回复8D": ["need_8d"], "PN": ["pn"],
 }
 _BASIS_COLUMNS = {"现场发现": ["found_date"], "停线": ["stop_status", "stop_date"], "重启": ["restart_date"],
                   "结案": ["close_time"]}
@@ -37,11 +36,16 @@ def _status_columns(step: dict) -> list[str]:
         if not isinstance(f, dict) or f.get("field") != "状态":
             continue
         for v in schema.as_list(f.get("value")):
-            kind = enums.status_kind(v)
+            kind = (enums.status_kind(v) or enums.status_kind(v, enums.BR_STAGES)
+                    or enums.status_kind(v, enums.OS_STAGES))
             if kind is None:
                 continue
-            out += ["stop_status", "stop_date"] if kind[0] in _STOP_KINDS else ["current_state"]
+            out += ["stop_status", "stop_date"] if kind[0] in _STOP_KINDS else [STATE_FOR_FILTER]
     return out
+
+
+#: 按状态筛时加的那一列：国内是当前状态（环节 + 人），巴西、海外是主表状态（各适配器的 `KEY_ALIAS` 换成实际的列）
+STATE_FOR_FILTER = "state_for_filter"
 
 
 def columns_for(step: dict) -> tuple[list[str], list[str]]:
@@ -66,6 +70,8 @@ def columns_for(step: dict) -> tuple[list[str], list[str]]:
         for f in schema.as_list(p.get("filters")):
             if isinstance(f, dict):
                 keys += _FILTER_COLUMNS.get(str(f.get("field")), [])
+                if f.get("field") == "其他" and columns.resolve(str(f.get("column") or "")) is not None:
+                    keys.append(str(columns.resolve(str(f.get("column") or ""))))
         keys += _status_columns(step)
         for t in schema.as_list(p.get("time")):
             if isinstance(t, dict):
@@ -78,19 +84,41 @@ def columns_for(step: dict) -> tuple[list[str], list[str]]:
     return keys, missing
 
 
-def needs(keys: Sequence[str], step: dict) -> set[str]:
-    out = {COLUMN_NEEDS[k] for k in keys if k in COLUMN_NEEDS}
+def domain_keys(keys: Sequence[str], domain: Domain, alias: dict[str, list[str] | None]) -> tuple[list[str], list[str]]:
+    """通用的列 → 本域的列与本域没有的项（总述「跨域规则」：用户点名的列某域可能没有）。
+
+    `alias` 是适配器的 `KEY_ALIAS`：巴西只说「责任人」给问题跟进人，海外同时给当前责任人与问题跟进人；没有责任归属
+    部门的按问题跟进部门。本域没有的列不放进表格，开头写一句「巴西没有『当前状态』这一项」。
+    """
+    have = columns.view_columns(domain)
+    out: list[str] = []
+    absent: list[str] = []
+    for k in keys:
+        if k == STATE_FOR_FILTER:
+            got = alias.get(k) or ["current_state"]
+            out += [x for x in got if x in have and x not in out]
+            continue
+        for x in alias.get(k, [k]) or []:
+            if x in have and x not in out:
+                out.append(x)
+            elif x not in have and k not in absent:
+                absent.append(k)
+    return out, [columns.shown(k) for k in absent]
+
+
+def needs(keys: Sequence[str], step: dict, column_needs: dict[str, str], sort_needs: dict[str, str]) -> set[str]:
+    out = {column_needs[k] for k in keys if k in column_needs}
     sort = (step.get("params") or {}).get("sort")
-    if isinstance(sort, dict) and sort.get("by") in SORT_NEEDS:
-        out.add(SORT_NEEDS[sort["by"]])
+    if isinstance(sort, dict) and sort.get("by") in sort_needs:
+        out.add(sort_needs[sort["by"]])
     return out
 
 
-def params(step: dict, keys: Sequence[str], dsteps: Sequence[DomainStep], answer: AnswerParams) -> dict[str, Any]:
+def params(step: dict, keys_by_domain: dict[str, list[str]], answer: AnswerParams) -> dict[str, Any]:
     p = step.get("params") or {}
     sort = p.get("sort") if isinstance(p.get("sort"), dict) else {}
     limit = p.get("limit") if isinstance(p.get("limit"), int) and not isinstance(p.get("limit"), bool) else None
-    return {"columns": {d.domain.label: list(keys) for d in dsteps}, "table_rows": answer.table_rows,
+    return {"columns": {label: list(keys) for label, keys in keys_by_domain.items()}, "table_rows": answer.table_rows,
             "sort_by": sort.get("by"), "desc": sort.get("order", "降序") != "升序", "limit": limit}
 
 
@@ -127,8 +155,22 @@ def opening(seg: dict[str, Any], label: str, scope: str, order: str | None = Non
     return text
 
 
+def domain_counts(by_domain: Sequence[Sequence[Any]]) -> str:
+    """「国内 3 张、巴西 1 张、海外 0 张」（张数来自沙箱）。"""
+    return "、".join(f"{d} {n} 张" for d, n in by_domain)
+
+
+def cross_opening(res: dict[str, Any], scope: str) -> str:
+    """三域一起列清单时开头一句：各域张数与合计（总述「跨域规则」清单呈现）。"""
+    by_domain = res.get("by_domain") or []
+    labels = "、".join(str(d) for d, _n in by_domain)
+    return f"{labels}{scope}合计 {res.get('found_total', 0)} 张：{domain_counts(by_domain)}。"
+
+
 def fallback(facts: dict[str, Any]) -> str:
     """分析段核数两次都不过时的模板句（数字取自沙箱的 facts）。"""
+    if "各域张数" in facts:
+        return f"合计 {facts.get('合计张数', 0)} 张：{domain_counts(facts['各域张数'])}。"
     text = f"共 {facts.get('张数', 0)} 张"
     types = facts.get("按问题类型") or []
     if types:

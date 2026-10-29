@@ -1,7 +1,9 @@
-"""汇总统计（设计 §4.3 汇总一行、§6.3、§8.1、§8.2；总述「回答怎么组织」「排名、长清单与导出」「初步分析维度」）。
+"""汇总统计（设计 §4.3 汇总一行、§6.3、§8.1、§8.2；总述「回答怎么组织」「排名、长清单与导出」「初步分析维度」
+「跨域规则」）。
 
-事件顺序：`delta`（开头：点名第一或给总数）→ `table` → `chart`（分组 2 组及以上）→ `delta`（分析）→ 统计口径
-（整轮合并，放最后）。分组、Top N、并列、增减、平均与中位数都由沙箱算（`stats/tasks/aggregate.py`）。
+事件顺序：`delta`（开头：点名第一或给总数；三域一起时先给各域小计再给合计）→ `table` → `chart`（分组 2 组及以上）
+→ `delta`（分析）→ 统计口径（整轮合并，放最后）。分组、Top N、并列、增减、平均与中位数、跨域合并都由沙箱算
+（`stats/tasks/aggregate.py`）。
 """
 
 from __future__ import annotations
@@ -10,13 +12,16 @@ from collections.abc import Sequence
 from typing import Any
 
 from factory_issue_module.config.files import AnswerParams
-from factory_issue_module.domains import domestic
 from factory_issue_module.domains.base import DomainStep
 from factory_issue_module.plan import schema
 from factory_issue_module.present import columns
 
 #: 总述「初步分析维度」：加工厂、跟进部门看单数与未结案数
 _WITH_UNCLOSED = ("加工厂", "跟进部门")
+#: 不看域都能算的指标；其余要看本域能不能算（各适配器的 `TRAITS`）
+BASIC_METRICS = ("单数", "占比", "未结案数")
+#: 巴西、海外按年季月周统计、该域不到这么多张时提示样本少（总述「统计口径说明」样本量一行的「单数很少」）
+SMALL_SAMPLE = 10
 
 #: 统计表的列名（沙箱直接用它们作列名）
 COLS = {
@@ -24,18 +29,26 @@ COLS = {
     "rate": columns.RATE, "close_mean": columns.CLOSE_MEAN, "close_median": columns.CLOSE_MEDIAN,
     "stop_mean": columns.STOP_MEAN, "stop_median": columns.STOP_MEDIAN, "stopped": columns.STOPPED,
     "diff": columns.DIFF, "change": columns.CHANGE, "close_days": columns.CLOSE_DAYS, "period": columns.PERIOD,
+    "total": columns.TOTAL, "unclosed_share": columns.UNCLOSED_SHARE, "usd": columns.COST_USD,
+    "brl": columns.COST_BRL, "debit": columns.DEBIT,
 }
 
 
-def metrics_for(step: dict) -> tuple[list[str], list[str]]:
-    """(指标, 国内没有的指标)。"""
+def metrics_for(step: dict) -> list[str]:
+    """本步要的指标（总有单数；按加工厂、跟进部门分组时加未结案数）。本域能不能算由调用方按 `TRAITS` 看。"""
     p = step.get("params") or {}
     asked = [str(m) for m in schema.as_list(p.get("metrics")) if m]
     group_by = [str(g) for g in schema.as_list(p.get("group_by"))]
-    out = list(dict.fromkeys(["单数", *[m for m in asked if m not in domestic.METRICS_ELSEWHERE]]))
+    out = list(dict.fromkeys(["单数", *asked]))
     if any(g in _WITH_UNCLOSED for g in group_by) and "未结案数" not in out:
         out.append("未结案数")
-    return out, [m for m in asked if m in domestic.METRICS_ELSEWHERE]
+    return out
+
+
+def unsupported(metrics: Sequence[str], traits: dict[str, Any]) -> list[str]:
+    """本域算不了的指标（不良率另说：海外原文不汇总，由沙箱逐单列出）。"""
+    have = set(traits.get("metrics") or [])
+    return [m for m in metrics if m not in BASIC_METRICS and m not in have and m != "合计不良率"]
 
 
 def basis_of(step: dict) -> str:
@@ -46,54 +59,93 @@ def basis_of(step: dict) -> str:
 
 
 def params(step: dict, dims_by_domain: dict[str, list[dict[str, Any]]], metrics: Sequence[str],
-           dsteps: Sequence[DomainStep], answer: AnswerParams, bounds: Sequence[str | None] | None) -> dict[str, Any]:
+           dsteps: Sequence[DomainStep], answer: AnswerParams, bounds: Sequence[str | None] | None) -> tuple[
+        dict[str, Any], dict[str, list[str | None]]]:
     p = step.get("params") or {}
     top = p.get("top") if isinstance(p.get("top"), int) and not isinstance(p.get("top"), bool) else None
     compare = {d.domain.label: d.compare for d in dsteps if d.compare} or None
+    group_by = [str(g) for g in schema.as_list(p.get("group_by"))]
     return {"dims": dims_by_domain, "metrics": list(metrics), "top": top, "ranking": bool(p.get("ranking")),
-            "top_n": answer.top_n, "table_rows": answer.table_rows, "compare": compare}, \
+            "top_n": answer.top_n, "table_rows": answer.table_rows, "compare": compare, "group_by": group_by,
+            "small_sample": SMALL_SAMPLE}, \
         ({d.domain.label: list(bounds) for d in dsteps} if bounds else {})
 
 
+def _counts(pairs: Sequence[Sequence[Any]]) -> str:
+    return "、".join(f"{d} {n} 张" for d, n in pairs)
+
+
 def opening(seg: dict[str, Any], label: str, scope: str) -> str:
-    """开头一句：总数、第一名或增减（数都来自沙箱的 facts）。"""
+    """开头一句：总数、第一名或增减（数都来自沙箱的 facts）。三域一起时先给各域小计再给合计。"""
     f = seg.get("facts") or {}
     kind = seg.get("kind")
     if kind == "compare":
         cols = (seg.get("table") or {}).get("columns") or []
         if len(cols) >= 3:
             a, b = cols[1], cols[2]
-            return f"{label}{a} {f.get(a, 0)} 张，{b} {f.get(b, 0)} 张，{f.get('变化', '')}"
+            head = f"{label}，" if label else ""
+            return f"{head}{a} {f.get(a, 0)} 张，{b} {f.get(b, 0)} 张，{f.get('变化', '')}"
         return f"{label}{scope}没有查到单"
-    text = f"{label}{scope}共 {f.get('总单数', 0)} 张"
+    if seg.get("cross") and f.get("各域单数"):
+        text = f"{label}{scope}合计 {f.get('总单数', 0)} 张（{_counts(f['各域单数'])}）"
+    else:
+        text = f"{label}{scope}共 {f.get('总单数', 0)} 张"
     if kind == "overview":
         text += f"，其中未结案 {f.get('未结案', 0)} 张、停线中 {f.get('停线中', 0)} 张"
         types = f.get("按问题类型") or []
         if types:
             text += "；问题类型分布：" + "、".join(f"{name} {n} 张" for name, n in types)
-        if f.get("合计不良率（%）") is not None and "合计不良率（%）" in f:
-            text += f"；合计不良率 {f['合计不良率（%）']}%"
-        if f.get("结案周期平均（天）") is not None:
-            text += (f"；已结案的单平均 {f['结案周期平均（天）']} 天结案，中位数 {f['结案周期中位数（天）']} 天"
-                     f"（计入 {f.get('计入结案周期的单数', 0)} 张）")
-        if "停线时长平均（天）" in f:
-            if f.get("停线时长平均（天）") is not None:
-                text += (f"；已重启的单平均停线 {f['停线时长平均（天）']} 天，中位数 {f['停线时长中位数（天）']} 天"
-                         f"（计入 {f.get('计入停线时长的单数', 0)} 张）")
-            text += f"；还没重启的 {f.get('还没重启的单数', 0)} 张"
-        return text
+        if seg.get("cross"):
+            return text + _cross_metrics(f)
+        return text + _metrics_text(f)
     title = seg.get("title") or ""
     pairs = f.get("按" + title) or []
     first = f.get("第一") or []
     if pairs and first:
-        top_n = pairs[0][1]
+        top_n = next((n for k, n in pairs if k == first[0]), pairs[0][1])
         who = "、".join(str(x) for x in first)
         text += f"；按{title}统计，{'并列' if f.get('第一并列') else ''}最多的是{who}（{top_n} 张）"
-        if f.get("并列") and f.get("并列名次"):
-            text += f"；第 {f['并列名次']} 名并列，{'、'.join(str(x) for x in f['并列'])}都列出"
+        tied = [str(x) for x in f.get("并列") or []]
+        # 第一名全体并列、又超过要的名次时，「第 N 名并列」点的是同一批名字，只说前一句（S2 复评留下的一处）
+        if tied and f.get("并列名次") and set(tied) != {str(x) for x in first}:
+            text += f"；第 {f['并列名次']} 名并列，{'、'.join(tied)}都列出"
     elif pairs:
         text += f"，按{title}分为 {f.get('按' + title + '（项数）', 0)} 组"
     return text
+
+
+def _metrics_text(f: dict[str, Any]) -> str:
+    text = ""
+    if f.get("合计不良率（%）") is not None and "合计不良率（%）" in f:
+        text += f"；合计不良率 {f['合计不良率（%）']}%"
+    if f.get("结案周期平均（天）") is not None:
+        text += (f"；已结案的单平均 {f['结案周期平均（天）']} 天结案，中位数 {f['结案周期中位数（天）']} 天"
+                 f"（计入 {f.get('计入结案周期的单数', 0)} 张）")
+    if "停线时长平均（天）" in f:
+        if f.get("停线时长平均（天）") is not None:
+            text += (f"；已重启的单平均停线 {f['停线时长平均（天）']} 天，中位数 {f['停线时长中位数（天）']} 天"
+                     f"（计入 {f.get('计入停线时长的单数', 0)} 张）")
+        text += f"；还没重启的 {f.get('还没重启的单数', 0)} 张"
+    if "涉及费用的单数" in f:
+        text += f"；涉及费用的单 {f['涉及费用的单数']} 张"
+    if "费用美元合计" in f:
+        text += f"，费用合计 {f['费用美元合计']} 美元"
+        if f.get("只产生雷亚尔费用的单数"):
+            text += (f"；另有 {f['只产生雷亚尔费用的单数']} 张只产生了雷亚尔费用，"
+                     f"合计 {f['这些单的雷亚尔合计']} 雷亚尔，未计入美元合计")
+    if "费用雷亚尔合计" in f:
+        text += f"；雷亚尔费用合计 {f['费用雷亚尔合计']} 雷亚尔"
+    if "扣款费用（美元）合计" in f:
+        text += f"；扣款 {f['扣款费用（美元）合计']} 美元（扣款单独列出，未计入费用）"
+    return text
+
+
+def _cross_metrics(f: dict[str, Any]) -> str:
+    """三域一起的概况：不良率分域给（国内、巴西分母不同，不合成跨域的数），其余指标看表。"""
+    per = f.get("各域") or {}
+    rates = [f"{d} {x['合计不良率（%）']}%" for d, x in per.items()
+             if isinstance(x, dict) and x.get("合计不良率（%）") is not None]
+    return f"；合计不良率分域给出：{'、'.join(rates)}" if rates else ""
 
 
 def fallback(seg: dict[str, Any]) -> str:

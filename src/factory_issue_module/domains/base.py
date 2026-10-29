@@ -14,8 +14,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -38,6 +39,9 @@ class Ask:
     question: str
     options: list[str] = field(default_factory=list)
     reason: str = "名称核对"
+    #: 这个名称或取值在本域对不上（「没有加工厂『柯洱斯』」）。几个域一起查、别的域对得上时不追问：本域不计入并写明
+    #: （总述「跨域规则」各域按自己的取值查；「通用筛选规则」某域没有对应时该域不计入）。都对不上时照常追问
+    missing: str | None = None
 
 
 @dataclass
@@ -66,6 +70,24 @@ class DomainStep:
     breakdowns: list[dict[str, Any]] = field(default_factory=list)
     #: 对库要用的取值清单没取到（主数据取数失败或无权）：这一域这一段答「这一部分暂时没查到」，不当成「没找到」
     unavailable: bool = False
+    #: 本域没有对应的列、因而整域不计入的原因（总述「通用筛选规则」默认范围、「跨域归并」点名的类型某域没有）：
+    #: 「国内没有统计日期，国内未计入」。有一条就不取数，统计口径「统计范围」写明
+    excluded: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Resolver:
+    """第 6 步对库要用的东西（三域共用）。"""
+
+    master: Any
+    dept_aliases: Any
+    regions: Any
+    entities: Mapping[str, Sequence[str]]
+    today: date
+    #: 前一步给的引用值（已经是库里的名字），按「步骤.输出名」
+    refs: Mapping[str, Any] = field(default_factory=dict)
+    #: 本轮问句原话（巴西「是否涉及费用」要看用户是否明说，巴西业务描述「费用」）
+    query: str = ""
 
 
 def cond(field: str, operator: str, value: Any = None, *, include_nulls: bool = False) -> dict[str, Any]:
@@ -162,3 +184,265 @@ async def fetch_in(ctx: Any, spec: dict[str, Any], field: str, values: Sequence[
     parts = await asyncio.gather(*(fetch(ctx, _with_condition(spec, cond(field, "IN", part)))
                                    for part in chunks(keys)))
     return pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
+
+
+# ---------------------------------------------------------------------------- 第 6 步三域共用的对库小工具（§6.5）
+
+
+def values_of(v: Any) -> list[str]:
+    """条件的取值（照抄的用户说法）→ 去掉空的字符串列表。"""
+    items = v if isinstance(v, list) else [v]
+    return [str(x).strip() for x in items if x is not None and not isinstance(x, dict) and str(x).strip()]
+
+
+def join(items: Iterable[Any]) -> str:
+    return "、".join(str(x) for x in items)
+
+
+def not_found(kind: str, said: str, entities: Mapping[str, Sequence[str]], skip: str | None) -> Ask:
+    from factory_issue_module.plan import names
+
+    return Ask(f"没有找到{kind}「{said}」，请核对名称。", names.check_options(said, entities, skip=skip),
+               missing=f"没有{kind}「{said}」")
+
+
+def yes_no(said: str) -> int | None:
+    """「是 / 否」说法 → 1 / 0；认不出返回 None。"""
+    from factory_issue_module.plan import names
+
+    k = names.key(said)
+    if k in ("是", "需要", "有", "要"):
+        return 1
+    if k in ("否", "不需要", "没有", "无", "不"):
+        return 0
+    return None
+
+
+_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+SQL_OPS = {"eq": "EQ", "ne": "NE", "gt": "GT", "lt": "LT", "ge": "GE", "le": "LE"}
+
+
+def numbers(values: Sequence[str]) -> list[float]:
+    """数值条件的取值（「100%」→ 100）：参数换算，不产生给用户的数。"""
+    out: list[float] = []
+    for v in values:
+        out += [float(x) for x in _NUMBER.findall(v)]
+    return out
+
+
+def numeric_sql(column: str, kind: str, values: Sequence[str], out: DomainStep, field_name: str,
+                op_said: str) -> bool:
+    """数值条件进 SQL；换不成数值时写一句说明、不按它筛，返回 False。"""
+    nums = numbers(values)
+    if kind == "between" and len(nums) >= 2:
+        out.sql.append(cond(column, "GE", nums[0]))
+        out.sql.append(cond(column, "LE", nums[1]))
+    elif nums and kind in SQL_OPS:
+        out.sql.append(cond(column, SQL_OPS[kind], nums[0]))
+    else:
+        out.notes.append(f"「{field_name}{join(values)}」没能换成数值条件，未按它筛")
+        return False
+    out.echo.append((field_name, f"{op_said} {join(values)}"))
+    return True
+
+
+def numeric_cond(col: str, kind: str, values: Sequence[str], out: DomainStep, field_name: str, op_said: str) -> bool:
+    """数值条件交沙箱（巴西现算的不良率、海外文本的不良率）。"""
+    nums = numbers(values)
+    if not nums or (kind == "between" and len(nums) < 2) or (kind not in SQL_OPS and kind != "between"):
+        out.notes.append(f"「{field_name}{join(values)}」没能换成数值条件，未按它筛")
+        return False
+    out.conds.append({"kind": "num", "col": col, "op": kind, "values": nums[:2]})
+    out.echo.append((field_name, f"{op_said} {join(values)}"))
+    return True
+
+
+def people(said: str, R: Resolver, person_kind: str) -> list[int] | Ask:
+    """姓名 → 员工 ID。重名时追问「是哪个部门的这位」；「生产工程部的张三」按部门挑。"""
+    from factory_issue_module.plan import names
+
+    staff = R.master.people
+    want = names.key(said)
+    dept_hint = None
+    if not any(names.key(p.name) == want for p in staff) and "的" in said:
+        dept_hint, _, person = said.rpartition("的")
+        want = names.key(person)
+    hits = [p for p in staff if names.key(p.name) == want]
+    if dept_hint is not None:
+        hits = [p for p in hits if names.key(p.dept) == names.key(dept_hint)
+                or names.departments(dept_hint, [p.dept], R.dept_aliases)]
+    if not hits:
+        return Ask(f"没有找到人员「{said}」，请核对姓名。", names.check_options(said, R.entities, skip=person_kind))
+    depts = unique(p.dept for p in hits)
+    if len(depts) > 1:
+        options = names.person_options([(p.name, p.dept) for p in hits])
+        return Ask(f"「{said}」有几位同名的，是哪个部门的这位？", options, reason="重名")
+    return [p.id for p in hits]
+
+
+def departments(values: Sequence[str], R: Resolver) -> list[str] | Ask:
+    """部门说法 → 部门名称（完整名称 → 简称 → 包含，总述「部门名称怎么对」）；对不上时请用户核对。"""
+    from factory_issue_module.plan import names
+
+    hit: list[str] = []
+    for v in values:
+        got = list(names.departments(v, R.master.dept_names(), R.dept_aliases))
+        if not got:
+            return not_found("部门", v, R.entities, None)
+        hit += [x for x in got if x not in hit]
+    return hit
+
+
+def suppliers(values: Sequence[str], R: Resolver) -> list[str] | Ask:
+    """供应商：整名对上为准，对不上按名称包含找；包含对上几家时追问选哪一家，不静默扩大（S2 评审 A4）。"""
+    from factory_issue_module.plan import names
+
+    hit: list[str] = []
+    pool = R.master.supplier_names()
+    for v in values:
+        got = [n for n in pool if names.key(n) == names.key(v)] or \
+              [n for n in pool if names.key(v) and names.key(v) in names.key(n)]
+        if not got:
+            return not_found("供应商", v, R.entities, None)
+        if len(got) > 1:
+            return Ask(f"「{v}」对上了这几家供应商：{join(got[:12])}。查哪一家？", got[:4], reason="多供应商")
+        hit += [x for x in got if x not in hit]
+    return hit
+
+
+def period_label(span: Any) -> str:
+    """比较两个时段时每段的叫法：整年「2025 年全年」、整月「2026 年 9 月」，其余写起止日期。"""
+    start, end = span.start, span.end
+    if start and end and not span.to_today:
+        if start.month == 1 and start.day == 1 and end.month == 12 and end.day == 31 and start.year == end.year:
+            return f"{start.year} 年全年"
+        nxt = date(end.year + (end.month == 12), end.month % 12 + 1, 1)
+        if start.day == 1 and start.year == end.year and start.month == end.month and end + timedelta(days=1) == nxt:
+            return f"{start.year} 年 {start.month} 月"
+    return span.describe()
+
+
+#: 某域没有这个日期依据时，说明里怎么叫它（总述「按哪个日期筛」）
+BASIS_NAMES = {"现场发现": "现场发现日期", "停线": "停线日期", "重启": "停线重启时间", "结案": "结案时间",
+               "统计日期": "统计日期"}
+
+
+def time_conditions(step: dict, spans: Sequence[Any], out: DomainStep, *, label: str, add_col: str,
+                    bases: Iterable[str], needs: Mapping[str, str] | None = None) -> None:
+    """时间条件（§6.1）：建单时间进 SQL（`add_col`），其余依据与比较两个时段交沙箱。
+
+    `bases` 是本域有的日期依据；没有的依据整域不计入（总述「按哪个日期筛」：某域没有这个日期时，该域不计入并
+    写明）。`needs`：依据 → 要额外取的帧（国内按结案、重启筛要取处理步骤）。
+    """
+    from factory_issue_module.plan import schema
+
+    p = step.get("params") or {}
+    compare = p.get("compare") == "时段"
+    have = set(bases)
+    items = [t for t in schema.as_list(p.get("time")) if isinstance(t, dict) and t.get("said")]
+    periods: list[tuple[Any, dict[str, Any]]] = []
+    seen: set[tuple[str, Any]] = set()
+    for t, span in zip(items, spans, strict=False):
+        basis = str(t.get("basis") or "建单")
+        if not compare:
+            # 同一依据的几项已合成同一段（`timespan._intersect_same_basis`），条件只写一次
+            if (basis, span) in seen:
+                continue
+            seen.add((basis, span))
+        if basis not in have:
+            text = f"{label}没有{BASIS_NAMES.get(basis, basis)}，{label}未计入"
+            if text not in out.excluded:
+                out.excluded.append(text)
+            continue
+        start, end = (None, None) if span.unlimited else (span.start, span.end)
+        cond_t = {"basis": basis, "start": start.isoformat() if start else None,
+                  "end": end.isoformat() if end else None}
+        if needs and basis in needs:
+            out.needs.add(needs[basis])
+        if compare:
+            periods.append((span, cond_t))
+            continue
+        if start is None and end is None:
+            continue
+        if basis == "建单":
+            if span.relative() is not None:
+                out.sql.append(cond(add_col, "GE", span.relative()))
+            elif start is not None:
+                out.sql.append(cond(add_col, "GE", datetime(start.year, start.month, start.day)))
+            if end is not None and span.relative() is None:
+                nxt = end + timedelta(days=1)
+                out.sql.append(cond(add_col, "LT", datetime(nxt.year, nxt.month, nxt.day)))
+        else:
+            out.times.append(cond_t)
+    if compare and len(periods) >= 2:
+        ordered = sorted(periods[:2], key=lambda p: p[0].start or date.min)
+        out.compare = [{"label": period_label(sp), "times": [c]} for sp, c in ordered]
+
+
+def problem_types(values: Sequence[str], known: Sequence[str], label: str, neg: bool,
+                  out: DomainStep) -> list[str] | Ask:
+    """问题类型说法 → 本域的类型名（总述「跨域归并」）。
+
+    只在别的域有的类型：本域不计入这一项并写明（「巴西无『工厂制程』类型，未计入」）；点名的类型本域一个都没有时
+    整域不计入。三域都没有的说法，列出本域的类型请用户选。「X 类」按 X 认。
+    """
+    from factory_issue_module import landed
+    from factory_issue_module.plan import names
+
+    elsewhere = landed.problem_types()
+    keys = {names.key(t): t for t in known}
+    hit: list[str] = []
+    for v in values:
+        k = names.key(v)
+        got = keys.get(k) or (keys.get(k[:-1]) if k.endswith("类") else None)
+        if got is not None:
+            if got not in hit:
+                hit.append(got)
+            continue
+        other = v if v in elsewhere else (v[:-1] if v.endswith("类") and v[:-1] in elsewhere else None)
+        if other is not None:
+            if not neg:
+                out.skipped.append(f"{label}无「{other}」类型，未计入")
+            continue
+        return Ask(f"没有「{v}」这个问题类型，{label}的问题类型有：{join(known)}。", list(known)[:4],
+                   reason="类型对不上")
+    if not hit and not neg:
+        out.excluded += [s for s in out.skipped if s.endswith("类型，未计入") and s not in out.excluded]
+        out.skipped = [s for s in out.skipped if s not in out.excluded]
+    return hit
+
+
+# ---------------------------------------------------------------------------- 分组维度（三域共用的拼法）
+
+PERIOD_DIMS = ("年", "季度", "月", "周")
+
+
+def build_dims(group_by: Sequence[str], basis: str | None, table: Mapping[str, dict[str, Any]],
+               period_cols: Mapping[str, str], needs_by: Mapping[str, str] | None = None,
+               period_needs: Mapping[str, str] | None = None
+               ) -> tuple[list[dict[str, Any]], list[str], set[str]]:
+    """计划的分组维度 → 沙箱的维度说明；返回 (维度, 本域没有的维度, 要额外取的帧)。
+
+    维度说明里 `merge` 为真的，三域一起统计时按名称同名合并成一张表（总述「跨域归并」）；`universe` 是本域可能有的
+    取值（该域没有的取值在合并表里写「—」），`fill` 是没有单也要列出的取值（问题等级 A+、A、B、C）。
+    时间维度按日期依据取列；本域没有这个日期依据时算本域没有的维度。
+    """
+    out: list[dict[str, Any]] = []
+    missing: list[str] = []
+    needs: set[str] = set()
+    for g in group_by:
+        if g in PERIOD_DIMS:
+            col = period_cols.get(basis or "建单")
+            if col is None:
+                missing.append(g)
+                continue
+            out.append({"name": g, "period": g, "period_col": col, "title": g, "merge": True})
+            if period_needs and (basis or "建单") in period_needs:
+                needs.add(period_needs[basis or "建单"])
+        elif g in table:
+            out.append({"name": g, **table[g]})
+            if needs_by and g in needs_by:
+                needs.add(needs_by[g])
+        else:
+            missing.append(g)
+    return out, missing, needs

@@ -3,6 +3,8 @@
 - 第 6 步：把计划里的条件（照抄的用户说法）对到库里的取值与代码，换算时间，写成两份：落在主表列上的条件进
   SQL（`fetch` 的 FilterCondition），要派生才知道的（状态、当前责任人、责任人、责任归属部门、机型、系列、物料名称、
   PN、建单以外的日期）交沙箱。对不上、对上多个、重名、枚举说法对不上时返回追问（`base.Ask`），本轮不取数。
+  国内没有的列（统计日期、是否需要回复 8D、海外单上的国内工厂）、点名的类型国内一个都没有时，国内整域不计入
+  （`DomainStep.excluded`，总述「通用筛选规则」默认范围）。
 - 取数：主表一帧，机型、处理步骤、风险订单流程、生产订单按需各一帧（子表 INNER JOIN 主表，带主表的条件），
   再按收集到的键取待办任务、存货、人员。不取叙述原文（§6.1）。
 """
@@ -11,15 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
 
-from factory_issue_module import landed
-from factory_issue_module.config.files import NameTable
 from factory_issue_module.declarations import INFO, TASK_TABLE, Domain
 from factory_issue_module.domains import base, enums
 from factory_issue_module.domains.base import Ask, DomainStep, cond
@@ -29,6 +27,7 @@ from factory_issue_module.plan.timespan import Span
 from factory_issue_module.present import columns
 
 DOMAIN = Domain.DOMESTIC
+LABEL = DOMAIN.label
 MAIN = DOMAIN.master_table
 MODELS = "CoreINFO.dbo.ZCTracking_ProductNames"
 STEPS = "CoreINFO.dbo.ZCTracking_ProblemSteplog"
@@ -46,6 +45,18 @@ MAIN_COLUMNS = (
     "IQCMemberList", "IQCMemberListName", "CAR", "CARID", "AddUser", "AddDate",
 )
 NOT_DELETED = cond("m.IsDelete", "EQ", 0, include_nulls=True)
+
+#: 国内有的日期依据（总述「按哪个日期筛」）；按结案、重启筛要取处理步骤
+BASES = ("建单", "现场发现", "停线", "重启", "结案")
+_BASIS_NEEDS = {"结案": "steps", "重启": "steps"}
+
+#: 沙箱里的域特性：能算哪些指标、不良率怎么汇总（总述「汇总不良率」：国内分母为生产数量）
+#: `close` 是结案时间的取法（总述「结案时间与结案周期」）：几域取法相同时结案周期才能合在一起算
+TRAITS: dict[str, Any] = {"metrics": ["单数", "占比", "未结案数", "合计不良率", "结案周期", "停线时长"],
+                          "rate": "sum", "rate_den": "生产数量", "close": "结案确认"}
+
+#: 清单列：用户叫法对到的内部键在本域换成哪几列（None = 本域没有这一项）。国内每一项都有
+KEY_ALIAS: dict[str, list[str] | None] = {}
 
 
 def enum_params() -> dict[str, Any]:
@@ -66,24 +77,31 @@ def enum_params() -> dict[str, Any]:
 # ---------------------------------------------------------------------------- 分组维度
 
 _PERIOD_COL = {"建单": "_add", "现场发现": "_found", "停线": "_stop", "重启": "_restart", "结案": "_close"}
-PERIOD_DIMS = ("年", "季度", "月", "周")
+PERIOD_DIMS = base.PERIOD_DIMS
+#: 问题等级三域相同：合并表里 A+、A、B、C 没有单也列出（总述「跨域归并」）
+LEVEL_FILL = list(enums.CN_LEVELS)
+LEVEL_UNIVERSE = [*enums.CN_LEVELS, "未填"]
+CLOSED_UNIVERSE = ["已结案", "未结案"]
 
 
 def dims(group_by: Sequence[str], basis: str | None) -> tuple[list[dict[str, Any]], list[str], set[str]]:
     """计划的分组维度 → 沙箱的维度说明；返回 (维度, 国内没有的维度, 要额外取的帧)。"""
     s = columns.shown
     table: dict[str, dict[str, Any]] = {
-        "域": {"const": DOMAIN.label, "title": columns.DOMAIN},
-        "问题类型": {"col": "type", "title": s("type")},
-        "机型": {"col": "_machines", "multi": True, "empty": "未填", "title": s("machine")},
-        "系列": {"col": "_series", "multi": True, "empty": "未填", "title": s("series")},
-        "加工厂": {"col": "factory", "title": s("factory")},
-        "结案与否": {"col": "_closed_label", "title": columns.CLOSED_OR_NOT},
+        "域": {"const": LABEL, "title": columns.DOMAIN, "merge": True},
+        "问题类型": {"col": "type", "keep_blank": True, "title": s("type"), "merge": True,
+                     "universe": [*enums.CN_PROBLEM_TYPES.values(), "未填"]},
+        "机型": {"col": "_machines", "multi": True, "empty": "未填", "title": s("machine"), "merge": True},
+        "系列": {"col": "_series", "multi": True, "empty": "未填", "title": s("series"), "merge": True},
+        "加工厂": {"col": "factory", "title": s("factory"), "merge": True},
+        "结案与否": {"col": "_closed_label", "title": columns.CLOSED_OR_NOT, "merge": True,
+                     "universe": CLOSED_UNIVERSE, "fill": CLOSED_UNIVERSE},
         "处理环节": {"col": "_stages", "multi": True, "title": columns.STAGE},
-        "问题等级": {"col": "level", "keep_blank": True, "order": [*enums.CN_LEVELS, "未填"], "title": s("level")},
-        "跟进部门": {"col": "follow_dept", "title": s("follow_dept")},
-        "跟进人": {"col": "follower", "title": s("follower")},
-        "当前责任人": {"col": "_current_names", "multi": True, "title": s("current_people")},
+        "问题等级": {"col": "level", "keep_blank": True, "order": LEVEL_UNIVERSE, "title": s("level"),
+                     "merge": True, "universe": LEVEL_UNIVERSE, "fill": LEVEL_FILL},
+        "跟进部门": {"col": "follow_dept", "title": s("follow_dept"), "merge": True},
+        "跟进人": {"col": "follower", "title": s("follower"), "merge": True},
+        "当前责任人": {"col": "_current_names", "multi": True, "title": s("current_people"), "merge": True},
         "责任人": {"col": "responsible", "title": s("responsible")},
         "责任归属部门": {"col": "_resp_dept_names", "multi": True, "title": s("resp_dept")},
         "原因分类": {"col": "reason_class", "keep_blank": True, "title": s("reason_class")},
@@ -93,173 +111,39 @@ def dims(group_by: Sequence[str], basis: str | None) -> tuple[list[dict[str, Any
         "状态": {"col": "status", "title": s("status")},
     }
     needs_by = {"处理环节": "state", "当前责任人": "state", "责任人": "steps"}
-    out: list[dict[str, Any]] = []
-    missing: list[str] = []
-    needs: set[str] = set()
-    for g in group_by:
-        if g in PERIOD_DIMS:
-            col = _PERIOD_COL.get(basis or "建单", "_add")
-            out.append({"name": g, "period": g, "period_col": col, "title": g})
-            if col in ("_restart", "_close"):
-                needs.add("steps")
-        elif g in table:
-            out.append({"name": g, **table[g]})
-            if g in needs_by:
-                needs.add(needs_by[g])
-        else:
-            missing.append(g)
-    return out, missing, needs
+    return base.build_dims(group_by, basis, table, _PERIOD_COL, needs_by, _BASIS_NEEDS)
 
 
 #: 列（清单）与指标、排序要额外取的帧
 COLUMN_NEEDS = {"current_state": "state", "current_people": "state", "responsible": "steps",
                 "close_time": "steps", "restart_date": "steps", "inv_name": "inventory", "inv_std": "inventory"}
+#: 视图里靠第 4 步之前取的主数据才写得出来的列 → 主数据名（`MasterData.failed` 里的名字）。主数据没取到时，清单
+#: 要这一列或按它分组，这一段答「这一部分暂时没查到」，不把整列写成「未填」（设计 §14）
+MASTER_USES = {"factory": "factories", "follow_dept": "departments", "resp_dept": "departments",
+               "_resp_dept_names": "departments", "ven_name": "suppliers"}
 METRIC_NEEDS = {"结案周期": "steps", "停线时长": "steps"}
 SORT_NEEDS = {"结案时间": "steps"}
-#: 国内没有的指标（巴西才有）
-METRICS_ELSEWHERE = ("费用美元", "费用雷亚尔", "扣款")
 
 
 # ---------------------------------------------------------------------------- 第 6 步：条件对库
 
-
-@dataclass
-class Resolver:
-    master: MasterData
-    dept_aliases: NameTable | None
-    regions: NameTable | None
-    entities: Mapping[str, Sequence[str]]
-    today: date
-    #: 前一步给的引用值（已经是库里的名字），按「步骤.输出名」
-    refs: Mapping[str, Any] = field(default_factory=dict)
-
+#: 三域共用（S3 起放在 `domains/base.py`）；这里留名字给旧的调用方
+Resolver = base.Resolver
+period_label = base.period_label
 
 #: 条件 → 对库要用的主数据（`MasterData.failed` 里的名字）
 _MASTER_OF = {"机型": "models", "系列": "models", "加工厂": "factories", "供应商": "suppliers", "跟进部门": "departments",
               "责任归属部门": "departments", "跟进人": "people", "当前责任人": "people", "责任人": "people"}
+#: 国内没有对应列的条件：按它筛时国内整域不计入
+_ABSENT = {"国内工厂": "「国内工厂」只是海外单上的一列，国内未计入",
+           "是否需要回复8D": "国内没有「是否需要回复 8D」，国内未计入"}
 
 
-def _values(v: Any) -> list[str]:
-    items = v if isinstance(v, list) else [v]
-    return [str(x).strip() for x in items if x is not None and not isinstance(x, dict) and str(x).strip()]
-
-
-def _join(items: Sequence[str]) -> str:
-    return "、".join(items)
-
-
-def _not_found(kind: str, said: str, R: Resolver, skip: str | None) -> Ask:
-    return Ask(f"没有找到{kind}「{said}」，请核对名称。", names.check_options(said, R.entities, skip=skip))
-
-
-def _yes_no(said: str) -> int | None:
-    k = names.key(said)
-    if k in ("是", "需要", "有", "要"):
-        return 1
-    if k in ("否", "不需要", "没有", "无", "不"):
-        return 0
-    return None
-
-
-_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
-_SQL_OPS = {"eq": "EQ", "ne": "NE", "gt": "GT", "lt": "LT", "ge": "GE", "le": "LE"}
-
-
-def _numbers(values: Sequence[str]) -> list[float]:
-    """数值条件的取值（「100%」→ 100）：参数换算，不产生给用户的数。"""
-    out: list[float] = []
-    for v in values:
-        out += [float(x) for x in _NUMBER.findall(v)]
-    return out
-
-
-def _people(said: str, R: Resolver) -> list[int] | Ask:
-    """姓名 → 员工 ID。重名时追问「是哪个部门的这位」；「生产工程部的张三」按部门挑。"""
-    staff = R.master.people
-    want = names.key(said)
-    dept_hint = None
-    if not any(names.key(p.name) == want for p in staff) and "的" in said:
-        dept_hint, _, person = said.rpartition("的")
-        want = names.key(person)
-    hits = [p for p in staff if names.key(p.name) == want]
-    if dept_hint is not None:
-        hits = [p for p in hits if names.key(p.dept) == names.key(dept_hint)
-                or names.departments(dept_hint, [p.dept], R.dept_aliases)]
-    if not hits:
-        return Ask(f"没有找到人员「{said}」，请核对姓名。", names.check_options(said, R.entities, skip=KIND_PERSON))
-    depts = base.unique(p.dept for p in hits)
-    if len(depts) > 1:
-        options = names.person_options([(p.name, p.dept) for p in hits])
-        return Ask(f"「{said}」有几位同名的，是哪个部门的这位？", options, reason="重名")
-    return [p.id for p in hits]
-
-
-def _types_elsewhere() -> dict[str, tuple[str, ...]]:
-    return landed.problem_types()
-
-
-def _span_bounds(span: Span) -> tuple[date | None, date | None]:
-    if span.unlimited:
-        return None, None
-    return span.start, span.end
-
-
-def period_label(span: Span) -> str:
-    """比较两个时段时每段的叫法：整年「2025 年全年」、整月「2026 年 9 月」，其余写起止日期。"""
-    start, end = span.start, span.end
-    if start and end and not span.to_today:
-        if start.month == 1 and start.day == 1 and end.month == 12 and end.day == 31 and start.year == end.year:
-            return f"{start.year} 年全年"
-        nxt = date(end.year + (end.month == 12), end.month % 12 + 1, 1)
-        if start.day == 1 and start.year == end.year and start.month == end.month and end + timedelta(days=1) == nxt:
-            return f"{start.year} 年 {start.month} 月"
-    return span.describe()
-
-
-def _time_conditions(step: dict, spans: Sequence[Span], out: DomainStep, compare: bool) -> None:
-    items = [t for t in schema.as_list((step.get("params") or {}).get("time")) if isinstance(t, dict) and t.get("said")]
-    periods: list[tuple[Span, dict[str, Any]]] = []
-    seen: set[tuple[str, Span]] = set()
-    for t, span in zip(items, spans, strict=False):
-        basis = str(t.get("basis") or "建单")
-        if not compare:
-            # 同一依据的几项已合成同一段（`timespan._intersect_same_basis`），条件只写一次
-            if (basis, span) in seen:
-                continue
-            seen.add((basis, span))
-        if basis == "统计日期":
-            out.skipped.append("国内没有统计日期，按统计日期筛时国内未计入")
-            continue
-        start, end = _span_bounds(span)
-        cond_t = {"basis": basis, "start": start.isoformat() if start else None,
-                  "end": end.isoformat() if end else None}
-        if basis in ("结案", "重启"):
-            out.needs.add("steps")
-        if compare:
-            periods.append((span, cond_t))
-            continue
-        if start is None and end is None:
-            continue
-        if basis == "建单":
-            if span.relative() is not None:
-                out.sql.append(cond("m.AddDate", "GE", span.relative()))
-            elif start is not None:
-                out.sql.append(cond("m.AddDate", "GE", datetime(start.year, start.month, start.day)))
-            if end is not None and span.relative() is None:
-                nxt = end + timedelta(days=1)
-                out.sql.append(cond("m.AddDate", "LT", datetime(nxt.year, nxt.month, nxt.day)))
-        else:
-            out.times.append(cond_t)
-    if compare and len(periods) >= 2:
-        ordered = sorted(periods[:2], key=lambda p: p[0].start or date.min)
-        out.compare = [{"label": period_label(sp), "times": [c]} for sp, c in ordered]
-
-
-def resolve(step: dict, spans: Sequence[Span], R: Resolver) -> DomainStep | Ask:
+def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep | Ask:
     """一步在国内的条件（第 6 步）。"""
     out = DomainStep(domain=DOMAIN)
     p = step.get("params") or {}
-    _time_conditions(step, spans, out, compare=p.get("compare") == "时段")
+    base.time_conditions(step, spans, out, label=LABEL, add_col="m.AddDate", bases=BASES, needs=_BASIS_NEEDS)
     m = R.master
     for f in schema.as_list(p.get("filters")):
         if not isinstance(f, dict):
@@ -268,52 +152,46 @@ def resolve(step: dict, spans: Sequence[Span], R: Resolver) -> DomainStep | Ask:
         kind = schema.OP_KINDS.get(str(f.get("op") or "是"), "eq")
         neg = kind in ("ne", "nhas")
         raw = f.get("value")
-        values = _values(R.refs.get(raw["ref"], []) if schema.is_ref(raw) else raw)
+        values = base.values_of(R.refs.get(raw["ref"], []) if schema.is_ref(raw) else raw)
         if not values:
             continue
         if _MASTER_OF.get(fld) in m.failed:
             out.unavailable = True
             continue
-        shown = _join(values)
+        if fld in _ABSENT:
+            out.excluded.append(_ABSENT[fld])
+            continue
+        shown = base.join(values)
         if fld == "机型":
             hit: list[str] = []
             for v in values:
-                got = names.machines(v, m.machines, each=kind == "has")
+                got = names.machines(v, m.machines_in(DOMAIN), each=kind == "has")
                 if not got:
-                    return _not_found("机型", v, R, KIND_MACHINE)
+                    return base.not_found("机型", v, R.entities, KIND_MACHINE)
                 hit += [x for x in got if x not in hit]
             if kind == "has":
-                out.notes.append(f"按以下机型统计：{_join(hit)}")
+                out.notes.append(f"按以下机型统计：{base.join(hit)}")
             out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg})
-            out.echo.append(("机型", _join(hit)))
+            out.echo.append(("机型", base.join(hit)))
         elif fld == "系列":
-            hit = []
-            for v in values:
-                got = list(names.series(v, m.series))
-                if not got:
-                    machine = names.machines(re.sub(r"系列$", "", v), m.machines)
-                    tip = f"「{machine[0]}」是机型，属于{m.machine_series[machine[0]]}。" if (
-                        machine and machine[0] in m.machine_series) else ""
-                    return Ask(f"没有找到「{v}」这个系列。{tip}可选的系列有：{_join(m.series[:12])}。",
-                               list(m.series[:4]), reason="系列对不上")
-                hit += [x for x in got if x not in hit]
-            out.conds.append({"kind": "any_of", "col": "_series", "values": hit, "neg": neg})
-            out.echo.append(("系列", _join(hit)))
+            got_series = series_of(values, m, DOMAIN)
+            if isinstance(got_series, Ask):
+                return got_series
+            out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg})
+            out.echo.append(("系列", base.join(got_series)))
         elif fld == "加工厂":
             hit = []
             for v in values:
                 got = list(names.factories(v, m.factory_names(), R.regions))
                 if not got:
-                    return _not_found("加工厂", v, R, None)
+                    return base.not_found("加工厂", v, R.entities, None)
                 if len(got) > 1:
-                    return Ask(f"「{v}」对上了这几家工厂：{_join(got)}。按哪几家查？", [_join(got), *got][:4],
+                    return Ask(f"「{v}」对上了这几家工厂：{base.join(got)}。按哪几家查？", [base.join(got), *got][:4],
                                reason="多工厂")
                 hit += [x for x in got if x not in hit]
             codes = m.factory_codes(hit)
             out.sql.append(cond("m.Factory", "NOT_IN" if neg else "IN", codes))
-            out.echo.append(("加工厂", _join(hit)))
-        elif fld == "国内工厂":
-            out.skipped.append("「国内工厂」只是海外单上的一列，国内单按加工厂查")
+            out.echo.append(("加工厂", base.join(hit)))
         elif fld == "物料名称":
             out.conds.append({"kind": "contains", "col": "_inv_name", "values": values, "neg": neg})
             out.needs.add("inventory")
@@ -326,86 +204,64 @@ def resolve(step: dict, spans: Sequence[Span], R: Resolver) -> DomainStep | Ask:
             out.needs.add("orders")
             out.echo.append(("PN", shown))
         elif fld == "供应商":
-            hit = []
-            pool = m.supplier_names()
-            for v in values:
-                got = [n for n in pool if names.key(n) == names.key(v)] or \
-                      [n for n in pool if names.key(v) and names.key(v) in names.key(n)]
-                if not got:
-                    return _not_found("供应商", v, R, None)
-                if len(got) > 1:
-                    return Ask(f"「{v}」对上了这几家供应商：{_join(got[:12])}。查哪一家？", got[:4], reason="多供应商")
-                hit += [x for x in got if x not in hit]
-            out.sql.append(cond("m.VenCode", "NOT_IN" if neg else "IN", m.supplier_codes(hit)))
-            out.echo.append(("供应商", _join(hit)))
+            got_v = base.suppliers(values, R)
+            if isinstance(got_v, Ask):
+                return got_v
+            out.sql.append(cond("m.VenCode", "NOT_IN" if neg else "IN", m.supplier_codes(got_v)))
+            out.echo.append(("供应商", base.join(got_v)))
         elif fld == "问题类型":
-            codes: list[int] = []
-            for v in values:
-                got = enums.code_of(enums.CN_PROBLEM_TYPES, v)
-                if not got and v.endswith("类"):
-                    got = enums.code_of(enums.CN_PROBLEM_TYPES, v[:-1])
-                if got:
-                    codes += got
-                elif v in _types_elsewhere():
-                    out.skipped.append(f"国内无「{v}」类型，未计入")
-                else:
-                    return Ask(f"没有「{v}」这个问题类型，国内的问题类型有：{_join(enums.CN_PROBLEM_TYPES.values())}。",
-                               list(enums.CN_PROBLEM_TYPES.values())[:4], reason="类型对不上")
-            if codes:
-                out.sql.append(cond("m.ProblemType", "NOT_IN" if neg else "IN", base.unique(codes)))
-                out.echo.append(("问题类型", _join(enums.CN_PROBLEM_TYPES[c] for c in base.unique(codes))))
-            elif not neg:
-                out.skipped.append("国内没有这些问题类型")
+            got_t = base.problem_types(values, list(enums.CN_PROBLEM_TYPES.values()), LABEL, neg, out)
+            if isinstance(got_t, Ask):
+                return got_t
+            codes_t = [c for t in got_t for c in enums.code_of(enums.CN_PROBLEM_TYPES, t)]
+            if codes_t:
+                out.sql.append(cond("m.ProblemType", "NOT_IN" if neg else "IN", base.unique(codes_t)))
+                out.echo.append(("问题类型", base.join(got_t)))
         elif fld == "问题等级":
-            levels: list[str] = []
-            for v in values:
-                got = enums.level_codes(v)
-                if got is None:
-                    return Ask(f"问题等级「{v}」对不上，等级有 A+、A、B、C。", list(enums.CN_LEVELS), reason="等级对不上")
-                levels += [x for x in got if x not in levels]
+            got_l = levels_of(values)
+            if isinstance(got_l, Ask):
+                return got_l
             # 「未填」与具体等级可以同时选，按展示文字在沙箱里比（等级的空值有 NULL 与空串两种）
-            out.conds.append({"kind": "in", "col": "level", "values": levels, "neg": neg})
-            out.echo.append(("问题等级", _join(levels)))
+            out.conds.append({"kind": "in", "col": "level", "values": got_l, "neg": neg})
+            out.echo.append(("问题等级", base.join(got_l)))
         elif fld == "状态":
             items: list[list[str]] = []
             for v in values:
-                got = enums.status_kind(v)
-                if got is None:
-                    return Ask(f"「{v}」这个状态对不上，可以选：", enums.status_options(), reason="状态对不上")
-                items.append([got[0], got[1]])
-                if got[0] == "环节":
+                got_s = enums.status_kind(v)
+                if got_s is None:
+                    return Ask(f"「{v}」这个状态对不上，可以选：", enums.status_options(), reason="状态对不上",
+                               missing=f"没有「{v}」这一状态")
+                items.append([got_s[0], got_s[1]])
+                if got_s[0] == "环节":
                     out.needs.add("state")
             out.conds.append({"kind": "status", "items": items, "neg": neg})
             out.echo.append(("状态", shown))
         elif fld in ("跟进部门", "责任归属部门"):
-            hit = []
-            for v in values:
-                got = list(names.departments(v, m.dept_names(), R.dept_aliases))
-                if not got:
-                    return _not_found("部门", v, R, None)
-                hit += [x for x in got if x not in hit]
-            several = len(hit) > len(values) and not neg
-            ids = m.dept_ids(hit)
+            got_d = base.departments(values, R)
+            if isinstance(got_d, Ask):
+                return got_d
+            several = len(got_d) > len(values) and not neg
+            ids = m.dept_ids(got_d)
             if fld == "跟进部门":
                 out.sql.append(cond("m.RDepartment", "NOT_IN" if neg else "IN", ids))
-                out.echo.append(("问题跟进部门", _join(hit)))
+                out.echo.append(("问题跟进部门", base.join(got_d)))
                 if several:
                     out.breakdowns.append({"title": columns.shown("follow_dept"), "col": "follow_dept",
-                                           "multi": False, "values": hit})
+                                           "multi": False, "values": got_d})
             else:
                 if several:
                     out.breakdowns.append({"title": columns.shown("resp_dept"), "col": "_resp_dept_names",
-                                           "multi": True, "values": hit})
+                                           "multi": True, "values": got_d})
                 out.conds.append({"kind": "any_of", "col": "_resp_dept_ids", "values": ids, "neg": neg})
                 out.conds.append({"kind": "flag", "col": "_resp_material", "value": False})
-                out.echo.append(("责任归属部门", _join(hit)))
+                out.echo.append(("责任归属部门", base.join(got_d)))
         elif fld in ("跟进人", "当前责任人", "责任人"):
             ids_all: list[int] = []
             for v in values:
-                got = _people(v, R)
-                if isinstance(got, Ask):
-                    return got
-                ids_all += got
+                got_p = base.people(v, R, KIND_PERSON)
+                if isinstance(got_p, Ask):
+                    return got_p
+                ids_all += got_p
             if fld == "跟进人":
                 out.sql.append(cond("m.RUser", "NOT_IN" if neg else "IN", [str(i) for i in ids_all]))
                 out.echo.append(("问题跟进人", shown))
@@ -421,32 +277,20 @@ def resolve(step: dict, spans: Sequence[Span], R: Resolver) -> DomainStep | Ask:
             table = {"产品在制属性": enums.CN_OUTPUT_STATUS, "处理结果": enums.CN_DESIGN_RESULT,
                      "IQC意见": enums.CN_IQC_OPINION}[fld]
             column = {"产品在制属性": "m.OutPutStatus", "处理结果": "m.DesignConfirmResult", "IQC意见": "m.IQCOpinion"}[fld]
-            got_codes: list[int] = []
-            for v in values:
-                got = enums.code_of(table, v)
-                if not got:
-                    return Ask(f"{fld}「{v}」对不上，可以选：", list(table.values())[:4], reason="取值对不上")
-                got_codes += got
-            out.sql.append(cond(column, "NOT_IN" if neg else "IN", base.unique(got_codes)))
+            got_codes = enum_codes(fld, values, table)
+            if isinstance(got_codes, Ask):
+                return got_codes
+            out.sql.append(cond(column, "NOT_IN" if neg else "IN", got_codes))
             out.echo.append((fld, shown))
         elif fld in ("不良率", "不良数量", "影响数量"):
             column = {"不良率": "m.Rate", "不良数量": "m.BadQty", "影响数量": "m.ImpactQty"}[fld]
-            nums = _numbers(values)
-            if kind == "between" and len(nums) >= 2:
-                out.sql.append(cond(column, "GE", nums[0]))
-                out.sql.append(cond(column, "LE", nums[1]))
-            elif nums and kind in _SQL_OPS:
-                out.sql.append(cond(column, _SQL_OPS[kind], nums[0]))
-            else:
-                out.notes.append(f"「{fld}{shown}」没能换成数值条件，未按它筛")
-                continue
-            out.echo.append((fld, f"{f.get('op') or '是'} {shown}"))
+            base.numeric_sql(column, kind, values, out, fld, str(f.get("op") or "是"))
         elif fld == "发现工位":
             for v in values:
                 out.sql.append(cond("m.Station", "NOT_CONTAINS" if neg else "CONTAINS", v, include_nulls=neg))
             out.echo.append(("发现工位包含", shown))
         elif fld == "是否设计变更":
-            yn = _yes_no(values[0])
+            yn = base.yes_no(values[0])
             if yn is None:
                 return Ask("是否设计变更，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
             if neg:
@@ -456,17 +300,65 @@ def resolve(step: dict, spans: Sequence[Span], R: Resolver) -> DomainStep | Ask:
         elif fld == "原因分类":
             out.conds.append({"kind": "contains", "col": "reason_class", "values": values, "neg": neg})
             out.echo.append(("原因分类", shown))
-        elif fld == "是否需要回复8D":
-            out.skipped.append("国内没有「是否需要回复 8D」，按它筛时国内未计入")
         elif fld == "其他":
-            key = columns.resolve(str(f.get("column") or ""))
-            if key is None:
-                out.notes.append(f"本助手没有『{f.get('column') or '这一项'}』这一项")
-                continue
-            out.conds.append({"kind": "contains", "col": key, "values": values, "neg": neg})
-            out.needs |= {COLUMN_NEEDS[key]} if key in COLUMN_NEEDS else set()
-            out.echo.append((columns.shown(key), shown))
+            other_column(f, values, neg, out, COLUMN_NEEDS, DOMAIN)
     return out
+
+
+# ---------------------------------------------------------------------------- 三域共用的几种条件（巴西、海外也调）
+
+
+def series_of(values: Sequence[str], m: MasterData, domain: Domain) -> list[str] | Ask:
+    """系列（总述「机型与系列怎么对」）：对不上时列出可选系列请用户选；给的是机型名称时说明它属于哪个系列。"""
+    pool = m.series_in(domain)
+    hit: list[str] = []
+    for v in values:
+        got = list(names.series(v, pool))
+        if not got:
+            machine = names.machines(re.sub(r"系列$", "", v), m.machines_in(domain))
+            tip = f"「{machine[0]}」是机型，属于{m.machine_series[machine[0]]}。" if (
+                machine and machine[0] in m.machine_series) else ""
+            return Ask(f"没有找到「{v}」这个系列。{tip}可选的系列有：{base.join(pool[:12])}。",
+                       list(pool[:4]), reason="系列对不上", missing=f"没有「{v}」这个系列")
+        hit += [x for x in got if x not in hit]
+    return hit
+
+
+def levels_of(values: Sequence[str]) -> list[str] | Ask:
+    """问题等级（总述「问题等级」）：「A 级」只指 A，「A 级及以上」= A+、A；「未填」可与具体等级同时选。"""
+    out: list[str] = []
+    for v in values:
+        got = enums.level_codes(v)
+        if got is None:
+            return Ask(f"问题等级「{v}」对不上，等级有 A+、A、B、C。", list(enums.CN_LEVELS), reason="等级对不上")
+        out += [x for x in got if x not in out]
+    return out
+
+
+def enum_codes(fld: str, values: Sequence[str], table: dict[int, str]) -> list[int] | Ask:
+    codes: list[int] = []
+    for v in values:
+        got = enums.code_of(table, v)
+        if not got:
+            return Ask(f"{fld}「{v}」对不上，可以选：", list(table.values())[:4], reason="取值对不上")
+        codes += got
+    return base.unique(codes)
+
+
+def other_column(f: dict, values: Sequence[str], neg: bool, out: DomainStep, needs: dict[str, str],
+                 domain: Domain) -> None:
+    """「其他」条件：点名的列先对显示名与术语表；对不上的写「本助手没有『X』这一项」，本域没有的列整域不计入。"""
+    said = str(f.get("column") or "")
+    key = columns.resolve(said)
+    if key is None:
+        out.notes.append(f"本助手没有『{said or '这一项'}』这一项")
+        return
+    if key not in columns.view_columns(domain):
+        out.excluded.append(f"{domain.label}没有「{columns.shown(key)}」，{domain.label}未计入")
+        return
+    out.conds.append({"kind": "contains", "col": key, "values": list(values), "neg": neg})
+    out.needs |= {needs[key]} if key in needs else set()
+    out.echo.append((columns.shown(key, domain), base.join(values)))
 
 
 def within(out: DomainStep, ids: Sequence[int]) -> None:
@@ -523,7 +415,10 @@ def task_spec() -> dict[str, Any]:
 
 
 async def fetch(ctx: Any, dstep: DomainStep, master: MasterData) -> dict[str, pd.DataFrame]:
-    """本步国内的全部帧。`TableDenied` 原样抛给调用方（该域改记无权，§14）。"""
+    """本步国内的全部帧。`TableDenied` 原样抛给调用方（该域改记无权，§14）。
+
+    人员、存货与主数据的帧不带域前缀：三域一起取时由编排拼成一个帧再交沙箱（`turn/execute.py::_frames`）。
+    """
     first = specs(dstep)
     frames = dict(zip(first, await asyncio.gather(*(base.fetch_all(ctx, s, k) for s, k in first.values())),
                       strict=True))
