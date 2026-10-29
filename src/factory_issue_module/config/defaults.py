@@ -1,0 +1,58 @@
+"""五份配置的内置默认值的来源（设计 §11）。
+
+这里只给「默认值从哪来」：三份表格形态的取 `2_landed` 原文（代码里不抄第二份），两份 TOML 形态的
+是代码常量。解析交给 `config/files.py` 里与上传内容同一套函数，所以内置默认值本身也过一遍校验。
+
+- 说法清单 = `topic_terms.md`；部门简称 = 总述「部门名称怎么对」的简称表；地区说法 = 国内「加工厂」
+  的地区说法表。
+- 分段规则取自决策 2026-10-20「G2 数据源与治理决策」的「整理规则」，环节清单取自总述「比对范围」；
+  单测对照这两处原文。
+- 回答参数取自决策 2026-10-26「回答组织方式默认值」与 G2（重排上限按单数计，见 G2 补记）。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from factory_issue_module import landed
+
+
+def topic_terms_text() -> str:
+    return landed.topic_terms_text()
+
+
+def dept_aliases_text() -> str:
+    return landed.dept_aliases_section()
+
+
+def factory_regions_text() -> str:
+    return landed.factory_regions_section()
+
+
+SEGMENTATION: dict[str, Any] = {
+    "rule": "field_split",
+    "split_over": 500,
+    "seg_min": 300,
+    "seg_max": 500,
+    "overlap": "sentence",
+    "groups": {
+        "first": ["phen", "desc", "reason"],
+        "second": ["improve", "measure", "prev", "sqe", "step"],
+    },
+    "steps": {
+        "domestic_codes": [3, 4, 6, 10, 11, 13, 14, 35],
+        "overseas_names": [
+            "SQE跟进", "IQC意见", "IQC填写意见", "工厂制程分析", "责任人确认", "工程确认",
+            "设计变更", "设计变更后SQE确认", "预防对策确认",
+        ],
+    },
+}
+
+ANSWER_PARAMS: dict[str, Any] = {
+    "top_n": 10,
+    "export_threshold": 100,
+    "table_rows": 20,
+    "judge_max": 30,
+    "rerank_max": 100,
+    "custom_stats_enabled": True,
+}
