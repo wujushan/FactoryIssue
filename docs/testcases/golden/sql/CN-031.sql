@@ -7,7 +7,8 @@ DECLARE @today date = CAST(SYSDATETIME() AS date);
 DECLARE @start datetime = '2026-01-01';
 DECLARE @end datetime = CASE WHEN @today < '2027-01-01'
     THEN DATEADD(day, 1, CAST(@today AS datetime)) ELSE '2027-01-01' END;
--- 工厂码：柯洱斯 04 与 06，亮亮 05，惠州百富 09（2026-10-24 落盘）。缺的一家补 0。
+-- 工厂码：柯洱斯 04 与 06，亮亮 05，惠州百富 09（2026-10-24 落盘）。
+-- 只返回有单的工厂。没有单的不补 0。这次范围内只有柯洱斯有单。
 SELECT
     CASE p.Factory WHEN '04' THEN N'柯洱斯' WHEN '06' THEN N'柯洱斯'
                    WHEN '05' THEN N'亮亮' WHEN '09' THEN N'惠州百富' END AS FactoryName,

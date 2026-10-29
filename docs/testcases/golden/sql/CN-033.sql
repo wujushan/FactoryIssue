@@ -16,3 +16,4 @@ WHERE (p.IsDelete = 0 OR p.IsDelete IS NULL)
   AND p.AddDate >= @lastMonday
   AND p.AddDate < @thisMonday;
 -- Status＝13 是生产角色驳回，仍算未结案。有则单独计数。
+-- 2026-10-29 实库这次没有符合条件的单。应用层照实说没有查到，不出表。有单时清单仍加问题等级、当前状态。

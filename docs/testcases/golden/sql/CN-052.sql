@@ -12,4 +12,4 @@ WHERE (p.IsDelete = 0 OR p.IsDelete IS NULL)
   AND p.AddDate >= '2026-01-01' AND p.AddDate < '2026-07-01'
 GROUP BY CASE WHEN p.ProblemLevel IS NULL OR LTRIM(RTRIM(p.ProblemLevel)) = N'' THEN N'未填'
               ELSE p.ProblemLevel END;
--- A+、A、B、C、未填里没出现的补 0。
+-- 只返回有单的等级。这次是 A、B、C。A+、未填没有单，不补 0，不要求出现在表里。

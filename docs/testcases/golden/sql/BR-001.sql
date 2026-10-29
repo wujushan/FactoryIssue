@@ -12,3 +12,5 @@ WHERE p.Status <> -1
   AND p.ProblemLevel = 'A'
   AND p.ProblemType = N'硬件问题'
   AND (',' + REPLACE(ISNULL(p.BrazilFactory, ''), ' ', '') + ',') LIKE '%,TT,%';
+-- 2026-10-29 实库这次没有符合条件的单。应用层照实说没有查到，不出表。
+-- 统计口径要写：2024-07-01 至 2024-09-30、按建单时间、巴西、加工厂 TT、问题等级 A、硬件问题。

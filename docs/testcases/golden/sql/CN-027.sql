@@ -13,4 +13,4 @@ WHERE (p.IsDelete = 0 OR p.IsDelete IS NULL)
     WHERE n.ProblemId = p.ID
       AND UPPER(REPLACE(REPLACE(REPLACE(n.ProductName, N' ', N''), N'-', N''), N'_', N'')) = N'A8900')
 GROUP BY p.ProblemType;
--- 1 到 7 类里 GROUP BY 没出现的，应用层补 0。
+-- 只返回本次有单的类型。没有单的类型不补 0，golden 不锁具体类型名。
