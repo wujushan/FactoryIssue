@@ -222,7 +222,9 @@ def _time_text(run: StepRun) -> str | None:
     parts = list(dict.fromkeys(s.describe() for s in run.spans if not s.unlimited))  # 合成同一段的只写一次
     if (run.step.get("params") or {}).get("compare") == "时段" and len(run.spans) >= 2:
         ordered = sorted(run.spans[:2], key=lambda s: s.start or date.min)
-        return f"{base.period_label(ordered[1])}与{base.period_label(ordered[0])}对比"
+        late, early = base.period_label(ordered[1]), base.period_label(ordered[0])
+        # 汉字与数字之间空一格，同时间说法的写法（CN-025 golden「2025 年全年与 2024 年全年对比」）
+        return f"{late}与{' ' if early[:1].isdigit() else ''}{early}对比"
     return "；".join(parts) if parts and items else None
 
 

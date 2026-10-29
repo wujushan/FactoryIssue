@@ -246,7 +246,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 out.sql.append(cond("m.Station", "NOT_CONTAINS" if neg else "CONTAINS", v, include_nulls=neg))
             out.echo.append(("发现工位包含", shown))
         elif fld == "是否设计变更":
-            yn = base.yes_no(values[0])
+            yn = base.yes_no_or_chosen(values[0], R.query)
             if yn is None:
                 return Ask("是否设计变更，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
             if neg:

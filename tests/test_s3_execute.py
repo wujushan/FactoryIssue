@@ -130,6 +130,42 @@ async def test_has_cost_without_saying_flag_uses_cost_lines():
     assert [r[0] for r in _tables(events)[0]["rows"]] == ["BR9901001", "BR9901003", "BR9901004"]
 
 
+#: BR-004 规划器实际写的条件（spike 历次运行 187 次里 187 次都是这一份）：列名照术语表写成判据，取值把条件再说一遍
+BR004_COST = {"field": "其他", "column": "费用明细合计大于 0", "op": "是", "value": "涉及费用", "from": "user"}
+
+
+async def test_br004_cost_condition_as_the_planner_writes_it():
+    """BR-004：「涉及费用」写在取值里，按费用明细合计大于 0 筛，不追问「选是还是否」。"""
+    reply = plan(step("aggregate", domains=BR, time=[{"said": "今年", "basis": "建单", "from": "user"}],
+                      filters=[BR004_COST], metrics=["费用美元", "扣款"]))
+    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, "巴西共 3 张。"])
+    assert EventType.CLARIFY not in _types(events)
+    text = _text(events)
+    assert "涉及费用：是（按费用明细认定）" in text and "费用合计 120 美元" in text and "扣款" in text
+    assert "统计口径" in text and "BrazilProblemCost" in {q.tables[0] for q in data_queries(h)}
+
+
+@pytest.mark.parametrize(("said", "kept"), [("没有费用", ["BR9901002"]), ("不涉及费用", ["BR9901002"])])
+async def test_cost_condition_said_negatively_in_the_value(said, kept):
+    reply = plan(step("list_issues", domains=BR, filters=[{**BR004_COST, "value": said}]))
+    h, events = await _go("巴西没有费用的单", [reply, "共 1 张。最需要关注的是 BR9901002。"])
+    assert [r[0] for r in _tables(events)[0]["rows"]] == kept
+
+
+async def test_yes_no_button_breaks_the_loop():
+    """「选是还是否」的按钮发回「原话（是）」：模型照旧写认不出的取值时按问句末尾选定的那一项，不再追问同一句。"""
+    odd = {"field": "是否需要回复8D", "op": "是", "value": "要回 8D 的", "from": "user"}
+    reply = plan(step("list_issues", domains=BR, filters=[odd]))
+    h, events = await _go("巴西要回 8D 的单", [reply])
+    assert _types(events) == [EventType.CLARIFY]
+    button = events[0].data["recommendations"][0]
+    assert button["label"] == "是" and button["query"] == "巴西要回 8D 的单（是）"
+    h, events = await _go(button["query"], [reply, "共 1 张。最需要关注的是 BR9901001。"])
+    assert EventType.CLARIFY not in _types(events)
+    main = next(q for q in data_queries(h) if q.tables[0] == "BrazilProblemList")
+    assert "[IsRequire8D] =" in main.sql and 1 in main.params.values()
+
+
 async def test_overseas_rate_is_not_averaged():
     """OS-008：海外不良率是单上原文，不汇总，逐单列出原文。"""
     reply = plan(step("aggregate", domains=OS, metrics=["合计不良率"]))
@@ -250,6 +286,16 @@ async def test_current_responsible_excludes_brazil():
     h, events = await _go("测试甲手上还有哪些单", [reply, "共 3 张。最需要关注的是 ZC9901001。"])
     assert "巴西不提供当前责任人，巴西未计入" in _text(events)
     assert not any(q.tables[0] == "BrazilProblemList" for q in data_queries(h))
+
+
+async def test_short_type_name_only_elsewhere_is_named_in_full():
+    """简称「软件」三域一起：国内、海外按软件问题查；巴西没有这个类型，写明「巴西无『软件问题』类型」，不追问。"""
+    reply = plan(step("aggregate", time=T30, filters=[{"field": "问题类型", "op": "是", "value": "软件",
+                                                        "from": "user"}]))
+    h, events = await _go("近 30 天软件的问题有多少", [reply, "共 1 张。"])
+    assert EventType.CLARIFY not in _types(events)
+    text = _text(events)
+    assert "巴西无「软件问题」类型，未计入" in text and "问题类型：软件问题" in text
 
 
 async def test_type_only_elsewhere_excludes_domestic():

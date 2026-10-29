@@ -117,6 +117,7 @@ _ABSENT = {
     "处理结果": "巴西没有「处理结果」，巴西未计入",
 }
 _COST_WORDS = ("费用", "涉案金额")
+_NEGATIONS = ("不", "没", "无", "未")
 
 
 def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep | Ask:
@@ -239,7 +240,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                                     include_nulls=neg))
             out.echo.append(("发现工位包含", shown))
         elif fld == "是否设计变更":
-            yn = base.yes_no(values[0])
+            yn = base.yes_no_or_chosen(values[0], R.query)
             if yn is None:
                 return Ask("是否设计更改，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
             if neg:
@@ -248,7 +249,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             out.conds.append({"kind": "in", "col": "design_change", "values": ["需要" if yn else "不需要"]})
             out.echo.append(("是否设计更改", "需要" if yn else "不需要"))
         elif fld == "是否需要回复8D":
-            yn = base.yes_no(values[0])
+            yn = base.yes_no_or_chosen(values[0], R.query)
             if yn is None:
                 return Ask("是否需要回复 8D，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
             if neg:
@@ -268,8 +269,17 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
 
 def _cost_condition(said: str, neg: bool, out: DomainStep, query: str) -> Ask | None:
     """巴西「费用」：用户明说「是否涉及费用」时按单上的标记筛，只看是、否两种（0 是测试脏值，不计入，J-D12）；
-    其余说法（「涉及费用的单」「有费用的单」）按费用明细合计大于 0 认定，不看标记（巴西业务描述「费用」）。"""
+    其余说法（「涉及费用的单」「有费用的单」）按费用明细合计大于 0 认定，不看标记（巴西业务描述「费用」）。
+
+    规划器常把条件本身写进取值（BR-004：列「费用明细合计大于 0」、取值「涉及费用」）：取值里说到费用时就是
+    「是」，前面带否定词（「没有费用」「不涉及费用」）时是「否」。
+    """
     yn = base.yes_no(said)
+    k = names.key(said)
+    if yn is None and any(w in k for w in _COST_WORDS):
+        yn = 0 if k.startswith(_NEGATIONS) else 1
+    if yn is None:
+        yn = base.yes_no_or_chosen(said, query)
     if yn is None:
         return Ask("是否涉及费用，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
     if neg:

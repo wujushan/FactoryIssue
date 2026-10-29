@@ -184,6 +184,26 @@ async def test_cn025_period_compare_by_type_has_a_grouped_bar_chart():
         == by_type == {"硬件问题": (2, 1), "软件问题": (1, 2), "物料问题": (0, 1)}
 
 
+async def test_cn025_short_type_names_are_queried_not_clarified():
+    """CN-025：规划器照抄「软件、硬件、结构三类」写成简称（spike 里每次都这样写、按对计分），执行层按软件问题、
+    硬件问题、结构问题查，不追问。"""
+    y = date.today().year
+    reply = plan(step("aggregate", domains=CN, compare="时段", group_by=["问题类型"],
+                      filters=[{"field": "问题类型", "op": "属于", "value": ["软件", "硬件", "结构"], "from": "user"}],
+                      time=[{"said": f"{y - 2} 年", "basis": "建单", "from": "user"},
+                            {"said": f"{y - 1} 年", "basis": "建单", "from": "user"}]))
+    h, events = await _go("软件、硬件、结构三类，两年国内数量的环比增减怎么样？", [reply, COMPARE_NARR],
+                          main=_two_years_rows())
+    assert EventType.CLARIFY not in _types(events)
+    rows = {r[0] for r in _tables(events)[0]["rows"]}
+    assert {"硬件问题", "软件问题"} <= rows
+    assert "问题类型：软件问题、硬件问题、结构问题" in _text(events)
+    assert f"{y - 1} 年全年与 {y - 2} 年全年对比" in _text(events)  # golden 的 answer_contains，「与」后空一格
+    # 类型条件进 SQL（假连接器不执行 WHERE，所以看发出的条件）：软件 2、硬件 1、结构 6
+    main = next(q for q in data_queries(h) if q.tables[0] == "ZCTracking_ProblemList")
+    assert "[ProblemType] IN" in main.sql and {1, 2, 6} <= set(main.params.values())
+
+
 async def test_period_compare_without_groups_charts_the_two_periods():
     y = date.today().year
     reply = plan(step("aggregate", domains=CN, compare="时段",

@@ -211,11 +211,29 @@ def yes_no(said: str) -> int | None:
     from factory_issue_module.plan import names
 
     k = names.key(said)
-    if k in ("是", "需要", "有", "要"):
+    # 规划器对照集按同义计对的写法都认（`scripts/planner_spike/common.py::VALUE_SYNONYMS`，`tests/test_plan_values.py`）
+    if k in ("是", "需要", "有", "要", "涉及", "true", "yes"):
         return 1
-    if k in ("否", "不需要", "没有", "无", "不"):
+    if k in ("否", "不需要", "没有", "无", "不", "不涉及", "false", "no"):
         return 0
     return None
+
+
+#: 追问按钮发回的问句末尾带着选定的那一项（`plan/clarify.py::with_choice`：「原话（是）」）
+_CHOSEN = re.compile(r"（\s*(是|否)\s*）\s*$")
+
+
+def yes_no_or_chosen(said: str, query: str) -> int | None:
+    """「是 / 否」说法；认不出时看问句末尾是否带着「（是）」「（否）」。
+
+    用户点了「选『是』还是『否』」的按钮，问句是原话加选定的一项。模型下一轮照旧把认不出的取值抄进计划，不按
+    选定的这一项就会一直追问同一句（BR-004）。按钮直接填参数、不重新规划随 S5 的工作区（设计 §4.4）。
+    """
+    yn = yes_no(said)
+    if yn is not None:
+        return yn
+    m = _CHOSEN.search(query or "")
+    return None if m is None else (1 if m.group(1) == "是" else 0)
 
 
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
@@ -379,27 +397,44 @@ def time_conditions(step: dict, spans: Sequence[Any], out: DomainStep, *, label:
         out.compare = [{"label": period_label(sp), "times": [c]} for sp, c in ordered]
 
 
+def _type_keys(k: str) -> list[str]:
+    """一个问题类型说法（已归一）依次试的写法：原样；「X 类」「X 类问题」去掉「类」；末尾补上「问题」。
+
+    只在末尾补「问题」，不做包含匹配：「制程」补成「制程问题」也对不上任何类型，照旧追问（总述「三域共用的说法」：
+    制程不是问题类型）。
+    """
+    out = [k]
+    if k.endswith("类问题"):
+        out.append(k[:-3] + "问题")
+    if k.endswith("类"):
+        out += [k[:-1], k[:-1] + "问题"]
+    if not k.endswith("问题"):
+        out.append(k + "问题")
+    return out
+
+
 def problem_types(values: Sequence[str], known: Sequence[str], label: str, neg: bool,
                   out: DomainStep) -> list[str] | Ask:
-    """问题类型说法 → 本域的类型名（总述「跨域归并」）。
+    """问题类型说法 → 本域的类型名（总述「跨域归并」「三域共用的说法」）。
 
     只在别的域有的类型：本域不计入这一项并写明（「巴西无『工厂制程』类型，未计入」）；点名的类型本域一个都没有时
-    整域不计入。三域都没有的说法，列出本域的类型请用户选。「X 类」按 X 认。
+    整域不计入。三域都没有的说法，列出本域的类型请用户选。类型名称可以省掉末尾的「问题」、带「类」
+    （「软件、硬件、结构三类」即软件问题、硬件问题、结构问题），见 `_type_keys`。
     """
     from factory_issue_module import landed
     from factory_issue_module.plan import names
 
-    elsewhere = landed.problem_types()
     keys = {names.key(t): t for t in known}
+    elsewhere = {names.key(t): t for t in landed.problem_types()}
     hit: list[str] = []
     for v in values:
-        k = names.key(v)
-        got = keys.get(k) or (keys.get(k[:-1]) if k.endswith("类") else None)
+        tries = _type_keys(names.key(v))
+        got = next((keys[k] for k in tries if k in keys), None)
         if got is not None:
             if got not in hit:
                 hit.append(got)
             continue
-        other = v if v in elsewhere else (v[:-1] if v.endswith("类") and v[:-1] in elsewhere else None)
+        other = next((elsewhere[k] for k in tries if k in elsewhere), None)
         if other is not None:
             if not neg:
                 out.skipped.append(f"{label}无「{other}」类型，未计入")
