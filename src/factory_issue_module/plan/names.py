@@ -7,7 +7,8 @@
   末尾的「系列」。「X 各款」（计划里的「机型 包含 X」，只来自 §5.3 第 9 条）取 X 与「X + 字母」的机型。
 - 部门：总述「部门名称怎么对」，完整名称 → 部门简称（配置）→ 包含匹配，前一步对上就不往下。
 - 加工厂：国内、海外按名称包含（国内另认地区说法，配置），巴西按名称整段相等；末尾带「工厂」时先整串对，
-  对不上再去掉这两个字对。同名的几个工厂码合成一个名称。
+  对不上再去掉这两个字对。同名的几个工厂码合成一个名称。地区说法后面可以跟「的三个工厂」「全部工厂」
+  这类半句（国内业务描述「加工厂」：「惠州的三个工厂」），去掉后与配置整串相同才算。
 - 人员：按姓名整串相同；同名的不止一人时由调用方追问是哪个部门的。
 - 对不上、要请用户核对时的选项（`check_options`）：在可查的域里找与它整串相同的各类名称，最多 3 个，
   `label` 如「TT：巴西的加工厂」；不用包含、相近匹配，这一步只给选项，不替用户选。
@@ -100,11 +101,24 @@ def _factory_tries(said: str) -> list[str]:
     return [t for t in tries if t]
 
 
+#: 地区说法后面跟着的那半句：「惠州的工厂」「惠州的三个工厂」「惠州那几家工厂」「惠州地区全部工厂」「惠州所有的加工厂」。
+#: 去掉之后要与配置里的地区说法整串相同才算，所以「惠州百富工厂」仍按工厂名称对
+_REGION_TAIL = re.compile(r"(?:地区)?的?(?:这|那)?(?:全部|所有|各|[0-9几两一二三四五六七八九十]+)?[个家]?的?加?工厂$")
+
+
+def region_items(said: str, regions: NameTable | None) -> tuple[str, ...] | None:
+    """按地区说的工厂（国内「加工厂」的地区说法）→ 配置里对到的工厂；不是地区说法时 None。"""
+    if regions is None:
+        return None
+    text = key(said)
+    return regions.items_of(text) or regions.items_of(_REGION_TAIL.sub("", text))
+
+
 def factories(said: str, names: Iterable[str], regions: NameTable | None = None) -> tuple[str, ...]:
     """国内、海外：名称包含用户的说法即命中（国内另认地区说法）；对上多个时由调用方请用户选。"""
     pool = list(names)
     if regions is not None:
-        listed = regions.items_of(said) or regions.items_of(re.sub(r"(的)?(工厂|加工厂)$", "", said.strip()))
+        listed = region_items(said, regions)
         if listed:
             return _unique(n for n in pool if key(n) in {key(x) for x in listed})
     for want in _factory_tries(said):

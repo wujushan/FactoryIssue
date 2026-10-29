@@ -250,11 +250,25 @@ def test_link_sites_accepts_host_port_and_scheme():
         ("issue = 1\n", "字符串"),
         ('site = "info.example.test"\n', "不认识"),
         ('issue = \n', "TOML"),
+        # 平台的必填只看传没传过：传了却没写 issue，国内问题编号照样不带链接，要在保存时拦下
+        ("", "缺 issue"),
+        ("# 测试环境站点\n\n", "缺 issue"),
+        ('brazil = "br.example.test"\n', "缺 issue"),
+        ('brazil = "br.example.test"\nattachment = "files.example.test"\n', "缺 issue"),
     ],
 )
 def test_link_sites_rejects(text, message):
     with pytest.raises(ConfigFormatError, match=message):
         validate(LINK_SITES, text)
+
+
+async def test_link_sites_stored_without_issue_falls_back_to_no_link():
+    """这条校验之前存下的、没写 issue 的版本：读时解析失败，回退为不生成链接并留 WARNING，不拿 brazil 顶替。"""
+    config = FakeConfig(MANIFEST, {LINK_SITES: ['brazil = "br.example.test"\n']})
+    with structlog.testing.capture_logs() as logs:
+        sites = await files.load(_Ctx(config), LINK_SITES)
+    assert sites == files.LinkSites()
+    assert any(e["event"] == "factory_issue_config_fallback" and e["file"] == LINK_SITES for e in logs)
 
 
 def test_unknown_config_name_is_not_rejected():

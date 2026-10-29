@@ -362,6 +362,7 @@ def plan_spans(plan: dict, today: date) -> tuple[dict[str, list[Span]], str | No
         items = (step.get("params") or {}).get("time")
         items = items if isinstance(items, list) else [items] if items else []
         spans: list[Span] = []
+        bases: list[str] = []
         for t in items:
             if not isinstance(t, dict) or not t.get("said"):
                 continue
@@ -369,8 +370,37 @@ def plan_spans(plan: dict, today: date) -> tuple[dict[str, list[Span]], str | No
             if span is None:
                 return out, str(t["said"])
             spans.append(span)
+            bases.append(str(t.get("basis") or "建单"))
+        if (step.get("params") or {}).get("compare") != "时段":
+            spans = _intersect_same_basis(spans, bases, today)
         out[str(step.get("id"))] = spans
     return out, None
+
+
+def _intersect_same_basis(spans: list[Span], bases: list[str], today: date) -> list[Span]:
+    """同一依据写了几项时间、又不是比较两个时段：几项都要满足，合成一段（与原列表一一对应，同组的位置放同一段）。
+
+    「截止 2026 年 6 月，A8900 今年……」规划器写成「截止 2026 年 6 月」「今年」两项，取数本来就是两项都满足
+    （= 总述「今年截止 6 月」），合成之后统计口径只写一段「2026-01-01 至 2026-06-30」。滚动窗口（取数写
+    `$relative`）、不限时间、没有重叠的几段不合，照原样。
+    """
+    out = list(spans)
+    for basis in dict.fromkeys(bases):
+        idx = [i for i, b in enumerate(bases) if b == basis]
+        group = [spans[i] for i in idx]
+        if len(group) < 2 or any(s.unlimited or s.rolling_days is not None for s in group):
+            continue
+        starts = [s.start for s in group if s.start is not None]
+        ends = [s.end for s in group if s.end is not None]
+        start, end = (max(starts) if starts else None), (min(ends) if ends else None)
+        if start is not None and end is not None and start > end:
+            continue
+        merged = Span(said="、".join(s.said for s in group), start=start, end=end,
+                      to_today=any(s.to_today and s.end == end for s in group),
+                      future=start is not None and start > today)
+        for i in idx:
+            out[i] = merged
+    return out
 
 
 # ---------------------------------------------------------------------------- 问句里的时间（第 14 条）

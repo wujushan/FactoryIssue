@@ -1,6 +1,7 @@
 """配置文件（设计 §11）：六份 `config_files` 的解析、校验、缓存与回退。
 
-`link_sites.toml`（本环境 INFO 站点地址）随环境不同，没有内置默认值，没传时不生成链接。
+`link_sites.toml`（本环境 INFO 站点地址）随环境不同，没有内置默认值，没传时不生成链接；
+传了就必须写出 `issue`，否则保存时拒绝。
 
 - 上传的内容与内置默认值走同一套解析函数；`validate_config()` 就是「解析一遍，出错即拒绝保存」，
   报错文字原样显示在 Console 的上传框里，所以都写成管理员看得懂的话。
@@ -385,9 +386,19 @@ def parse_link_sites(text: str) -> LinkSites:
 
 
 def link_sites_from(data: Mapping[str, Any]) -> LinkSites:
+    """上传的内容必须写出 `issue`：空文件、只有注释、只写了另两项都拒绝保存。
+
+    平台的 `required=True` 只看文件传没传过；传了一份没有 `issue` 的文件，启动告警就停了，
+    国内问题编号却仍然不带链接，管理员看不出没配上。没传时的「不生成链接」走槽位默认值，不经过这里。
+    """
     _only_keys("", data, _SITE_KEYS)
+    if "issue" not in data:
+        raise ConfigFormatError(
+            "缺 issue：要写本环境 INFO 站点的地址，如 issue = \"info.example.com\"；"
+            "brazil、attachment 不写时与 issue 相同"
+        )
     sites = {k: _site(k, data[k]) for k in _SITE_KEYS if k in data}
-    issue = sites.get("issue")
+    issue = sites["issue"]
     return LinkSites(issue=issue, brazil=sites.get("brazil", issue), attachment=sites.get("attachment", issue))
 
 
@@ -408,8 +419,8 @@ SLOTS: dict[str, _Slot] = {
         parse_factory_regions, parse_factory_regions(defaults.factory_regions_text())
     ),
     ANSWER_PARAMS: _Slot(parse_answer_params, answer_params_from({})),
-    #: 站点地址随环境不同，没有内置默认值：没传时不生成链接
-    LINK_SITES: _Slot(parse_link_sites, link_sites_from({})),
+    #: 站点地址随环境不同，没有内置默认值：没传时不生成链接（上传的内容必须写出 issue，见 link_sites_from）
+    LINK_SITES: _Slot(parse_link_sites, LinkSites()),
 }
 
 _cache: dict[tuple[str, int], Any] = {}

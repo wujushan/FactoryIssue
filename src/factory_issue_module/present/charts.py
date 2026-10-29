@@ -61,6 +61,20 @@ def choose(dimension: str, groups: int, *, multi: bool, user_chart: str | None) 
     return kind, None
 
 
+def choose_compare(groups: int, *, user_chart: str | None) -> tuple[str | None, str | None]:
+    """比较两个时段：两段各一组柱子（分组柱状）；没有分组时横轴是这两段，各一根柱子。
+
+    分组 2 组及以上才画（总述「什么时候配图」）。要折线照给；要饼图改柱状：两段各一组数，一张饼图放不下。
+    """
+    if user_chart == "不要图" or groups < 2:
+        return None, None
+    if user_chart == "折线":
+        return "line", None
+    if user_chart == "饼图":
+        return "bar", "两个时段各有一组数，一张饼图放不下，改用柱状图。"
+    return "bar", None
+
+
 def style(kind: str, series_count: int, groups: int) -> dict[str, Any]:
     if kind == "pie":
         return _PIE

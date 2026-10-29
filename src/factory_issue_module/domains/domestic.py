@@ -219,8 +219,14 @@ def period_label(span: Span) -> str:
 def _time_conditions(step: dict, spans: Sequence[Span], out: DomainStep, compare: bool) -> None:
     items = [t for t in schema.as_list((step.get("params") or {}).get("time")) if isinstance(t, dict) and t.get("said")]
     periods: list[tuple[Span, dict[str, Any]]] = []
+    seen: set[tuple[str, Span]] = set()
     for t, span in zip(items, spans, strict=False):
         basis = str(t.get("basis") or "建单")
+        if not compare:
+            # 同一依据的几项已合成同一段（`timespan._intersect_same_basis`），条件只写一次
+            if (basis, span) in seen:
+                continue
+            seen.add((basis, span))
         if basis == "统计日期":
             out.skipped.append("国内没有统计日期，按统计日期筛时国内未计入")
             continue

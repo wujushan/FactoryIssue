@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 
 import cn_data
 import pandas as pd
+import pytest
 import scopes
 from fakes import data_queries, make_harness, run
 from forge_core.dataquery import QuerySpec
@@ -116,15 +117,92 @@ async def test_machine_not_found_clarifies_without_fetching():
     assert data_queries(h) == []
 
 
-async def test_region_matching_several_factories_clarifies():
+@pytest.mark.parametrize(("said", "op"), [
+    ("惠州", "是"),
+    ("惠州的三个工厂", "属于"),  # 规划器对 CN-011 的原样写法（对照集 p2.2 五次都是这样）
+    ("惠州地区全部工厂", "是"),  # 测试环境上模型自己追问后，按钮拼出的问句里规划器的写法
+])
+async def test_region_matching_several_factories_clarifies(said, op):
     """总述「必要澄清项」：按地区说工厂对上多家时追问，选项为几家合起来与每家单独（CN-011）。"""
-    reply = plan(step("aggregate", domains=CN, time=[{"said": "今年", "basis": "建单", "from": "user"}],
-                      filters=[{"field": "加工厂", "op": "是", "value": "惠州", "from": "user"}]))
-    h, events = await _go("今年国内惠州的三个工厂一共出了多少问题", [reply])
+    reply = plan(step("aggregate", domains=CN, time=[{"said": "今年上半年", "basis": "建单", "from": "user"}],
+                      filters=[{"field": "加工厂", "op": op, "value": said, "from": "user"}]))
+    h, events = await _go("今年上半年国内惠州的三个工厂一共出了多少问题？", [reply])
     assert _types(events) == [EventType.CLARIFY]
+    question = events[0].data["question"]
+    assert all(n in question for n in ("柯洱斯", "亮亮", "惠州百富")) and question.count("柯洱斯") == 1
     labels = [r["label"] for r in events[0].data["recommendations"]]
     assert labels[0] == "柯洱斯、亮亮、惠州百富" and set(labels[1:]) == {"柯洱斯", "亮亮", "惠州百富"}
     assert data_queries(h) == []
+
+
+async def test_cn032_until_june_and_this_year_is_one_period():
+    """CN-032 golden 实测：两项建单时间在统计口径里写成「截至 2026-06-30；2026-01-01 至今天」，取数却是两项都满足。"""
+    if date.today().month <= 6:
+        pytest.skip("编排按真实的今天换算；上半年里「截止今年 6 月」期末还没到，止于今天")
+    this_year = date.today().year
+    reply = plan(step("aggregate", time=[{"said": f"截止 {this_year} 年 6 月", "basis": "建单", "from": "user"},
+                                         {"said": "今年", "basis": "建单", "from": "user"}],
+                      filters=[{"field": "机型", "op": "是", "value": "A920", "from": "user"},
+                               {"field": "加工厂", "op": "是", "value": "亮亮工厂", "from": "user"}]))
+    h, events = await _go(f"截止 {this_year} 年 6 月，国内 A920 今年在亮亮工厂有多少单？", [reply, "共 0 张。"])
+    text = _text(events)
+    assert f"{this_year}-01-01 至 {this_year}-06-30" in text
+    assert "截至今天" not in text and f"截至 {this_year}-06-30" not in text
+    main_sql = next(q for q in data_queries(h) if q.tables[0] == "ZCTracking_ProblemList")
+    dates = sorted(v for v in main_sql.params.values() if isinstance(v, datetime))
+    assert dates == [datetime(this_year, 1, 1), datetime(this_year, 7, 1)]  # 一个下界、一个上界，不重复
+
+
+COMPARE_NARR = "后一年比前一年多 1 张。"
+
+
+def _two_years_rows() -> pd.DataFrame:
+    """前年 3 张（硬件 2、软件 1），去年 4 张（硬件 1、软件 2、物料 1）。"""
+    y = date.today().year
+    spec = [(y - 2, 1), (y - 2, 1), (y - 2, 2), (y - 1, 1), (y - 1, 2), (y - 1, 2), (y - 1, 3)]
+    base = cn_data.main_rows()[0]
+    return pd.DataFrame([{**base, "ID": i, "Numbers": f"ZC99030{i:02d}", "ProblemType": t,
+                          "AddDate": datetime(year, 5, 1, 10, 0)} for i, (year, t) in enumerate(spec, start=1)])
+
+
+async def test_cn025_period_compare_by_type_has_a_grouped_bar_chart():
+    """CN-025 golden 实测只有表没有图：两段各一组柱子，横轴问题类型，合计不画，数取自沙箱的表。"""
+    y = date.today().year
+    reply = plan(step("aggregate", domains=CN, compare="时段", group_by=["问题类型"],
+                      time=[{"said": f"{y - 2} 年", "basis": "建单", "from": "user"},
+                            {"said": f"{y - 1} 年", "basis": "建单", "from": "user"}]))
+    h, events = await _go(f"{y - 2} 年和 {y - 1} 年国内各类问题的增减", [reply, COMPARE_NARR], main=_two_years_rows())
+    assert _types(events).index(EventType.TABLE) < _types(events).index(EventType.CHART)
+    table = _tables(events)[0]
+    chart = next(e.data for e in events if e.type is EventType.CHART)
+    a, b = f"{y - 2} 年全年", f"{y - 1} 年全年"
+    assert chart["chart_type"] == "bar" and [s["name"] for s in chart["series"]] == [a, b]
+    by_type = {r[0]: (r[1], r[2]) for r in table["rows"] if r[0] != "合计"}
+    xs = chart["x"]["data"]
+    assert "合计" not in xs and chart["x"]["name"] == "问题类型"
+    assert {x: (chart["series"][0]["data"][i], chart["series"][1]["data"][i]) for i, x in enumerate(xs)} \
+        == by_type == {"硬件问题": (2, 1), "软件问题": (1, 2), "物料问题": (0, 1)}
+
+
+async def test_period_compare_without_groups_charts_the_two_periods():
+    y = date.today().year
+    reply = plan(step("aggregate", domains=CN, compare="时段",
+                      time=[{"said": f"{y - 2} 年", "basis": "建单", "from": "user"},
+                            {"said": f"{y - 1} 年", "basis": "建单", "from": "user"}]))
+    h, events = await _go(f"{y - 2} 年和 {y - 1} 年国内的单数对比", [reply, COMPARE_NARR], main=_two_years_rows())
+    chart = next(e.data for e in events if e.type is EventType.CHART)
+    assert chart["x"]["data"] == [f"{y - 2} 年全年", f"{y - 1} 年全年"] and chart["series"][0]["data"] == [3, 4]
+
+
+def test_compare_chart_choice():
+    from factory_issue_module.present import charts
+
+    assert charts.choose_compare(3, user_chart=None) == ("bar", None)
+    assert charts.choose_compare(1, user_chart=None) == (None, None)  # 只有一组不画
+    assert charts.choose_compare(3, user_chart="不要图") == (None, None)
+    assert charts.choose_compare(3, user_chart="折线") == ("line", None)
+    kind, why = charts.choose_compare(3, user_chart="饼图")
+    assert kind == "bar" and "饼图" in why
 
 
 async def test_same_name_factory_codes_all_used():

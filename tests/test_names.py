@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from factory_issue_module.config import files
 from factory_issue_module.declarations import DEPT_ALIASES, FACTORY_REGIONS
 from factory_issue_module.plan import names
@@ -50,6 +52,22 @@ def test_domestic_factories():
     assert names.factories("惠州", CN_FACTORIES, regions) == ("柯洱斯", "亮亮", "惠州百富")
     assert names.factories("惠州的工厂", CN_FACTORIES, regions) == ("柯洱斯", "亮亮", "惠州百富")
     assert names.factories("鼎越", CN_FACTORIES, regions) == ()
+
+
+@pytest.mark.parametrize("said", [
+    "惠州的三个工厂",  # 规划器对 CN-011 的原样写法（对照集 p2.2 五次都是这样）
+    "惠州的3个工厂", "惠州那几家工厂", "惠州地区全部工厂", "惠州所有的加工厂", "惠州地区的工厂", "惠州工厂",
+])
+def test_region_said_with_a_tail(said):
+    """国内业务描述「加工厂」：「惠州的工厂」「惠州的三个工厂」都按地区说法对照。"""
+    assert names.factories(said, CN_FACTORIES, files.default(FACTORY_REGIONS)) == ("柯洱斯", "亮亮", "惠州百富")
+
+
+def test_region_tail_needs_the_rest_to_be_a_region():
+    regions = files.default(FACTORY_REGIONS)
+    assert names.factories("惠州百富工厂", CN_FACTORIES, regions) == ("惠州百富",)  # 去掉「工厂」是工厂名，不是地区
+    assert names.region_items("深圳的三个工厂", regions) is None
+    assert names.factories("深圳的三个工厂", CN_FACTORIES, regions) == ()
 
 
 def test_brazil_factories_whole_name():

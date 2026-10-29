@@ -155,7 +155,14 @@ def ag_compare(v_all, dom, A, C, dims):
              "变化率（%）": fi_round((nb_all - na_all) / na_all * 100, 2) if na_all else None,
              "增加的" + title: increased_any, "各组": [[r[0], r[1], r[2], r[3]] for r in rows]}
     caliber = {"未计入": ma + mb, "多值归属": bool(dims and dims[0].get("multi"))}
-    return {"columns": columns, "rows": rows}, facts, caliber, nb_all > na_all, increased_any
+    # 画图用的行：两段各一组柱子，数取自上面的表；合计不画（会把各组压扁），增减量、变化率单位不同也不画
+    if dims:
+        chart = {"dimension": title, "series": [a["label"], b["label"]],
+                 "rows": [{title: r[0], a["label"]: r[1], b["label"]: r[2]} for r in rows[:-1]]}
+    else:
+        chart = {"dimension": C["period"], "series": [C["count"]],
+                 "rows": [{C["period"]: a["label"], C["count"]: na_all}, {C["period"]: b["label"], C["count"]: nb_all}]}
+    return {"columns": columns, "rows": rows}, chart, facts, caliber, nb_all > na_all, increased_any
 
 
 def run(data):
@@ -175,10 +182,11 @@ def run(data):
             if len(v) == 0:
                 segments.append({"domain": dom, "kind": "compare", "found": 0, "facts": {"总单数": 0}, "caliber": {}})
                 continue
-            table, facts, caliber, inc, inc_values = ag_compare(v, dom, A, C, dims)
+            table, chart, facts, caliber, inc, inc_values = ag_compare(v, dom, A, C, dims)
             refs["increased"] = refs["increased"] or inc
             refs["top_values"] += [x for x in inc_values if x not in refs["top_values"]]
             segments.append({"domain": dom, "kind": "compare", "title": table["columns"][0], "table": table,
+                             "chart": chart, "multi": bool(dims and dims[0].get("multi")),
                              "found": facts[table["columns"][1]] + facts[table["columns"][2]],
                              "facts": fi_with_counts(facts), "caliber": caliber})
             continue

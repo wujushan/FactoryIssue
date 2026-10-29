@@ -170,7 +170,7 @@ class StepOut:
 
 def _time_text(run: StepRun) -> str | None:
     items = [t for t in schema.as_list((run.step.get("params") or {}).get("time")) if isinstance(t, dict) and t.get("said")]
-    parts = [s.describe() for s in run.spans if not s.unlimited]
+    parts = list(dict.fromkeys(s.describe() for s in run.spans if not s.unlimited))  # 合成同一段的只写一次
     if (run.step.get("params") or {}).get("compare") == "时段" and len(run.spans) >= 2:
         ordered = sorted(run.spans[:2], key=lambda s: s.start or date.min)
         return f"{domestic.period_label(ordered[1])}与{domestic.period_label(ordered[0])}对比"
@@ -422,10 +422,14 @@ async def _present_agg(run: StepRun, T: Turn, seg: dict[str, Any], dom: Domain, 
     dim_name = next((str(d.get("name")) for d in dims if d.get("title") == seg.get("title")), str(chart.get("dimension")))
     if chart.get("rows"):
         user_chart = (run.step.get("params") or {}).get("chart")
-        kind, why = charts.choose(dim_name, seg.get("groups") or len(chart["rows"]), multi=bool(seg.get("multi")),
-                                  user_chart=user_chart if isinstance(user_chart, str) else None)
+        user_chart = user_chart if isinstance(user_chart, str) else None
+        if seg.get("kind") == "compare":
+            kind, why = charts.choose_compare(len(chart["rows"]), user_chart=user_chart)
+        else:
+            kind, why = charts.choose(dim_name, seg.get("groups") or len(chart["rows"]), multi=bool(seg.get("multi")),
+                                      user_chart=user_chart)
         if kind is not None:
-            series = [aggregate.COLS["count"]]
+            series = list(chart.get("series") or [aggregate.COLS["count"]])
             if dim_name in ("加工厂", "跟进部门") and aggregate.COLS["unclosed"] in (chart["rows"][0] or {}):
                 series.append(aggregate.COLS["unclosed"])
             chart_title = f"{dom.label}结案周期分档{suffix}" if seg.get("bins") else title

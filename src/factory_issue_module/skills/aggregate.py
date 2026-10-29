@@ -23,7 +23,7 @@ COLS = {
     "count": columns.COUNT, "unclosed": columns.UNCLOSED, "share": columns.SHARE, "domain": columns.DOMAIN,
     "rate": columns.RATE, "close_mean": columns.CLOSE_MEAN, "close_median": columns.CLOSE_MEDIAN,
     "stop_mean": columns.STOP_MEAN, "stop_median": columns.STOP_MEDIAN, "stopped": columns.STOPPED,
-    "diff": columns.DIFF, "change": columns.CHANGE, "close_days": columns.CLOSE_DAYS,
+    "diff": columns.DIFF, "change": columns.CHANGE, "close_days": columns.CLOSE_DAYS, "period": columns.PERIOD,
 }
 
 

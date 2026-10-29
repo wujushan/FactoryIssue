@@ -178,3 +178,42 @@ def test_same_time() -> None:
     assert same_time("2026 年 Q2", "今年第二季度", TODAY)
     assert same_time("截止2026年6月", "截止 2026 年 6 月", TODAY)
     assert not same_time("上个月", "本月", TODAY)
+
+
+def _plan(*times: dict, compare: str | None = None) -> dict:
+    params: dict = {"time": list(times)}
+    if compare:
+        params["compare"] = compare
+    return {"steps": [{"id": "s1", "skill": "aggregate", "params": params}]}
+
+
+def test_same_basis_items_are_intersected():
+    """CN-032：「截止 2026 年 6 月，A8900 今年……」写成两项建单时间，两项都要满足 = 总述「今年截止 6 月」。"""
+    from factory_issue_module.plan.timespan import plan_spans
+
+    spans, unknown = plan_spans(_plan({"said": "截止 2026 年 6 月", "basis": "建单"}, {"said": "今年", "basis": "建单"}),
+                                TODAY)
+    assert unknown is None
+    a, b = spans["s1"]
+    assert a == b and (a.start, a.end, a.to_today) == (date(2026, 1, 1), date(2026, 6, 30), False)
+    assert a.describe() == "2026-01-01 至 2026-06-30"
+
+
+def test_intersect_keeps_other_cases_as_they_were():
+    from factory_issue_module.plan.timespan import plan_spans
+
+    # 比较两个时段：不合
+    s = plan_spans(_plan({"said": "24 年", "basis": "建单"}, {"said": "25 年", "basis": "建单"}, compare="时段"), TODAY)[0]
+    assert [x.said for x in s["s1"]] == ["24 年", "25 年"]
+    # 不同依据（6 月建单、7 月结案）：各管各的
+    s = plan_spans(_plan({"said": "6 月", "basis": "建单"}, {"said": "7 月", "basis": "结案"}), TODAY)[0]
+    assert [x.said for x in s["s1"]] == ["6 月", "7 月"]
+    # 滚动窗口：取数写 $relative，不合
+    s = plan_spans(_plan({"said": "近 30 天", "basis": "建单"}, {"said": "今年", "basis": "建单"}), TODAY)[0]
+    assert [x.said for x in s["s1"]] == ["近 30 天", "今年"]
+    # 没有重叠：不合
+    s = plan_spans(_plan({"said": "24 年", "basis": "建单"}, {"said": "25 年", "basis": "建单"}), TODAY)[0]
+    assert [x.said for x in s["s1"]] == ["24 年", "25 年"]
+    # 期末仍是今天：照写「截至今天」
+    s = plan_spans(_plan({"said": "截止 2026 年 10 月", "basis": "建单"}, {"said": "今年", "basis": "建单"}), TODAY)[0]
+    assert s["s1"][0].describe() == "2026-01-01 至 2026-10-21（截至今天）"

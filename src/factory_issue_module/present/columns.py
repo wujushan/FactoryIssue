@@ -104,6 +104,8 @@ STOP_MEDIAN = _derived("停线时长中位数（天）")
 STOPPED = _derived("停线中")
 DIFF = _derived("增减量")
 CHANGE = _derived("变化率")
+#: 比较两个时段、又没有分组时，图的横轴（两段时间各一根柱子）
+PERIOD = _derived("时段")
 STAGE = _derived("处理环节")
 CLOSED_OR_NOT = _derived("结案与否")
 
