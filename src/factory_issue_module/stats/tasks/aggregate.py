@@ -560,12 +560,28 @@ def ag_cross(timed, A, C, P, refs):
     return out
 
 
+def ag_ref_issues(refs, ids, dom, frames):
+    """本域计入这一步的单（比较两个时段时是两段的并集）：张数进 `refs["found"]`，单 ID 与问题编号作为明细帧
+    （`ids_<域>`）回传，不放进 result（几千张单的编号会撑满 20 万字符，设计 §8.1）。工作区存下供质疑重查比对
+    （设计 §10）；不进回答。"""
+    parts = [f for f in frames if len(f)]
+    v = pd.concat(parts, ignore_index=True).drop_duplicates("_id") if parts else None
+    if v is None:
+        ids["ids_" + dom] = pd.DataFrame({"_id": pd.Series([], dtype="int64"), "_number": pd.Series([], dtype="object")})
+        refs["found"][dom] = 0
+        return
+    ids["ids_" + dom] = pd.DataFrame({"_id": [int(x) for x in v["_id"].tolist()],
+                                      "_number": [str(x) for x in v["_number"].tolist()]})
+    refs["found"][dom] = int(len(v))
+
+
 def run(data):
     P = PARAMS
     A = P["agg"]
     C = P["cols"]
     segments, missing_domains = [], []
-    refs = {"top1": [], "top_values": [], "total": 0, "increased": False}
+    refs = {"top1": [], "top_values": [], "total": 0, "increased": False, "found": {}}
+    ids = {}
     views = {}
     for dom in P["domains"]:
         v = dm_view(dom, data, P)
@@ -574,6 +590,9 @@ def run(data):
             continue
         views[dom] = vw_filter(v, P["conds"].get(dom)) if len(v) else v
     if A.get("compare"):
+        for dom, v in views.items():
+            periods = (A["compare"].get(dom) or []) if len(v) else []
+            ag_ref_issues(refs, ids, dom, [vw_time(v, p["times"])[0] for p in periods])
         parts = [(dom, v, (A["dims"].get(dom) or [None])[0]) for dom, v in views.items() if dom in A["compare"]]
         groups = [parts] if len(parts) >= 2 else [[p] for p in parts]
         for group in groups:
@@ -591,13 +610,14 @@ def run(data):
                              "chart": chart, "multi": any(d.get("multi") for d in dims0),
                              "found": facts[table["columns"][1]] + facts[table["columns"][2]],
                              "facts": fi_with_counts(facts), "caliber": caliber})
-        return {"segments": segments, "refs": refs, "missing_domains": missing_domains}
+        return {"segments": segments, "refs": refs, "missing_domains": missing_domains, **ids}
     timed = {}
     for dom, v in views.items():
         timed[dom] = vw_time(v, P["times"].get(dom)) if len(v) else (v, [])
+        ag_ref_issues(refs, ids, dom, [timed[dom][0]])
     if len(timed) >= 2:
         segments = ag_cross(timed, A, C, P, refs)
     else:
         for dom, (v, missing) in timed.items():
             segments += ag_single(dom, v, missing, A["dims"].get(dom) or [], A, C, P, refs)
-    return {"segments": segments, "refs": refs, "missing_domains": missing_domains}
+    return {"segments": segments, "refs": refs, "missing_domains": missing_domains, **ids}

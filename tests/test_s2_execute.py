@@ -52,7 +52,9 @@ async def test_domestic_list_default_columns_analysis_and_caliber():
     narrative = "近 30 天国内共 4 张，硬件问题最多。最需要关注的是 ZC9901001。其中 1 张已完成。"
     h, events = await _go("近 30 天国内的问题有哪些",
                           [plan(step("list_issues", domains=CN, time=RECENT30)), narrative])
-    assert _types(events) == [EventType.DELTA, EventType.TABLE, EventType.DELTA, EventType.DELTA]
+    # S5 起答后有模板按钮（§9.5）
+    assert _types(events) == [EventType.DELTA, EventType.TABLE, EventType.DELTA, EventType.DELTA,
+                              EventType.SUGGESTIONS]
     table = _tables(events)[0]
     assert table["columns"] == ["问题编号", "机型", "问题类型", "不良率", "不良数量", "问题描述"]
     assert [r[0] for r in table["rows"]] == ["ZC9901001", "ZC9901002", "ZC9901003", "ZC9901004"]  # 建单时间倒序
@@ -70,7 +72,8 @@ async def test_domestic_list_default_columns_analysis_and_caliber():
 async def test_domestic_aggregate_by_type_table_chart_caliber():
     reply = plan(step("aggregate", domains=CN, time=RECENT30, group_by=["问题类型"], metrics=["单数", "占比"]))
     h, events = await _go("近 30 天国内按问题类型统计", [reply, "共 4 张，硬件问题最多。物料问题和软件问题各 1 张。"])
-    assert _types(events) == [EventType.DELTA, EventType.TABLE, EventType.CHART, EventType.DELTA, EventType.DELTA]
+    assert _types(events) == [EventType.DELTA, EventType.TABLE, EventType.CHART, EventType.DELTA, EventType.DELTA,
+                              EventType.SUGGESTIONS]  # S5 起答后有「列出第一名的单」（§9.5）
     table = _tables(events)[0]
     assert table["columns"] == ["问题类型", "单数", "占比（%）"]
     assert table["rows"][0] == ["硬件问题", 2, 50]

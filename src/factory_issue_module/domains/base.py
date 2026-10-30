@@ -32,6 +32,16 @@ class TooManyRows(RuntimeError):
     """翻页合计超过 5 万行：按 §14 答「结果太多，请加上时间或其他条件再查」。"""
 
 
+#: 追问选项怎么直填回计划（设计 §4.4 第二条，`turn/workspace.py::apply_fill`）
+FILL_VALUE = "value"          # 选项替换对不上的那个取值（工厂、类型、状态、是 / 否、重名的「某部门的某人」）
+FILL_KIND = "kind"            # 选项是「名称：类别」，把这个条件改到那一类（名称对不上时的核对选项）
+FILL_APPEND = "append"        # 选项接在取值后面（金额条件补上币种：「200」→「200 美元」）
+FILL_KIND_SAID = "kind_said"  # 选项是号的种类（认不出的号）
+FILL_NUMBER = "number"        # 选项替换号码（手填订单号的候选号）
+FILL_TIME = "time"            # 选项替换时间原话（时间说法认不出）
+FILL_NONE = ""                # 没有可填的（单号位数不对）
+
+
 @dataclass
 class Ask:
     """第 6 步要查库才知道的追问（名称对不上、对上多个、重名、枚举说法对不上）：本轮不取数。"""
@@ -42,6 +52,10 @@ class Ask:
     #: 这个名称或取值在本域对不上（「没有加工厂『柯洱斯』」）。几个域一起查、别的域对得上时不追问：本域不计入并写明
     #: （总述「跨域规则」各域按自己的取值查；「通用筛选规则」某域没有对应时该域不计入）。都对不上时照常追问
     missing: str | None = None
+    #: 直填（§4.4）：对不上的那个取值或号码原话、怎么填、在哪一步（`prepare` 补上步骤编号）
+    said: str | None = None
+    fill: str = FILL_VALUE
+    sid: str | None = None
 
 
 @dataclass
@@ -73,6 +87,9 @@ class DomainStep:
     #: 本域没有对应的列、因而整域不计入的原因（总述「通用筛选规则」默认范围、「跨域归并」点名的类型某域没有）：
     #: 「国内没有统计日期，国内未计入」。有一条就不取数，统计口径「统计范围」写明
     excluded: list[str] = field(default_factory=list)
+    #: 看用户原话才定下来的判据（巴西「涉及费用」按单上标记还是按费用明细）：工作区 `turn.steps` 记下，沿用与
+    #: 重放时照用，不再看那一轮的问句（设计 §10「沿用以执行计划为准」）
+    decided: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -88,6 +105,10 @@ class Resolver:
     refs: Mapping[str, Any] = field(default_factory=dict)
     #: 本轮问句原话（巴西「是否涉及费用」要看用户是否明说，巴西业务描述「费用」）
     query: str = ""
+    #: 上一轮执行时看原话定下来的判据（`DomainStep.decided` 的并集）：沿用上一轮的条件（`from: previous`）照用
+    carried: Mapping[str, str] = field(default_factory=dict)
+    #: 重放上一轮的执行计划（质疑重查、换图重跑）：计划里的条件都当沿用的，判据照 `carried`
+    replay: bool = False
 
 
 def cond(field: str, operator: str, value: Any = None, *, include_nulls: bool = False) -> dict[str, Any]:
@@ -203,7 +224,7 @@ def not_found(kind: str, said: str, entities: Mapping[str, Sequence[str]], skip:
     from factory_issue_module.plan import names
 
     return Ask(f"没有找到{kind}「{said}」，请核对名称。", names.check_options(said, entities, skip=skip),
-               missing=f"没有{kind}「{said}」")
+               missing=f"没有{kind}「{said}」", said=said, fill=FILL_KIND)
 
 
 def yes_no(said: str) -> int | None:
@@ -226,8 +247,9 @@ _CHOSEN = re.compile(r"（\s*([^（）]+?)\s*）\s*$")
 def chosen(query: str, options: Sequence[str]) -> str | None:
     """问句末尾「（X）」里的 X 是 `options` 之一时返回它：用户点了代码追问的按钮。
 
-    模型下一轮照旧把认不出的取值抄进计划，不按选定的这一项就会一直追问同一句（BR-004）。按钮直接填参数、
-    不重新规划随 S5 的工作区（设计 §4.4）。
+    S5 起点了按钮先走工作区直填（设计 §4.4，`turn/workspace.py::fill`），不重新规划；这里是工作区读不到
+    （没有会话号、过期、写入超限）时的退路：模型下一轮照旧把认不出的取值抄进计划，不按选定的这一项就会一直
+    追问同一句（BR-004）。
     """
     m = _CHOSEN.search(query or "")
     return m.group(1) if m is not None and m.group(1) in options else None
@@ -302,11 +324,12 @@ def people(said: str, R: Resolver, person_kind: str) -> list[int] | Ask:
         hits = [p for p in hits if names.key(p.dept) == names.key(dept_hint)
                 or names.departments(dept_hint, [p.dept], R.dept_aliases)]
     if not hits:
-        return Ask(f"没有找到人员「{said}」，请核对姓名。", names.check_options(said, R.entities, skip=person_kind))
+        return Ask(f"没有找到人员「{said}」，请核对姓名。", names.check_options(said, R.entities, skip=person_kind),
+                   said=said, fill=FILL_KIND)
     depts = unique(p.dept for p in hits)
     if len(depts) > 1:
         options = names.person_options([(p.name, p.dept) for p in hits])
-        return Ask(f"「{said}」有几位同名的，是哪个部门的这位？", options, reason="重名")
+        return Ask(f"「{said}」有几位同名的，是哪个部门的这位？", options, reason="重名", said=said)
     return [p.id for p in hits]
 
 
@@ -335,7 +358,7 @@ def suppliers(values: Sequence[str], R: Resolver) -> list[str] | Ask:
         if not got:
             return not_found("供应商", v, R.entities, None)
         if len(got) > 1:
-            return Ask(f"「{v}」对上了这几家供应商：{join(got[:12])}。查哪一家？", got[:4], reason="多供应商")
+            return Ask(f"「{v}」对上了这几家供应商：{join(got[:12])}。查哪一家？", got[:4], reason="多供应商", said=v)
         hit += [x for x in got if x not in hit]
     return hit
 
@@ -452,7 +475,7 @@ def problem_types(values: Sequence[str], known: Sequence[str], label: str, neg: 
                 out.skipped.append(f"{label}无「{other}」类型，未计入")
             continue
         return Ask(f"没有「{v}」这个问题类型，{label}的问题类型有：{join(known)}。", list(known)[:4],
-                   reason="类型对不上")
+                   reason="类型对不上", said=v)
     if not hit and not neg:
         out.excluded += [s for s in out.skipped if s.endswith("类型，未计入") and s not in out.excluded]
         out.skipped = [s for s in out.skipped if s not in out.excluded]

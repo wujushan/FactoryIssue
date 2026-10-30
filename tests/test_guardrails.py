@@ -133,8 +133,74 @@ S4_SCENARIOS: list[tuple[str, dict, str, list]] = [
 ]
 
 
+_LIST30 = _plan("list_issues", time=_T30)
+_ODD_TYPE = [{"field": "问题类型", "op": "是", "value": "外观问题", "from": "user"}]
+
+#: S5 接上的多轮与交互：（说明, 权限, 假数据, [(问句, 模型回复)…]）；问句为 None 表示点上一轮第一个按钮
+S5_SCENARIOS: list[tuple[str, dict, object, list[tuple[str | None, list]]]] = [
+    ("质疑重查·有变化", scopes.GREEN, s3_data,
+     [("近 30 天的问题有哪些", [_LIST30, _NARR]), ("你确定吗", [_plan("verify_previous")])]),
+    ("质疑重查·详情", scopes.GREEN, s4_data, [("ZC9901001", []), ("好像不对吧", [_plan("verify_previous")])]),
+    ("质疑重查·没有上一轮", scopes.GREEN, s3_data, [("你确定吗", [_plan("verify_previous")])]),
+    ("换图·存下的图", scopes.GREEN, s3_data,
+     [("近 30 天按问题类型统计", [_plan("aggregate", time=_T30, group_by=["问题类型"]), _NARR]),
+      ("换成饼图", [_plan("rerender", chart="饼图")])]),
+    ("换图·清单", scopes.GREEN, s3_data, [("近 30 天的问题有哪些", [_LIST30, _NARR]),
+                                       ("换成柱状图", [_plan("rerender", chart="柱状")])]),
+    ("导出·三域", scopes.GREEN, s3_data, [("把近 30 天的问题全部导出", [_plan("list_issues", time=_T30, export=True),
+                                                                   _NARR])]),
+    ("直填·类型", scopes.account_jia(), s3_data,
+     [("近 30 天国内外观问题", [_plan("list_issues", domains=_CN, time=_T30, filters=_ODD_TYPE)]), (None, [_NARR])]),
+    ("沿用·那今年呢", scopes.account_jia(), s3_data,
+     [("近 30 天国内的问题有哪些", [_plan("list_issues", domains=_CN, time=_T30), _NARR]),
+      ("那今年呢", [_plan("list_issues", domains={"value": ["国内"], "from": "previous"},
+                         time=[{"said": "今年", "basis": "建单", "from": "user"}]), _NARR])]),
+    ("本月比上月", scopes.account_jia(), s3_data,
+     [("国内这个月比上个月多了吗", [_plan("aggregate", domains=_CN, compare="时段", time=[
+         {"said": "这个月", "basis": "建单", "from": "user"}, {"said": "上个月", "basis": "建单", "from": "user"}]),
+         _NARR])]),
+]
+
+
+def _export_headers(h: Harness) -> list[Event]:
+    """导出文件的页名与表头当成一张表查（设计 §15：导出表头同样不露字段名）。"""
+    import io
+
+    from openpyxl import load_workbook
+
+    out = []
+    for data in h.files.saved.values():
+        for ws in load_workbook(io.BytesIO(data)).worksheets:
+            header = [str(c.value) for c in next(ws.iter_rows(max_row=1))]
+            out.append(Event.table(header, [], title=ws.title))
+    return out
+
+
+async def _conversation(privileges: dict, data: object, turns: list[tuple[str | None, list]]) -> tuple[
+        Harness, list[Event]]:
+    h = make_harness(privileges, history=[], config_files={"link_sites.toml": _SITES})
+    data.load(h)
+    events: list[Event] = []
+    last: list[Event] = []
+    for k, (query, replies) in enumerate(turns):
+        if query is None:
+            query = next(e for e in last if e.type in (EventType.CLARIFY, EventType.SUGGESTIONS)).data[
+                "recommendations"][0]["query"]
+        h.llm.replies = list(replies)
+        last = await run(h, query)
+        text = "".join(e.data.get("text", "") for e in last if e.type is EventType.DELTA)
+        h.ctx.session.rows += [{"role": "user", "content": query, "message_id": f"g{k}"},
+                               {"role": "assistant", "content": text, "message_id": f"g{k}"}]
+        events += last
+    return h, events + _export_headers(h)
+
+
 async def _all_events() -> list[tuple[str, Harness, list[Event]]]:
     out = []
+    for name, privileges, data, turns in S5_SCENARIOS:
+        h, events = await _conversation(privileges, data, turns)
+        assert events and not any(e.type is EventType.ERROR for e in events), name
+        out.append((name, h, events))
     for name, privileges, query in SCENARIOS:
         h = make_harness(privileges, resolved=privileges is not None)
         out.append((name, h, await run(h, query)))

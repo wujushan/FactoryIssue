@@ -2291,7 +2291,7 @@
     },
     {
       "id": "BR-002",
-      "query": "BR2609002 现在到哪一步了？谁在跟？",
+      "query": "BR2609001 现在到哪一步了？谁在跟？",
       "target": "FACTORY_ISSUE",
       "batch": "首批",
       "level": "P0",
@@ -2312,12 +2312,12 @@
           "ProblemId"
         ],
         "anywhere_contains": [
-          "BR2609002",
+          "BR2609001",
           "不提供当前责任人",
           "跟进人"
         ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/BR-002.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-002.sql。2026-10-30 开发者确认实库没有 BR2609002，单号改为 BR2609001。"
     },
     {
       "id": "BR-003",
@@ -2722,11 +2722,14 @@
         ],
         "anywhere_contains": [
           "HW2512001",
-          "候选",
           "当前责任人"
+        ],
+        "anywhere_contains_any": [
+          "候选原因清单",
+          "没有可能问题原因"
         ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/OS-002.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-002.sql。有标准现象下的候选原因时正文写「候选原因清单」；没有时写「没有可能问题原因」。"
     },
     {
       "id": "OS-003",

@@ -35,7 +35,7 @@ _CHAT_KW: dict[str, Any] = {"temperature": 0.0, "response_format": {"type": "jso
 class PlanResult:
     #: 规整后的计划；None 表示规划失败，按 §14「没能理解这个问题」答
     plan: dict | None
-    #: "shortcut"（号码直通）或 "model"
+    #: "shortcut"（号码直通）、"model"，或 "filled"（追问选项直填进上一轮的计划，S5，`turn/workspace.py::fill`）
     source: str
     #: 修一次之后仍不过的校验（按模型的计划执行）。执行与呈现（S2 起）要用它：第 13 条仍不一致时开头写明按
     #: 什么日期理解，并给另一种理解的按钮

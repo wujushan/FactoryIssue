@@ -164,7 +164,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                     return base.not_found("加工厂" if fld == "加工厂" else "国内工厂", v, R.entities, None)
                 if len(got) > 1:
                     return Ask(f"「{v}」对上了这几家工厂：{base.join(got)}。按哪几家查？", [base.join(got), *got][:4],
-                               reason="多工厂")
+                               reason="多工厂", said=v)
                 hit += [x for x in got if x not in hit]
             if fld == "加工厂":
                 out.sql.append(cond("m.Factory", "NOT_IN" if neg else "IN", hit))
@@ -252,7 +252,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         elif fld == "是否设计变更":
             yn = base.yes_no_or_chosen(values[0], R.query)
             if yn is None:
-                return Ask("是否设计变更，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
+                return Ask("是否设计变更，选「是」还是「否」？", ["是", "否"], reason="取值对不上", said=values[0])
             if neg:
                 yn = 1 - yn
             out.sql.append(cond("m.IsDesignChange", "EQ", yn))

@@ -11,9 +11,12 @@ SQL 已按号精确匹配取回挂着号的子表行与要列的单（假连接�
 - 巴西投诉单号：两边都不分大小写、去掉全部空格后精确比（点、斜杠、连字符照原样）。
 - 国内手填的带连字符的订单号：给的号查不到、但有以「该号-」开头的号时给出这些号（编排请用户选）；问句末尾带着
   点按钮选回的号时按它查。
+- 一次给很多个问题编号（`as_list`，S5）：按清单呈现，按域分开列、域内按建单时间从新到旧，全量作为明细帧回传。
 """
 
 import re
+
+import pandas as pd
 
 from factory_issue_module.stats.lib.common import fi_group, fi_int, fi_lookup, fi_records, fi_show, fi_unique, fi_with_counts
 from factory_issue_module.stats.lib.derive_brazil import br_latest
@@ -183,4 +186,32 @@ def run(data):
             if pid not in got["ids"]:
                 got["ids"].append(pid)
                 got["numbers"].append(str(view[view["_id"] == pid]["_number"].iloc[0]))
-    return {"sections": sections, "refs": {"issues": issues}}
+    # 各域找到几张（工作区存下供质疑重查比对，设计 §10）
+    found = {dom: len(got["ids"]) for dom, got in issues.items()}
+    out = {"sections": sections, "refs": {"issues": issues, "found": found}}
+    if P.get("as_list"):
+        out.update(lk_as_list(sections, views, L, P))
+    return out
+
+
+def lk_as_list(sections, views, L, P):
+    """一次给很多个问题编号（总述「按编号查单」：超过约 20 个时按清单呈现，全量导出）：按问题编号找到的单按域
+    分开列，域内按建单时间从新到旧，表格给前 `table_rows` 张；该域全部行作为明细帧（`export_<域>`）回传。"""
+    limit = int(P["as_list"]["table_rows"])
+    lists, frames, total = [], {}, 0
+    for dom, view in views.items():
+        ids = [i for s in sections if s["kind"] == "issue" and s["domain"] == dom for i in s["ids"]]
+        if not ids:
+            continue
+        sub = vw_sorted(view[view["_id"].isin(ids)], "_add", True)
+        names = {**L, **P["names"][dom]}
+        cols = [names["number"], names["current_state"], names["machine"], names["type"], names["rate"],
+                names["bad_qty"], names["desc"]]
+        rows = [[v["number"], lk_state(v, dom), v["machine"], v["type"], v["rate"], v["bad_qty"], v["desc"]]
+                for _, v in sub.iterrows()]
+        lists.append({"domain": dom, "found": len(rows), "shown": min(len(rows), limit), "columns": cols,
+                      "rows": rows[:limit], "ids_shown": [int(x) for x in sub["_id"].tolist()[:limit]]})
+        frames["export_" + dom] = pd.DataFrame(rows, columns=cols)
+        total += len(rows)
+    return {"as_list": lists, "as_list_total": total,
+            "as_list_counts": [[x["domain"], x["found"]] for x in lists], **frames}

@@ -108,6 +108,27 @@ def test_chart_type_needs_one_match():
     assert any("图类型" in item for item in qa.check(case, pie))
 
 
+def test_issue_link_path_is_not_treated_as_shown_text():
+    """问题编号链接的地址含页面路径，前端只显示单号。正文里写出表名仍然要失败。"""
+    case = {"expect": {"answer_not_contains": ["BrazilProblem", "OverseasProblem"]}}
+    body = {
+        "error": None,
+        "clarify": None,
+        "query_count": 1,
+        "tables": [],
+        "suggestions": None,
+        "answer": (
+            "**巴西 [BR2609001](https://br.example/#/BrazilProblem/AddBrazilProblemPage?type=AB&ID=CD)**\n"
+            "**海外 [HW2512001](https://info.example/#/QualityManage/OverseasProblemAllDetail?id=9)**"
+        ),
+    }
+    assert qa.check(case, body) == []
+    leaked = {**body, "answer": body["answer"] + "\n查的是 BrazilProblemList。"}
+    assert any("BrazilProblem" in item for item in qa.check(case, leaked))
+    labeled = {**body, "answer": "见 [BrazilProblem](https://info.example/detail)"}
+    assert any("BrazilProblem" in item for item in qa.check(case, labeled))
+
+
 def test_case_turns_defaults_to_one_query():
     turns = qa.case_turns({"query": "你好", "target": "FACTORY_ISSUE"})
     assert turns == [{"query": "你好", "target": "FACTORY_ISSUE"}]

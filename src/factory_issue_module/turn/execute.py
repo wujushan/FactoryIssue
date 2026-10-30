@@ -14,6 +14,12 @@
   按前缀定域，无权的域不查。几步详情各给一个问题编号、只问当前状态一类时并成一步按号查单（一号一行合成一张表，
   总述「按编号查单」）；详情引用前一步清单的 `issues`、只要原因或措施时并进清单，清单加「原因与措施」一列
   （设计 §5.3 第 5 条前半）。
+- 多轮（S5，设计 §10）：边执行边记 `Turn.record`（每步查了哪些域、换算后的时间、各域张数与结果单 ID、图的数据、
+  单独说到的那张单），编排在本轮结束时写进工作区。上一轮是按号查单、本轮在它的结果里筛（「其中已结案的」）时，
+  那一步按号查单直接用存下的单 ID，不重查、不再列一遍（§10「递进筛选」）。「这单」写不出单号时用 `focus`。
+- 导出（S5，§9.3）：用户明说导出、或某域超过 `export_threshold` 张时，沙箱把该域全部行作为明细帧回传，每域一页
+  写成一个文件，链接放在统计口径之后。
+- 答后按钮（S5，§9.5，`present/suggestions.py`）：其他理解在前，放宽与换时间范围其次，模板按钮最后，至多 4 个。
 - 其他技能随各自那一片，在那之前这一段答「暂时还答不了」。
 """
 
@@ -21,9 +27,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
@@ -34,17 +41,17 @@ from forge_core.module import ModuleManifest
 
 from factory_issue_module.config.files import AnswerParams, LinkSites
 from factory_issue_module.declarations import DOMAINS, Domain
-from factory_issue_module.domains import base, brazil, domestic, numbers, overseas
+from factory_issue_module.domains import base, brazil, domestic, numbers, overseas, shared
 from factory_issue_module.domains.base import Ask, DomainStep
 from factory_issue_module.domains.shared import MasterData
-from factory_issue_module.plan import clarify, normalize, schema, timespan
+from factory_issue_module.plan import clarify, names, normalize, schema, timespan
 from factory_issue_module.plan.planner import PlanResult
 from factory_issue_module.plan.timespan import Span
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import charts, columns, narrative, tables
+from factory_issue_module.present import charts, columns, export, narrative, suggestions, tables
 from factory_issue_module.skills import aggregate, issue_detail, list_issues, lookup_numbers
 from factory_issue_module.stats import runner
-from factory_issue_module.turn import errors, greeting
+from factory_issue_module.turn import errors, greeting, workspace
 from factory_issue_module.turn.gate import DomainAccess
 
 logger = structlog.get_logger(__name__)
@@ -80,6 +87,12 @@ class Turn:
     entities: Mapping[str, Sequence[str]]
     #: 本环境 INFO 站点地址（模块配置 `link_sites.toml`）；没配时问题编号不带链接
     sites: LinkSites | None = None
+    #: 本轮的执行记录，编排在本轮结束时写进工作区（§10）
+    record: workspace.TurnRecord = field(default_factory=workspace.TurnRecord)
+    #: 上一轮取过数时 `turn` 的记录与 `results` 里存下的单 ID（递进筛选）、`focus`（「这单」）；读不到为 None
+    previous_turn: Mapping[str, Any] | None = None
+    previous_results: Mapping[str, Any] | None = None
+    focus: Mapping[str, Any] | None = None
 
 
 @dataclass
@@ -99,6 +112,8 @@ class StepRun:
     #: 第 5 条前半：这一步详情并进了前一步的清单（不单独成段）；清单要加「原因与措施」一列
     merged: bool = False
     add_reasons: bool = False
+    #: 递进筛选：这一步按号查单就是上一轮那次，只给后一步提供范围，直接用工作区存下的单 ID（{域: {ids, numbers}}）
+    stored: dict[str, Any] | None = None
 
 
 def _asked(step: dict) -> list[Domain]:
@@ -174,7 +189,7 @@ def _resolve(run: StepRun, T: Turn, refs: Mapping[str, Any]) -> Ask | None:
                 return a0
             soft = [f"{d.label}{a.missing}" for d, a in asks if a.missing is not None]
             head = "，".join(soft) + "。" if soft else ""
-            return Ask(head + d0.label + a0.question, a0.options, a0.reason)
+            return Ask(head + d0.label + a0.question, a0.options, a0.reason, said=a0.said, fill=a0.fill)
         results = [(d, DomainStep(domain=d, excluded=[f"{d.label}{g.missing}，{d.label}未计入"])
                     if isinstance(g, Ask) else g) for d, g in results]
     within = schema.unwrap_ref((run.step.get("params") or {}).get("within"))
@@ -230,6 +245,66 @@ def _fold_reasons(runs: Sequence[StepRun]) -> None:
             logger.info("factory_issue_plan_rule", rule=5, skill="issue_detail", change="并进前一步的清单")
 
 
+def _with_sid(ask: Ask, sid: str) -> Ask:
+    if ask.sid is None:
+        ask.sid = sid
+    return ask
+
+
+#: 「这单」「它」一类：规划器没写出单号时按工作区 `focus` 找那张单
+_PRONOUNS = ("这单", "这张单", "这张", "该单", "此单", "它", "这个单", "这一单", "上一张", "刚才那张")
+
+
+def _focus_target(step: dict, T: Turn) -> issue_detail.Target | None:
+    """详情的单号写不成单号（空、「这单」），又是沿用上一轮的：取上一轮单独说到的那张单（§10 `focus`）。"""
+    focus = T.focus or {}
+    dom = _BY_LABEL.get(str(focus.get("domain") or ""))
+    if dom is None or not focus.get("number"):
+        return None
+    raw = (step.get("params") or {}).get("issue")
+    value = raw.get("value") if isinstance(raw, dict) else raw
+    said = str(value or "").strip()
+    from_previous = isinstance(raw, dict) and raw.get("from") == "previous"
+    if said and not from_previous and said not in _PRONOUNS:
+        return None
+    pid = focus.get("id")
+    return issue_detail.Target(domain=dom, number=str(focus["number"]),
+                               pid=int(pid) if isinstance(pid, int) and not isinstance(pid, bool) else None)
+
+
+def _previous_lookup(T: Turn) -> dict[str, Any] | None:
+    """上一轮的按号查单：(号码原话的集合, 存下的单 ID)；上一轮不是按号查单或没存下时 None。"""
+    turn, results = T.previous_turn or {}, T.previous_results or {}
+    plan = turn.get("plan") if isinstance(turn.get("plan"), dict) else {}
+    for step in plan.get("steps") or []:
+        if not isinstance(step, dict) or step.get("skill") != "lookup_numbers":
+            continue
+        raws = {names.key(x) for x in _raws(step)}
+        stored = ((results.get("steps") or {}).get(str(step.get("id"))))
+        if raws and isinstance(stored, dict):
+            return {"raws": raws, "issues": stored}
+    return None
+
+
+def _raws(step: dict) -> list[str]:
+    return [str(x.get("raw") if isinstance(x, dict) else x) for x in
+            schema.as_list((step.get("params") or {}).get("numbers")) if x is not None]
+
+
+def _use_stored_lookups(runs: Sequence[StepRun], T: Turn) -> None:
+    """递进筛选（§10）：后一步在一步按号查单的结果里筛（`within` 引用它的 `issues`），那一步的号又与上一轮的按号
+    查单相同（本轮用户没要再列一遍）：直接用存下的单 ID，不重查、不单独成段。存下的读不到就照常查。"""
+    previous = _previous_lookup(T)
+    if previous is None:
+        return
+    scoped = {str(schema.unwrap_ref((r.step.get("params") or {}).get("within"))["ref"]).partition(".")[0]
+              for r in runs if schema.is_ref(schema.unwrap_ref((r.step.get("params") or {}).get("within")))}
+    for r in runs:
+        if r.skill == "lookup_numbers" and r.sid in scoped and {names.key(x) for x in _raws(r.step)} == previous["raws"]:
+            r.stored, r.merged = previous["issues"], True
+            logger.info("factory_issue_within_stored", skill="lookup_numbers")
+
+
 def prepare(plan: dict, spans: Mapping[str, list[Span]], T: Turn) -> list[StepRun] | Ask:
     """第 6 步：每步的域、名字对库、认号；对不上、认不出就追问，本轮不取数。"""
     runs: list[StepRun] = []
@@ -243,20 +318,26 @@ def prepare(plan: dict, spans: Mapping[str, list[Span]], T: Turn) -> list[StepRu
             if not run.deferred:
                 ask = _resolve(run, T, {})
                 if ask is not None:
-                    return ask
+                    return _with_sid(ask, run.sid)
         elif run.skill == "lookup_numbers":
             run.numbers = lookup_numbers.numbers_of(step, T.query, _named(step))
             ask = lookup_numbers.ask_of(run.numbers)
             if ask is not None:
-                return ask
+                return _with_sid(ask, run.sid)
         elif run.skill == "issue_detail":
             run.deferred = schema.is_ref(issue_detail.issue_value(step))
             if not run.deferred:
                 run.targets, problems = issue_detail.literal_targets(step)
+                if not run.targets:
+                    focus = _focus_target(step, T)
+                    if focus is not None:
+                        run.targets, problems = [focus], []
                 if problems and not run.targets:
-                    return Ask("；".join(dict.fromkeys(problems)) + "。", [], reason=numbers.FORMAT_REASON)
+                    return Ask("；".join(dict.fromkeys(problems)) + "。", [], reason=numbers.FORMAT_REASON,
+                               fill=base.FILL_NONE, sid=run.sid)
         runs.append(run)
     _fold_reasons(runs)
+    _use_stored_lookups(runs, T)
     return runs
 
 
@@ -284,6 +365,14 @@ class StepOut:
     found_any: bool = False
     #: 这一步是追问（如手填订单号要用户选）：本轮到此为止，不再给统计口径与按钮
     final: bool = False
+    ask: Ask | None = None
+    #: 实际取了数的域（工作区 `turn.steps` 记下，重查、换图按它）
+    domains: list[str] = field(default_factory=list)
+    #: 沙箱给的各段（换图、重查要用；只在不呈现时带回）
+    segs: list[dict[str, Any]] = field(default_factory=list)
+    #: 清单：表格没列全、已导出（模板按钮「导出全部」看它）
+    truncated: bool = False
+    exported: bool = False
 
 
 def _time_text(run: StepRun) -> str | None:
@@ -471,8 +560,28 @@ def _absent_note(d: Domain, absent: Sequence[str]) -> str:
     return f"{d.label}没有『{'』『'.join(absent)}』这{'几' if len(absent) > 1 else '一'}项"
 
 
+_IDS_FRAME = "ids_"
+
+
+def issues_from_frames(frames: Mapping[str, pd.DataFrame]) -> dict[str, dict[str, list[Any]]]:
+    """沙箱经数据帧通道回传的结果单（`ids_<域>`：单 ID、问题编号）→ 引用值 `{域: {ids, numbers}}`。只搬值。"""
+    out: dict[str, dict[str, list[Any]]] = {}
+    for name, frame in frames.items():
+        if not name.startswith(_IDS_FRAME):
+            continue
+        out[name[len(_IDS_FRAME):]] = {"ids": [int(x) for x in frame["_id"].tolist()],
+                                       "numbers": [str(x) for x in frame["_number"].tolist()]}
+    return out
+
+
+def _seg_dims(seg: dict[str, Any], dims: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [d for d in dims if d.get("title") == seg.get("title")] if seg.get("kind") == "group" else list(dims)
+
+
 async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Caliber, notes: list[str],
-                   *, present: bool = True) -> StepOut:
+                   *, present: bool = True, caliber: bool = False) -> StepOut:
+    """执行一步清单或统计。`present=False` 只跑到沙箱为止（放宽选项的张数、质疑重查、换图重跑），不写分析、
+    不调模型；`caliber` 时另把统计口径记进 `C`（质疑重查要写「当时按什么口径算」）。"""
     out = StepOut()
     label_denied = [d.label for d in run.denied]
     if run.deferred:
@@ -514,8 +623,9 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
                 head.append(_absent_note(d, absent))
         if "cn_factory" in keys_by.get(Domain.OVERSEAS.label, []):
             head.append(overseas.CN_FACTORY_NOTE)
-        P["list"] = list_issues.params(run.step, keys_by, T.answer)
-        outcome = await runner.run(T.ctx, "list", frames, P)
+        P["list"] = {**list_issues.params(run.step, keys_by, T.answer), "export_ok": present}
+        # 要导出时沙箱把全部行作为明细帧回传（数据帧通道，不塞进 result）
+        outcome = await runner.run(T.ctx, "list", frames, P, return_frames=True)
     else:
         group_by = _group_by(run.step)
         basis = aggregate.basis_of(run.step)
@@ -532,7 +642,9 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
         agg, period_bounds = aggregate.params(run.step, dims_by, metrics, [run.dsteps[d] for d in executed],
                                               T.answer, bounds)
         P["agg"], P["period_bounds"] = agg, period_bounds
-        outcome = await runner.run(T.ctx, "aggregate", frames, P)
+        # 计入这一步的单作为明细帧回传（工作区存下供质疑重查比对），不放进 result
+        outcome = await runner.run(T.ctx, "aggregate", frames, P, return_frames=True)
+    out.domains = [d.label for d in executed]
     if not outcome.ok:
         out.events.append(Event.delta("。".join([*dict.fromkeys(head), errors.SECTION_FAILED]) + "。"))
         return out
@@ -541,8 +653,16 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
     segs = res.get("segments") or []
     out.empty = all((s.get("found") or 0) == 0 for s in segs)
     out.found_any = not out.empty
+    out.truncated = any(s.get("truncated") for s in segs)
     out.refs = {f"{run.sid}.{k}": v for k, v in (res.get("refs") or {}).items()}
+    out.refs[f"{run.sid}.issues"] = issues_from_frames(getattr(outcome, "frames", None) or {})
+    all_dims = [d for dims in dims_by.values() for d in dims]
     if not present:
+        out.segs = list(segs)
+        if caliber:
+            for seg in segs:
+                _add_caliber(C, run, seg, _seg_dims(seg, all_dims) if run.skill != "list_issues" else [],
+                             metrics)
         return out
     if run.add_reasons and run.skill == "list_issues":
         await _add_reasons(T, segs)
@@ -550,10 +670,21 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
         out.events.append(Event.delta("。".join(dict.fromkeys(head)) + "。\n\n"))
     if run.skill == "list_issues":
         out.events += await _present_lists(run, T, res, segs, time_text, C, keys_by)
+        out.exported = await _export_lists(T, res, getattr(outcome, "frames", None) or {})
     else:
-        all_dims = [d for dims in dims_by.values() for d in dims]
         out.events += await _present_aggs(run, T, segs, time_text, C, all_dims, metrics)
     return out
+
+
+async def _export_lists(T: Turn, res: Mapping[str, Any], frames: Mapping[str, pd.DataFrame]) -> bool:
+    """要导出的清单（沙箱已按阈值或用户明说挑好、全部行经数据帧通道回传）：每域一页写成一个文件。
+    链接那句放进 `T.record.exports`，在统计口径之后发（§4.3）。张数取自沙箱（`exported`）。"""
+    counts = res.get("exported") or []
+    if not any("export_" + str(d) in frames for d, _n in counts):
+        return False
+    text = await export.save_lists(T.ctx, counts, frames, export.LIST_FILENAME)
+    T.record.exports.append(text)
+    return text != f"{errors.EXPORT_FAILED}。"
 
 
 # ---------------------------------------------------------------------------- 清单
@@ -665,31 +796,63 @@ def _present_agg(run: StepRun, T: Turn, seg: dict[str, Any], time_text: str | No
         events.append(tables.event(seg["table"], title))
     if seg.get("bins"):
         events.append(tables.event(seg["bins"], f"{label}结案周期分档{suffix}"))
-    chart = seg.get("chart") or {}
-    dim_name = str(seg.get("name") or next((d.get("name") for d in dims if d.get("title") == seg.get("title")),
-                                           chart.get("dimension")))
-    if chart.get("rows"):
+    item = chart_item(seg, dims, f"{label}结案周期分档{suffix}" if seg.get("bins") else title)
+    if item is not None:
+        T.record.charts.append(item)
         user_chart = (run.step.get("params") or {}).get("chart")
-        user_chart = user_chart if isinstance(user_chart, str) else None
-        if seg.get("kind") == "compare":
-            kind, why = charts.choose_compare(len(chart["rows"]), user_chart=user_chart)
-        else:
-            kind, why = charts.choose(dim_name, seg.get("groups") or len(chart["rows"]), multi=bool(seg.get("multi")),
-                                      user_chart=user_chart)
-        if kind is not None:
-            series = list(chart.get("series") or [aggregate.COLS["count"]])
-            if dim_name in ("加工厂", "跟进部门") and aggregate.COLS["unclosed"] in (chart["rows"][0] or {}):
-                series.append(aggregate.COLS["unclosed"])
-            chart_title = f"{label}结案周期分档{suffix}" if seg.get("bins") else title
-            events.append(charts.event(T.ctx.stats, kind, chart["rows"], str(chart.get("dimension")), series,
-                                       chart_title))
-            if why:
-                events.append(Event.delta(why))
+        events += chart_events(T, item, user_chart if isinstance(user_chart, str) else None)
     events += _rate_lists(seg, T, suffix)
     _add_caliber(C, run, seg, dims, metrics)
     if seg.get("kind") == "overview" and not seg.get("cross") and not (seg.get("facts") or {}).get("按问题类型"):
         return events, None
     return events, (tables.describe(title, seg.get("table") or {}, seg.get("groups")), seg.get("facts") or {})
+
+
+def seg_chart_item(run: StepRun, seg: dict[str, Any]) -> dict[str, Any] | None:
+    """重跑出来的一段（不呈现）的图数据，标题与呈现时相同（换图重跑用）。"""
+    label = str(seg.get("domain") or "")
+    time_text = _time_text(run)
+    suffix = f"：{time_text}" if time_text else ""
+    if seg.get("bins"):
+        title = f"{label}结案周期分档{suffix}"
+    elif seg.get("kind") == "group":
+        title = f"{label}按{seg.get('title')}统计{suffix}"
+    else:
+        title = f"{label}统计{suffix}"
+    return chart_item(seg, [], title)
+
+
+def chart_item(seg: dict[str, Any], dims: Sequence[dict[str, Any]], title: str) -> dict[str, Any] | None:
+    """一段的图数据（沙箱产出的行原样）：本轮画图用，也存进工作区 `charts` 给换图用（§4.3 `rerender`）。"""
+    chart = seg.get("chart") or {}
+    rows = chart.get("rows") or []
+    if not rows:
+        return None
+    dim_name = str(seg.get("name") or next((d.get("name") for d in dims if d.get("title") == seg.get("title")),
+                                           chart.get("dimension")))
+    series = list(chart.get("series") or [aggregate.COLS["count"]])
+    if dim_name in ("加工厂", "跟进部门") and aggregate.COLS["unclosed"] in (rows[0] or {}):
+        series.append(aggregate.COLS["unclosed"])
+    return {"domains": _seg_domains(seg), "title": title, "dimension": str(chart.get("dimension")),
+            "series": series, "rows": rows, "compare": seg.get("kind") == "compare", "name": dim_name,
+            "groups": seg.get("groups") or len(rows), "multi": bool(seg.get("multi"))}
+
+
+def chart_events(T: Turn, item: Mapping[str, Any], user_chart: str | None) -> list[Event]:
+    """按图型画一段图；改了图型时附一句原因。分组不到 2 组、用户说不要图时不画（总述「什么时候配图」）。"""
+    rows = list(item.get("rows") or [])
+    if item.get("compare"):
+        kind, why = charts.choose_compare(len(rows), user_chart=user_chart)
+    else:
+        kind, why = charts.choose(str(item.get("name")), int(item.get("groups") or len(rows)),
+                                  multi=bool(item.get("multi")), user_chart=user_chart)
+    if kind is None:
+        return []
+    events = [charts.event(T.ctx.stats, kind, rows, str(item.get("dimension")), list(item.get("series") or []),
+                           str(item.get("title") or ""))]
+    if why:
+        events.append(Event.delta(why))
+    return events
 
 
 def _rate_lists(seg: dict[str, Any], T: Turn, suffix: str) -> list[Event]:
@@ -764,10 +927,12 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
     if not allowed:
         return out
     tickets, denied, failed = await issue_detail.fetch_tickets(T, allowed)
+    out.domains = list(dict.fromkeys(t.domain.label for t in allowed if t.domain not in denied))
     if tickets is None:
         out.events.append(Event.delta(f"{errors.SECTION_FAILED}。"))
         return out
     items: list[str] = []
+    shown: list[dict[str, Any]] = []
     for i, t in enumerate(allowed):
         if i:
             out.events.append(Event.delta("\n\n"))
@@ -787,6 +952,7 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
                                           issue_detail.prefix_note(t, named))
         items += issue_detail.caliber_items(ticket, keys)
         out.ok = out.found_any = True
+        shown.append({"domain": str(ticket["domain"]), "number": str(ticket["number"]), "id": int(ticket["id"])})
     if more:
         out.events.append(Event.delta(f"\n\n前一步的结果不止 {issue_detail.DETAIL_MAX} 张，这里只给前 "
                                       f"{issue_detail.DETAIL_MAX} 张的详情，其余可以按单号单独查。"))
@@ -794,15 +960,42 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
         C.domains(list(dict.fromkeys(t.domain.label for t in allowed if t.domain not in denied)), [])
         for text in dict.fromkeys(items):
             C.item(text)
+    if len(shown) == 1:  # 单独说到的那张单：下一轮「这单」「它」指它（§10 `focus`）
+        T.record.focus = shown[0]
+    out.refs = {f"{run.sid}.shown": shown}
     return out
+
+
+def _focus_of(issues: Mapping[str, Any]) -> dict[str, Any] | None:
+    """按号查单只找到一张单时，它就是单独说到的那张（§10 `focus`）。"""
+    hits = [(str(d), item) for d, item in issues.items() if isinstance(item, dict) and item.get("ids")]
+    if len(hits) != 1 or len(hits[0][1]["ids"]) != 1:
+        return None
+    dom, item = hits[0]
+    return {"domain": dom, "number": str((item.get("numbers") or [""])[0]), "id": int(item["ids"][0])}
 
 
 async def _run_lookup(run: StepRun, T: Turn, C: cal.Caliber) -> StepOut:
     out = StepOut()
-    events, refs, ok, final = await lookup_numbers.run_step(T, run.step, run.numbers, C)
-    out.events, out.ok, out.final = events, ok, final
-    out.refs = {f"{run.sid}.issues": (refs or {}).get("issues") or {}}
-    out.found_any = any(v.get("ids") for v in out.refs[f"{run.sid}.issues"].values() if isinstance(v, dict))
+    if run.stored is not None:  # 递进筛选：上一轮那次按号查单的结果，直接用存下的单 ID
+        out.refs = {f"{run.sid}.issues": run.stored}
+        out.ok = True
+        out.found_any = any(isinstance(v, dict) and v.get("ids") for v in run.stored.values())
+        out.domains = [str(d) for d in run.stored]
+        return out
+    events, refs, ok, ask = await lookup_numbers.run_step(T, run.step, run.numbers, C)
+    if ask is not None:
+        out.ask, out.final, out.ok = _with_sid(ask, run.sid), True, True
+        return out
+    out.events, out.ok = events, ok
+    issues = (refs or {}).get("issues") or {}
+    out.refs = {f"{run.sid}.issues": issues, f"{run.sid}.found": (refs or {}).get("found") or {}}
+    out.found_any = any(v.get("ids") for v in issues.values() if isinstance(v, dict))
+    out.domains = list(dict.fromkeys([*(str(d) for d in issues), *(d.label for n in run.numbers for d in n.possible
+                                                                    if T.access.can(d))]))
+    focus = _focus_of(issues)
+    if focus is not None:
+        T.record.focus = focus
     return out
 
 
@@ -904,14 +1097,134 @@ def _swap_time(plan: dict, said: str, option: str) -> dict:
     return trial
 
 
+def _month_to_date(run: StepRun, T: Turn) -> tuple[str, dict[str, str] | None] | None:
+    """「这个月比上个月」：本月按月初到今天、上个月按完整自然月比，不自动换成同期；回答写明「本月截至今天」，并给
+    「按上月同期比」（总述「时间说法怎么换算」）。返回 (开头那句, 按钮)；不是这种比较时 None。
+
+    今天的日子已到或超过上月的天数（10 月 30、31 日对 9 月）时，上月同期就是上月整月，与原来的比法一样，
+    不给按钮，开头那句写明（开发者 2026-10-30 定）。"""
+    if (run.step.get("params") or {}).get("compare") != "时段" or len(run.spans) < 2:
+        return None
+    early, late = sorted(run.spans[:2], key=lambda s: s.start or date.min)
+    # 只管「这个月比上个月」「本月比上月」这两种说法；写明了年月的（「2026 年 10 月和 9 月比」）不算（S5 评审 A2）
+    if not (timespan.is_this_month(late.said) and timespan.is_last_month(early.said)):
+        return None
+    first = T.today.replace(day=1)
+    last_month_end = first - timedelta(days=1)
+    if not (late.start == first and late.end == T.today and late.to_today):
+        return None
+    if not (early.start == last_month_end.replace(day=1) and early.end == last_month_end):
+        return None
+    head = (f"「{late.said}」按本月截至今天（{late.start:%Y-%m-%d} 至 {late.end:%Y-%m-%d}），"
+            f"「{early.said}」按完整的上个月（{early.start:%Y-%m-%d} 至 {early.end:%Y-%m-%d}）比")
+    if T.today.day >= last_month_end.day:
+        return head + "；今天已到上月月底这一天，上月同期就是上月整月", None
+    return head + "，没有换成同期", suggestions.same_period(T.query, early.said)
+
+
+_SHOWN_OPS = ("是", "属于")
+
+
+def _said_items(step: dict) -> list[tuple[str, str]]:
+    """一步条件里的各项：(from, 用户认得的说法)。取值照计划里照抄的原话，引用前一步的不算。"""
+    p = step.get("params") or {}
+    out: list[tuple[str, str]] = []
+    d = p.get("domains")
+    if isinstance(d, dict) and d.get("value"):
+        out.append((str(d.get("from") or "user"), "、".join(str(x) for x in schema.as_list(d["value"]))))
+    for t in _time_items(step):
+        out.append((str(t.get("from") or "user"), f"时间「{t['said']}」"))
+    for f in schema.as_list(p.get("filters")):
+        if not isinstance(f, dict) or schema.is_ref(f.get("value")) or f.get("value") in (None, "", []):
+            continue
+        name = str(f.get("column") or f.get("field") or "") if f.get("field") == "其他" else str(f.get("field") or "")
+        op = str(f.get("op") or "是")
+        value = "、".join(str(x) for x in schema.as_list(f.get("value")))
+        out.append((str(f.get("from") or "user"), f"{name} {value}" if op in _SHOWN_OPS else f"{name}{op} {value}"))
+    return out
+
+
+def carried_notes(plan: dict) -> list[str]:
+    """沿用了上一轮的条件时，开头写明沿用了哪些、本轮换了哪些（总述「接着上一轮问」）。"""
+    kept: list[str] = []
+    changed: list[str] = []
+    for step in plan.get("steps") or []:
+        if not isinstance(step, dict) or step.get("skill") not in CONDITIONAL:
+            continue
+        for src, text in _said_items(step):
+            (kept if src == "previous" else changed).append(text)
+    kept = list(dict.fromkeys(kept))
+    if not kept:
+        return []
+    changed = [x for x in dict.fromkeys(changed) if x not in kept]
+    return [f"沿用上一轮的条件：{'、'.join(kept)}" + (f"；本轮换成：{'、'.join(changed)}" if changed else "")]
+
+
+def _time_items(step: dict) -> list[dict[str, Any]]:
+    return [t for t in schema.as_list((step.get("params") or {}).get("time")) if isinstance(t, dict) and t.get("said")]
+
+
+def _record(T: Turn, r: StepRun, out: StepOut) -> None:
+    """记下这一步实际执行了什么（§10 `turn`、`results`）：查了哪些域、换算后的时间连同原话、各域张数与结果单 ID。"""
+    if not out.domains:
+        return
+    T.record.fetched = True
+    bases = [str(t.get("basis") or "建单") for t in _time_items(r.step)]
+    T.record.steps[r.sid] = {
+        "skill": r.skill, "domains": list(out.domains),
+        "times": [workspace.span_dict(s, b) for s, b in zip(r.spans, bases, strict=False)],
+        "found": dict(out.refs.get(f"{r.sid}.found") or {}),
+        # 看原话才定下的判据（巴西「涉及费用」按标记还是按明细）：沿用与重放照用（S5 评审 M1）
+        "decided": {k: v for d in r.dsteps.values() for k, v in d.decided.items()}}
+    issues = out.refs.get(f"{r.sid}.issues")
+    if isinstance(issues, dict):
+        T.record.results[r.sid] = issues
+    shown = out.refs.get(f"{r.sid}.shown")
+    if isinstance(shown, list) and shown:
+        by: dict[str, dict[str, list[Any]]] = {}
+        for x in shown:
+            item = by.setdefault(str(x["domain"]), {"ids": [], "numbers": []})
+            item["ids"].append(int(x["id"]))
+            item["numbers"].append(str(x["number"]))
+        T.record.results[r.sid] = by
+
+
+def _templates(r: StepRun, out: StepOut, refs: Mapping[str, Any], T: Turn) -> list[dict[str, str]]:
+    """这一步之后的模板按钮（§9.5）。"""
+    if r.skill == "list_issues":
+        return suggestions.list_templates(r.step, T.query, found=out.found_any, truncated=out.truncated,
+                                          exported=out.exported)
+    if r.skill == "aggregate":
+        return suggestions.aggregate_templates(r.step, T.query, top1=refs.get(f"{r.sid}.top1") or [])
+    if r.skill == "issue_detail":
+        return suggestions.detail_templates(issue_detail.aspects_of(r.step), T.query, found=out.found_any)
+    if r.skill == "lookup_numbers":
+        return suggestions.detail_templates([], T.query, found=out.found_any)
+    return []
+
+
+def plan_alternatives(T: Turn) -> list[dict[str, str]]:
+    """计划的 `alternatives`（其他理解）：原话加这条理解（§9.5，`plan/clarify.py::alternative_recommendations`）。"""
+    plan = T.result.plan or {}
+    return clarify.alternative_recommendations(plan.get("alternatives"), T.query)
+
+
 async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Event]:
-    """第 8–9 步。"""
+    """第 8–9 步。执行记录写进 `T.record`；执行时产生的追问（手填订单号）发 `clarify` 后本轮到此为止。"""
     C = cal.Caliber()
     refs: dict[str, Any] = {}
+    for r in runs:  # 递进筛选：上一轮那次按号查单直接用存下的单 ID，不单独成段
+        if r.stored is not None:
+            stored = await _run_lookup(r, T, C)
+            refs |= stored.refs
+            _record(T, r, stored)
     shown = [r for r in runs if (r.skill in EXECUTABLE or r.skill not in ("clarify", "introduce")) and not r.merged]
     multi = len(shown) > 1
-    opening = _opening_notes(T) + _recent_notes(runs, T)
+    opening = _opening_notes(T) + carried_notes(plan) + _recent_notes(runs, T)
     any_ok, any_empty, any_found = False, False, False
+    templates: list[dict[str, str]] = []
+    alternatives: list[dict[str, str]] = []
+    month_noted = False
     for i, r in enumerate(shown, start=1):
         if multi:
             yield Event.delta(f"{'' if i == 1 else chr(10) * 2}**{i}. {_title(r)}**\n\n")
@@ -925,6 +1238,11 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         notes = opening if i == 1 else []
         if r.skill == "list_issues" and list_issues.no_conditions(r.step):
             notes = [*notes, errors.NO_CONDITION_LIST]
+        month = _month_to_date(r, T) if r.skill == "aggregate" and not month_noted else None
+        if month is not None:
+            notes, month_noted = [*notes, month[0]], True
+            if month[1] is not None:
+                alternatives.append(month[1])
         if r.skill == "issue_detail":
             if notes:
                 yield Event.delta("。".join(notes) + "。\n\n")
@@ -936,10 +1254,16 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         else:
             out = await run_step(r, T, refs, C, notes)
         if out.final:
+            if out.ask is not None:
+                T.record.ask = out.ask
+                yield clarify.event({"reason": out.ask.reason, "question": out.ask.question,
+                                     "options": out.ask.options}, T.query)
             for ev in out.events:
                 yield ev
             return
         refs |= out.refs
+        _record(T, r, out)
+        templates += _templates(r, out, refs, T)
         any_ok = any_ok or out.ok
         any_empty = any_empty or out.empty
         any_found = any_found or out.found_any
@@ -951,21 +1275,94 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         if out.empty and dep:
             yield Event.delta("\n\n这一步没有结果，后面依赖它的步骤不再执行。")
             break
+    T.record.found = any_found
     if not any_ok:
+        T.record.failed = True
         yield Event.error(errors.TURN_FAILED_CODE, errors.TURN_FAILED, fatal=True)
         return
     if C.counted:
         yield Event.delta("\n\n" + C.text())
-    buttons = _alternative_buttons(T)
+    for text in T.record.exports:
+        yield Event.delta("\n\n" + text)
+    widened: list[dict[str, str]] = []
     if any_empty:
-        buttons += await _relax_buttons(plan, runs, T)
+        widened = await _relax_buttons(plan, runs, T)
     elif any_found:
-        buttons += _recent_buttons(runs, T)
+        widened = _recent_buttons(runs, T)
     if any(r.skill == "list_issues" and list_issues.no_conditions(r.step) for r in shown):
-        buttons += greeting.buttons(T.access)
-    if buttons:
-        recs = [{**b, "id": str(k)} for k, b in enumerate(buttons[: clarify.MAX_OPTIONS], start=1)]
+        templates = greeting.buttons(T.access)
+    recs = suggestions.merge(alternatives, plan_alternatives(T), _alternative_buttons(T), widened, templates)
+    if recs:
         yield Event.suggestions(recs)
+
+
+# ---------------------------------------------------------------------------- 重放上一轮（质疑重查、换图，S5）
+
+
+def restrict_domains(plan: dict, turn: Mapping[str, Any]) -> dict:
+    """重放用的计划：每步的域取上一轮实际查过的域（再由 `prepare` 与本轮可查的域取交集，§4.3）。"""
+    out = copy.deepcopy(plan)
+    steps = (turn or {}).get("steps") or {}
+    for step in out.get("steps") or []:
+        if not isinstance(step, dict) or step.get("skill") not in (*CONDITIONAL, "lookup_numbers"):
+            continue
+        done = [str(d) for d in ((steps.get(str(step.get("id"))) or {}).get("domains") or []) if str(d) in _BY_LABEL]
+        if done:
+            step.setdefault("params", {})["domains"] = {"value": done, "from": "previous"}
+    return out
+
+
+@dataclass
+class Replayed:
+    """重放的结果：每步的输出（不呈现），给质疑重查比对、换图重画。"""
+
+    runs: list[StepRun]
+    outs: dict[str, StepOut]
+    caliber: cal.Caliber
+
+
+async def add_people(plan: dict, T: Turn) -> None:
+    """第 6 步：计划里按人员筛、问句里没有的姓名按姓名补取（规划前只按本轮问句的片段取过）。"""
+    have = {p.name for p in T.master.people}
+    missing = [n for n in person_names(plan) if n not in have]
+    if missing:
+        T.master.people += await shared.people_by_name(T.ctx, missing, dict(T.master.departments), T.master.failed)
+
+
+async def replay(plan: dict, spans: Mapping[str, list[Span]], T: Turn, previous_query: str) -> Replayed | Ask:
+    """按上一轮的执行计划重新执行一遍，只跑到沙箱为止（不写分析、不调模型）；详情照常给出这张单现在的样子。
+    执行记录照常写进 `T.record`（取过数，本轮覆盖 `turn`）。
+
+    对库照上一轮：看原话的判据用上一轮存下的（`Resolver.carried`、`replay`），认号与按钮带回的选项看上一轮的问句
+    （本轮问句是「你确定吗」）；计划里的姓名照常按姓名补取（S5 评审 M1、M2）。"""
+    T.query = previous_query or T.query
+    T.resolver = dataclasses.replace(T.resolver, query=T.query, replay=True)
+    await add_people(plan, T)
+    prepared = prepare(plan, spans, T)
+    if isinstance(prepared, Ask):
+        return prepared
+    C = cal.Caliber()
+    refs: dict[str, Any] = {}
+    outs: dict[str, StepOut] = {}
+    for r in prepared:
+        if r.merged:
+            continue
+        when = r.step.get("when")
+        if schema.is_ref(when) and not refs.get(when["ref"]):
+            continue
+        if r.skill == "issue_detail":
+            out = await _run_detail(r, T, refs, C)
+        elif r.skill == "lookup_numbers":
+            out = await _run_lookup(r, T, C)
+            out.events = []
+        elif r.skill in CONDITIONAL:
+            out = await run_step(r, T, refs, C, [], present=False, caliber=True)
+        else:
+            continue
+        refs |= out.refs
+        _record(T, r, out)
+        outs[r.sid] = out
+    return Replayed(runs=list(prepared), outs=outs, caliber=C)
 
 
 _TITLES = {"list_issues": "清单", "aggregate": "统计", "issue_detail": "单张单详情", "lookup_numbers": "按号查单"}

@@ -36,6 +36,10 @@ dependencies = [
     # 按段向量化，按单限定 / 按字段找 / 按单去重 / 跨域按重排分比都靠它；低于它传这些参数即
     # TypeError，`metadata_columns` 声明被静默丢弃（向量表建不出这两列）。
     "paxsz-forge-core>=0.3.7",
+    # openpyxl：导出每域一页的 xlsx（设计 §9.3，`present/export.py`；`ctx.files.save_dataframe` 只写一页）。
+    # paxsz-forge-platform 0.3.7 已声明 openpyxl>=3.1，平台运行环境里有；本模块直接 import 它，照样写成自己的
+    # 运行依赖，不靠传递依赖。
+    "openpyxl>=3.1",
 ]
 
 [project.entry-points."forge.modules"]

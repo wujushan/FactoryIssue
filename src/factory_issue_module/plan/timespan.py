@@ -160,6 +160,8 @@ _THIS_WEEK = re.compile(r"^(?:本周|这周|这一周|这个?星期|本星期|�
 _LAST_WEEK = re.compile(r"^(?P<up>上+)(?:一)?(?:周|个?星期|个?礼拜)$")
 _THIS_MONTH = re.compile(r"^(?:本月|这个?月|当月|本月份)$")
 _LAST_MONTH = re.compile(r"^(?P<up>上+)(?:一)?个?月$")
+#: 「上月同期」：上月 1 日到上月的今天这一天（上月没有这一天时到上月月底；总述「这个月比上个月」的选项）
+_LAST_MONTH_SAME = re.compile(r"^上(?:一)?个?月(?:的)?同期$")
 _THIS_QUARTER = re.compile(r"^(?:本季度?|这个?季度|当季度?)$")
 _LAST_QUARTER = re.compile(r"^上(?:一)?个?季度?$")
 _QUARTER = re.compile(rf"^{_YEAR}?(?:的)?(?:q(?P<q1>[1-4])|第?(?P<q2>[一二三四1-4])季度?)$")
@@ -196,6 +198,17 @@ def _rolling(n_text: str | None, unit: str, said: str, today: date) -> Span | No
     return Span(said, today - timedelta(days=days - 1), today, rolling_days=days, to_today=True)
 
 
+def is_this_month(said: str) -> bool:
+    """「本月」「这个月」这类说法（不含写明了年月的「2026 年 10 月」）。"""
+    return bool(_THIS_MONTH.match(_compact(str(said or ""))))
+
+
+def is_last_month(said: str) -> bool:
+    """「上个月」「上月」这类说法（只往前一个月；不含写明了年月的「9 月」）。"""
+    m = _LAST_MONTH.match(_compact(str(said or "")))
+    return m is not None and len(m.group("up")) == 1
+
+
 def _single(s: str, said: str, today: date) -> Span | None:
     """一段说法（已压缩、小写）→ 起止日期。"""
     if _UNLIMITED.match(s):
@@ -223,6 +236,9 @@ def _single(s: str, said: str, today: date) -> Span | None:
     if m:
         y, mo = _shift_month(today.year, today.month, -len(m.group("up")))
         return Span(said, date(y, mo, 1), _month_end(y, mo))
+    if _LAST_MONTH_SAME.match(s):
+        y, mo = _shift_month(today.year, today.month, -1)
+        return Span(said, date(y, mo, 1), date(y, mo, min(today.day, _month_end(y, mo).day)))
     if _THIS_QUARTER.match(s):
         q0 = (today.month - 1) // 3 * 3 + 1
         return Span(said, date(today.year, q0, 1), today, to_today=True)
