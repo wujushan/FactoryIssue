@@ -191,7 +191,8 @@ def check(question: str, note: str | None, table: str | None, facts: Any, text: 
     for s in sentences:
         fake = [n for n in _ISSUE_NO.findall(s) if n.upper() not in source]
         fake += [name for name, kinds, _ in find_entities(s, entities)
-                 if any(k.startswith(_ENTITY_KINDS) for k in kinds) and name.upper() not in source]
+                 if any(k.startswith(_ENTITY_KINDS) or k.endswith("加工厂") for k in kinds)
+                 and name.upper() not in source]
         if fake:
             bad.append({"句子": s.strip(), "事实里没有的数": fake})
     bad_set = {b["句子"] for b in bad}

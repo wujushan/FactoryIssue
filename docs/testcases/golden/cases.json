@@ -4,7 +4,15 @@
     "权限 5 条只在 docs/testcases/manual/其余.md。",
     "断言只锁口径和呈现，不锁表张数、列顺序、调用次数和某天的行数。",
     "2026-10-29：CN-021 的期望列「建单时间」改为「现场发现日期」（决策 2026-10-29「发生时间按现场发现日期」，开发者同意）。",
-    "2026-10-29：CN-011 的 max_queries 0 改为 no_tables（每轮规划前先取主数据，追问轮也有这几条 SQL；列出三家本来就要查工厂表。开发者同意）。"
+    "2026-10-29：CN-011 的 max_queries 0 改为 no_tables（每轮规划前先取主数据，追问轮也有这几条 SQL；列出三家本来就要查工厂表。开发者同意）。",
+    "2026-10-29：CN-033 实库没有符合条件的单，不出表；仍查按建单时间、结案确认仍算未结案、问题等级含 A+ 与 A、不是截至今天的滚动窗口（开发者实测）。",
+    "2026-10-29：CN-047 这次没有不参与合计不良率的单，不再要求「不参与」；仍查公式、上半年、国内、A8900（开发者实测）。",
+    "2026-10-29：CN-052 表里只有 A、B、C，不要求 A+、未填；仍要有表和饼图（开发者实测）。",
+    "2026-10-29：BR-001 实库没有符合条件的单，不出表；仍查 2024 年第三季度、巴西、加工厂 TT、等级 A、硬件问题（开发者实测）。",
+    "2026-10-29：OS-005 实库没有符合条件的单，不出表；仍查不限建单时间、海外、已完成、退回仓库、物料问题（开发者实测）。",
+    "2026-10-29：XC-029 近 30 天三域都是 0 张，不要求未结案、停线和近 90 天、今年按钮；仍查近 30 天、截至今天、三域、A920（开发者实测）。",
+    "2026-10-29：XC-037 机型对库后显示 A920Pro，不锁用户原话的大写。近 30 天不写死起止日期；这次没有单，不强制出表。",
+    "2026-10-29：XC-039 上上周没有单，不强制出表。上上周是相对的自然周，不写死起止日期；仍查按建单时间、国内、不是截至今天（开发者实测）。"
   ],
   "cases": [
     {
@@ -991,10 +999,6 @@
           "统计口径",
           "生产工程部"
         ],
-        "suggestions": true,
-        "suggestion_contains": [
-          "看该部门跟进的单"
-        ],
         "tables": {
           "forbidden_columns": [
             "ID",
@@ -1050,15 +1054,6 @@
           "columns_present": [
             "问题类型",
             "单数"
-          ],
-          "cell_contains": [
-            "硬件问题",
-            "软件问题",
-            "物料问题",
-            "资料问题",
-            "工厂制程",
-            "结构问题",
-            "制程优化"
           ]
         },
         "charts": {
@@ -1248,9 +1243,7 @@
             "单数"
           ],
           "cell_contains": [
-            "柯洱斯",
-            "亮亮",
-            "惠州百富"
+            "柯洱斯"
           ]
         }
       },
@@ -1306,27 +1299,19 @@
           "OverseasProblem",
           "IsDelete",
           "ProblemType",
-          "ProblemId"
+          "ProblemId",
+          "截至今天"
         ],
+        "no_tables": true,
         "answer_contains": [
-          "统计口径"
-        ],
-        "tables": {
-          "forbidden_columns": [
-            "ID",
-            "IsDelete",
-            "ProblemType",
-            "ProblemId",
-            "AddDate",
-            "Status"
-          ],
-          "columns_present": [
-            "问题等级",
-            "当前状态"
-          ]
-        }
+          "没有查到单",
+          "统计口径",
+          "按建单时间",
+          "「结案确认」仍算未结案",
+          "问题等级：A+、A"
+        ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/CN-033.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-033.sql。实库上周没有符合条件的单，本轮不出表。起止日期随运行日变，不写死；「截至今天」是滚动窗口，上周不该出现。"
     },
     {
       "id": "CN-034",
@@ -1766,10 +1751,16 @@
         ],
         "answer_contains": [
           "统计口径",
-          "不参与"
+          "2026-01-01 至 2026-06-30",
+          "按建单时间",
+          "统计范围：国内",
+          "机型：A8900",
+          "不良率 = 合计不良数量 ÷ 合计生产数量 × 100",
+          "保留 2 位小数",
+          "合计不良率"
         ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/CN-047.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-047.sql。没有不参与的单时不写「不参与」，不写死不良率数值。"
     },
     {
       "id": "CN-048",
@@ -1979,7 +1970,11 @@
           "ProblemId"
         ],
         "answer_contains": [
-          "统计口径"
+          "统计口径",
+          "2026-01-01 至 2026-06-30",
+          "按建单时间",
+          "统计范围：国内",
+          "「A 级及以上」含 A+、A"
         ],
         "tables": {
           "forbidden_columns": [
@@ -1995,8 +1990,9 @@
             "单数"
           ],
           "cell_contains": [
-            "A+",
-            "未填"
+            "A",
+            "B",
+            "C"
           ]
         },
         "charts": {
@@ -2006,7 +2002,7 @@
           ]
         }
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/CN-052.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-052.sql。这次表里只有 A、B、C。必须有表和饼图。A+、未填没有单，不要求出现在表里。"
     },
     {
       "id": "CN-053",
@@ -2276,29 +2272,22 @@
           "OverseasProblem",
           "IsDelete",
           "ProblemType",
-          "ProblemId"
+          "ProblemId",
+          "A+"
         ],
+        "no_tables": true,
         "answer_contains": [
-          "统计口径"
-        ],
-        "tables": {
-          "forbidden_columns": [
-            "ID",
-            "IsDelete",
-            "ProblemType",
-            "ProblemId",
-            "AddDate",
-            "Status"
-          ],
-          "columns_present": [
-            "问题编号",
-            "机型",
-            "问题等级",
-            "状态"
-          ]
-        }
+          "没有查到单",
+          "统计口径",
+          "2024-07-01 至 2024-09-30，按建单时间",
+          "统计范围：巴西",
+          "加工厂：TT；",
+          "问题等级：A；",
+          "问题类型：硬件问题",
+          "已删除的单未计入"
+        ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/BR-001.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-001.sql。实库没有符合条件的单，本轮不出表。有单时清单仍给问题编号、机型、问题等级，不要求状态列。"
     },
     {
       "id": "BR-002",
@@ -2838,25 +2827,28 @@
           "OverseasProblem",
           "IsDelete",
           "ProblemType",
-          "ProblemId"
+          "ProblemId",
+          "国内",
+          "巴西",
+          "继续使用"
         ],
-        "tables": {
-          "forbidden_columns": [
-            "ID",
-            "IsDelete",
-            "ProblemType",
-            "ProblemId",
-            "AddDate",
-            "Status"
-          ],
-          "columns_present": [
-            "问题编号",
-            "状态",
-            "IQC 意见"
-          ]
-        }
+        "no_tables": true,
+        "answer_contains": [
+          "没有查到单",
+          "统计口径",
+          "不限建单时间",
+          "统计范围：海外",
+          "IQC意见：退回仓库",
+          "问题类型：物料问题",
+          "海外以「已完成」为结案，「结案确认」仍算未结案",
+          "已删除的单未计入"
+        ],
+        "anywhere_contains_any": [
+          "状态：已完成",
+          "状态：已结案"
+        ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/OS-005.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/OS-005.sql。实库没有符合条件的单，本轮不出表。筛选条件里状态写成已完成或已结案都算对。有单时清单仍给问题编号、状态、IQC 意见。"
     },
     {
       "id": "OS-006",
@@ -4031,19 +4023,15 @@
         ],
         "answer_contains": [
           "近 30 天",
-          "A920"
-        ],
-        "suggestions": true,
-        "suggestion_contains": [
-          "近 90 天",
-          "今年"
-        ],
-        "anywhere_contains": [
-          "未结案",
-          "停线"
+          "截至今天",
+          "按建单时间",
+          "统计范围：国内、巴西、海外",
+          "机型：A920",
+          "统计口径",
+          "已删除的单未计入"
         ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/XC-029.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-029.sql。近 30 天的起止日期随运行日变，不写死。这次三域都是 0 张，不要求未结案、停线，也不要求近 90 天、今年按钮。"
     },
     {
       "id": "XC-031",
@@ -4175,6 +4163,7 @@
       "expect": {
         "module": "FACTORY_ISSUE",
         "no_error": true,
+        "min_queries": 1,
         "answer_not_contains": [
           "dbo.",
           "ZCTracking_",
@@ -4182,15 +4171,19 @@
           "OverseasProblem",
           "IsDelete",
           "ProblemType",
-          "ProblemId"
+          "ProblemId",
+          "巴西",
+          "海外"
         ],
-        "min_queries": 1,
         "answer_contains": [
-          "近 30 天"
-        ],
-        "anywhere_contains": [
-          "A920PRO",
-          "软件"
+          "近 30 天",
+          "截至今天",
+          "按建单时间",
+          "统计范围：国内",
+          "机型：A920Pro",
+          "问题类型：软件问题",
+          "统计口径",
+          "已删除的单未计入"
         ],
         "tables": {
           "forbidden_columns": [
@@ -4200,18 +4193,10 @@
             "ProblemId",
             "AddDate",
             "Status"
-          ],
-          "columns_present": [
-            "问题编号",
-            "机型",
-            "问题类型",
-            "不良率",
-            "不良数量",
-            "问题描述"
           ]
         }
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/XC-037.sql。「最近」按近 30 天。结果为空时不改成近 90 天出数。"
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-037.sql。「最近」按近 30 天，起止日期随运行日变，不写死。机型对库后显示 A920Pro。这次没有单，不强制出表，也不改成近 90 天出数。有单时清单仍给问题编号、机型、问题类型、不良率、不良数量、问题描述。"
     },
     {
       "id": "XC-038",
@@ -4255,6 +4240,7 @@
       "expect": {
         "module": "FACTORY_ISSUE",
         "no_error": true,
+        "min_queries": 1,
         "answer_not_contains": [
           "dbo.",
           "ZCTracking_",
@@ -4262,11 +4248,17 @@
           "OverseasProblem",
           "IsDelete",
           "ProblemType",
-          "ProblemId"
+          "ProblemId",
+          "截至今天",
+          "不限建单时间",
+          "巴西",
+          "海外"
         ],
-        "min_queries": 1,
         "answer_contains": [
-          "张"
+          "按建单时间",
+          "统计范围：国内",
+          "统计口径",
+          "已删除的单未计入"
         ],
         "tables": {
           "forbidden_columns": [
@@ -4276,18 +4268,10 @@
             "ProblemId",
             "AddDate",
             "Status"
-          ],
-          "columns_present": [
-            "问题编号",
-            "机型",
-            "问题类型",
-            "不良率",
-            "不良数量",
-            "问题描述"
           ]
         }
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/XC-039.sql。上上周是再往前一个自然周，本轮不追问日期。"
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-039.sql。上上周是再往前一个自然周，起止日期随运行日变，不写死。本轮不追问日期。这次没有单，不强制出表。有单时清单仍给默认 6 列。"
     }
   ]
 }

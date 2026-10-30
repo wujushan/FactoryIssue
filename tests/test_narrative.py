@@ -84,7 +84,11 @@ def test_issue_link_uses_configured_site():
         "[ZC9901001](https://info-test.example.test:8080/#/QualityManage/ProblemDetail?id=7)"
     assert links.issue(sites, Domain.OVERSEAS, "HW9901001", 3) == \
         "[HW9901001](https://info-test.example.test:8080/#/QualityManage/OverseasProblemAllDetail?id=3)"
-    assert links.issue(sites, Domain.BRAZIL, "BR9901001", 7) == "BR9901001"  # 巴西加密链接随 S3
+    # 巴西链接 S3 接上：brazil 没写时与 issue 相同；两个参数是大写十六进制
+    brazil = links.issue(sites, Domain.BRAZIL, "BR9901001", 7)
+    assert brazil.startswith("[BR9901001](https://info-test.example.test:8080/#/BrazilProblem/AddBrazilProblemPage?type=")
+    kind, ident = brazil.split("type=")[1].rstrip(")").split("&ID=")
+    assert kind.isupper() and ident.isupper() and len(kind) == 32 and kind != ident
 
 
 async def test_list_links_follow_the_uploaded_config_per_environment():

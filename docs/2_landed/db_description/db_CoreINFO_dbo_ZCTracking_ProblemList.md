@@ -45,7 +45,7 @@
 | MemberListName | nvarchar(525) | 主状态处理人 | 主状态环节的处理人姓名，逗号分隔，与 `MemberList` 一一对应；随最新处理节点变化，直接展示，不另查人员表。按人匹配用 `MemberList` 里的员工 ID。回答中不单列本列，按当前状态、当前责任人给出，本列在其中占哪一行见国内业务描述「当前状态」「当前责任人」 | — |
 | RDepartment | int | 问题跟进部门 | 被指定跟进处理本单的部门，即问题跟进人所在部门。只有指定了问题跟进人的类型才有值 | `info.dbo.Department.ID` |
 | RUser | nvarchar(255) | 问题跟进人 | 被指定跟进处理本单的一名人员 ID，文本型，需转整数关联；无效值按空。只有硬件、软件、结构问题、制程优化有值 | `info.dbo.Employee.ID` |
-| RConfirm | int | 跟进人是否确认 | 0=否，1=是 | — |
+| RConfirm | int | 跟进人是否确认 | 0=否，1=是；空按「否」，与管理页面一致（页面只看有没有值） | — |
 | RCompleteTime | datetime | 计划完成时间 | 硬件、软件、结构问题、制程优化在责任人确认时填，资料问题在工程确认时填（源系统称「责任人计划完成时间」） | — |
 | AllReDepartment | nvarchar(1000) | 责任归属部门 | 结案后人为定责的部门 ID，一个或多个，逗号分隔。空：已完成的单显示「无需定责」，未完成的单显示「未定责」（见国内业务描述「人员与部门」）。物料问题不展示、按责任部门查单与统计时不计入，与管理页面一致（业务方 2026-10-23 正式镜像计数：物料问题目前都没有填） | `info.dbo.Department.ID` |
 | ReasonClass | nvarchar(525) | 原因分类 | 结案时人为归类，从自维护的原因列表中选取，取值是有限集合，如「人为工作疏忽」 | — |
@@ -64,7 +64,7 @@
 | SReturnOrderNo | nvarchar(525) | 在库退货单号 | — | — |
 | IsChangeOrderV | int | 是否更改订单版本 | 0=否，1=是 | — |
 | OrderVersion | nvarchar(60) | 修订的订单版本 | — | — |
-| ZLConfirmResult | int | 资料问题确认结果 | 0=否，1=是。只对资料问题有意义 | — |
+| ZLConfirmResult | int | 资料问题确认结果 | 0=否，1=是；空按「否」，与管理页面一致。只对资料问题有意义 | — |
 | Confirmation | nvarchar(525) | 效果确认内容 | 富文本 | — |
 | ConfirmUser | int | 效果确认人 | 员工 ID，经人员表翻成姓名 | `info.dbo.Employee.ID` |
 | ConfirmDate | datetime | 效果确认时间 | — | — |

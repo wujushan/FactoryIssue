@@ -1,14 +1,17 @@
-"""在「一单一行」视图上做筛选、时间、分组与指标（设计 §6.3、§8.1；各域共用，S3 起巴西、海外的视图同样用）。
+"""在「一单一行」视图上做筛选、时间、分组与指标（设计 §6.3、§8.1；三域共用）。
 
-视图的辅助列约定（各域派生函数给出）：`_id`、`_number`、`_done`、`_rejected`、`_add`、`_found`、`_stop`、`_restart`、
-`_close`（日期）、`_stopped_ever`、`_stopped_now`、`_restarted`、`_stop_code`、`_stages`、`_machines`、`_series`、
-`_current_ids`、`_responsible_ids`、`_follower_ids`、`_resp_dept_ids`、`_resp_material`、`_rate_value`、`_bad`、
-`_den`、`_close_days`、`_stop_days`、`_inv_name`。
+视图的辅助列约定（三域的派生函数都给出）：`_id`、`_number`、`_done`、`_unclosed`（巴西不含待提交、已终止）、
+`_rejected`、`_closed_label`、`_add`、`_found`、`_stop`、`_restart`、`_close`、`_stat`（日期）、`_stopped_ever`、
+`_stopped_now`、`_restarted`、`_not_stopped`、`_stop_code`、`_stages`、`_machines`、`_series`、`_current_ids`、
+`_current_names`、`_responsible_ids`、`_follower_ids`、`_resp_dept_ids`、`_resp_material`、`_rate_value`、`_bad`、
+`_den`、`_impact`、`_close_days`、`_stop_days`、`_inv_name`、`_pn_codes`、`_pn_names`。巴西另有费用的 `_usd`、
+`_brl`、`_debit`、`_has_cost`。
 
-条件由 `handle()` 一侧对好库、写成参数（`domains/domestic.py`）：
+条件由 `handle()` 一侧对好库、写成参数（`domains/<域>.py`）：
 - `{"kind": "status", "items": [[种类, 值], …], "neg": 否}`：状态说法，几项之间为「或」；
 - `{"kind": "any_of", "col": 多值列, "values": […], "neg": 否}`：多值列与取值有交集即命中（比较前统一写法）；
 - `{"kind": "contains", "col": 列, "values": […], "neg": 否}`：包含任一取值；
+- `{"kind": "num", "col": 列, "op": eq/ne/gt/lt/ge/le/between, "values": [数…]}`：数值比较，空值不命中；
 - `{"kind": "ids", "values": [单 ID…]}`：在前一步的结果里找。
 时间：`{"basis": 日期依据, "start": "YYYY-MM-DD" 或 None, "end": …}`，含两头。
 """
@@ -19,12 +22,21 @@ from factory_issue_module.stats.lib.common import fi_blank, fi_key, fi_median, f
 
 #: 日期依据 → 视图里的日期列，以及「这个日期没填就不计入」时要数的范围（总述「按哪个日期筛」）
 VW_BASIS = {"建单": ("_add", None), "现场发现": ("_found", None), "停线": ("_stop", "_stopped_ever"),
-            "重启": ("_restart", "_restarted"), "结案": ("_close", "_done")}
+            "重启": ("_restart", "_restarted"), "结案": ("_close", "_done"), "统计日期": ("_stat", None)}
+
+
+def vw_num_hit(x, op, nums):
+    if x is None or pd.isna(x):
+        return False
+    a = nums[0]
+    if op == "between":
+        return nums[0] <= x <= nums[1]
+    return {"eq": x == a, "ne": x != a, "gt": x > a, "lt": x < a, "ge": x >= a, "le": x <= a}.get(op, False)
 
 
 def vw_status_hit(row, kind, value):
     if kind == "未结案":
-        return not row["_done"]
+        return bool(row["_unclosed"])
     if kind == "已结案":
         return bool(row["_done"])
     if kind == "停线中":
@@ -35,7 +47,9 @@ def vw_status_hit(row, kind, value):
         return bool(row["_restarted"])
     if kind == "环节":
         return value in (row["_stages"] or [])
-    codes = {"重启审核通过": 5, "重启审核中": 4, "责任人填写重启方案": 6, "没有停线": 3}
+    if kind == "没有停线":
+        return bool(row["_not_stopped"])
+    codes = {"重启审核通过": 5, "重启审核中": 4, "责任人填写重启方案": 6}
     if kind in codes:
         return row["_stop_code"] == codes[kind]
     return False
@@ -61,6 +75,9 @@ def vw_cond_mask(view, cond):
         codes = {fi_key(v) for v in cond.get("values") or []}
         hit = view.apply(lambda r: any(fi_key(c) in codes for c in (r["_pn_codes"] or []))
                          or any(w and w in fi_key(n) for n in (r["_pn_names"] or []) for w in codes), axis=1)
+    elif kind == "num":
+        nums = [float(x) for x in cond.get("values") or []]
+        hit = view[cond["col"]].apply(lambda x: bool(nums) and vw_num_hit(x, cond.get("op"), nums))
     elif kind == "ids":
         want = set(cond.get("values") or [])
         hit = view["_id"].apply(lambda x: x in want)

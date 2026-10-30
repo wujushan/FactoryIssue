@@ -24,3 +24,4 @@ WHERE (p.IsDelete = 0 OR p.IsDelete IS NULL)
       AND UPPER(REPLACE(REPLACE(REPLACE(n.ProductName, N' ', N''), N'-', N''), N'_', N'')) = N'A8900'
 );
 -- 不良率＝ROUND(BadSum * 100.0 / ProdSum, 2)。ProdSum 为空或 0 时不除，写明无法计算。
+-- SkippedCnt 为 0 时统计口径不写「不参与」。这次 A8900、2026 上半年没有不参与的单。

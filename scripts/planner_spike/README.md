@@ -140,6 +140,20 @@ uv run python scripts/planner_spike/spike.py --run --confirm-local
   耗时按并发 2 量，相当于两个人同时提问；调高并发会让耗时变差。
 - 在 PowerShell 里把输出接到管道（`| Select-Object …`）时中文会乱码，先执行 `[Console]::OutputEncoding = [Text.Encoding]::UTF8`。直接运行不受影响。
 
+## 计划交给执行层回放（`replay_exec.py`）
+
+对照集只给计划打分，不执行：计划判对了，执行层却认不出取值、改成追问，用户看到的就是答错（golden CN-025「软件、硬件、结构三类」、BR-004「涉及费用」都是这样漏过去的）。`replay_exec.py` 把一次运行里模型给的计划逐条交给执行层，用 `tests/` 的假 `ctx` 与合成数据跑 `handle()`，不连库、不调模型：
+
+```bash
+uv run python scripts/planner_spike/replay_exec.py                      # 最近一次有计划的运行（不算 --self-check 的输出）
+uv run python scripts/planner_spike/replay_exec.py --raw runtime/planner_spike/<运行>/raw.jsonl
+```
+
+- 类型、取值、状态、等级对不上的追问，或执行层抛异常，出现一条就退出码 1，列在「要修」下。
+- 名字对不上（机型、工厂、人员、供应商、部门、系列）、多工厂、名称核对受合成数据影响或本该追问，只列出、不判。
+- 期望本来就是追问的、带上文的多轮条跳过。
+- 每片收尾跑一次（G4b 任务单「每片的收尾」）；改了执行层的取值对照，或内网跑过新的对照集之后也跑。
+
 ## 输出
 
 默认目录 `runtime/planner_spike/<日期>-<提示词版本>/`：
