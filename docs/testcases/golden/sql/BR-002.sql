@@ -11,6 +11,6 @@ OUTER APPLY (
     WHERE x.ProblemID = p.ID
     ORDER BY x.ID DESC
 ) AS latest
-WHERE p.OrderNumber = 'BR2609002'
+WHERE p.OrderNumber = 'BR2609001'
   AND p.Status <> -1;
 -- ProcessUserID 经 info.dbo.Employee 翻成姓名。状态码翻成人话后再给用户。

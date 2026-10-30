@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -41,6 +42,11 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     return cases
 
 
+# Markdown 链接的地址。巴西、海外问题编号的页面路径里含 BrazilProblem、OverseasProblem，
+# 前端只显示方括号里的文字，扫描「不许出现表名」时去掉地址。
+_MD_LINK_TARGET = re.compile(r"\]\([^)]*\)")
+
+
 def _visible_text(body: dict[str, Any]) -> str:
     """用户看得到的文字：正文、澄清、建议按钮。表格单元格另走 `_table_text`。"""
     parts = [body.get("answer") or ""]
@@ -48,6 +54,11 @@ def _visible_text(body: dict[str, Any]) -> str:
         if body.get(key) is not None:
             parts.append(json.dumps(body[key], ensure_ascii=False))
     return "\n".join(parts)
+
+
+def _without_link_targets(text: str) -> str:
+    """去掉 Markdown 链接地址，只留可点击文字。"""
+    return _MD_LINK_TARGET.sub("]", text)
 
 
 def _table_text(tables: list[dict[str, Any]]) -> str:
@@ -162,9 +173,11 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
         total_rows = sum(len(table.get("rows") or []) for table in tables)
         if total_rows > cap:
             failures.append(f"各表合计 {total_rows} 行，预期不超过 {cap} 行")
-    # 呈现规范（docs/dev/09）：表名/字段名/数据源别名不许出现在给用户的文字里
+    # 呈现规范（docs/dev/09）：表名/字段名/数据源别名不许出现在给用户的文字里。
+    # 链接地址不算给用户看的文字（问题编号点进去的页面路径）。
+    shown = _without_link_targets(visible)
     for needle in expect.get("answer_not_contains") or []:
-        if needle in visible:
+        if needle in shown:
             failures.append(f"答案不该出现 {needle!r}（呈现规范，见 docs/dev/09）")
     if (least_len := expect.get("answer_min_length")) is not None and len(answer) < least_len:
         failures.append(f"答案仅 {len(answer)} 字，预期至少 {least_len} 字（数据之外要给分析）")
