@@ -220,20 +220,26 @@ def yes_no(said: str) -> int | None:
 
 
 #: 追问按钮发回的问句末尾带着选定的那一项（`plan/clarify.py::with_choice`：「原话（是）」）
-_CHOSEN = re.compile(r"（\s*(是|否)\s*）\s*$")
+_CHOSEN = re.compile(r"（\s*([^（）]+?)\s*）\s*$")
+
+
+def chosen(query: str, options: Sequence[str]) -> str | None:
+    """问句末尾「（X）」里的 X 是 `options` 之一时返回它：用户点了代码追问的按钮。
+
+    模型下一轮照旧把认不出的取值抄进计划，不按选定的这一项就会一直追问同一句（BR-004）。按钮直接填参数、
+    不重新规划随 S5 的工作区（设计 §4.4）。
+    """
+    m = _CHOSEN.search(query or "")
+    return m.group(1) if m is not None and m.group(1) in options else None
 
 
 def yes_no_or_chosen(said: str, query: str) -> int | None:
-    """「是 / 否」说法；认不出时看问句末尾是否带着「（是）」「（否）」。
-
-    用户点了「选『是』还是『否』」的按钮，问句是原话加选定的一项。模型下一轮照旧把认不出的取值抄进计划，不按
-    选定的这一项就会一直追问同一句（BR-004）。按钮直接填参数、不重新规划随 S5 的工作区（设计 §4.4）。
-    """
+    """「是 / 否」说法；认不出时看问句末尾是否带着「（是）」「（否）」。"""
     yn = yes_no(said)
     if yn is not None:
         return yn
-    m = _CHOSEN.search(query or "")
-    return None if m is None else (1 if m.group(1) == "是" else 0)
+    got = chosen(query, ("是", "否"))
+    return None if got is None else (1 if got == "是" else 0)
 
 
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")

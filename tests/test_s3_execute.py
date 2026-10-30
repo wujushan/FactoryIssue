@@ -145,7 +145,47 @@ async def test_br004_cost_condition_as_the_planner_writes_it():
     assert "统计口径" in text and "BrazilProblemCost" in {q.tables[0] for q in data_queries(h)}
 
 
-@pytest.mark.parametrize(("said", "kept"), [("没有费用", ["BR9901002"]), ("不涉及费用", ["BR9901002"])])
+#: 模型可能写成的别的样子（spike 里没出现过，线上不一定一样）：条件写成「大于 0」，或取值认不出
+_BR004_VARIANTS = [
+    {"column": "费用明细合计", "op": "大于", "value": 0},
+    {"column": "涉案金额", "op": "大于", "value": "0"},
+    {"column": "涉及费用", "op": "是", "value": "大于0"},
+    {"column": "涉及费用", "op": "是", "value": "Y"},
+]
+
+
+@pytest.mark.parametrize("variant", _BR004_VARIANTS)
+async def test_br004_other_plan_shapes_still_mean_has_cost(variant):
+    """取值认不出时看用户原话：原话说了「涉及费用」就按费用明细合计大于 0 筛；「大于 0」没说币种也是这个意思。"""
+    reply = plan(step("aggregate", domains=BR, time=[{"said": "今年", "basis": "建单", "from": "user"}],
+                      filters=[{**BR004_COST, **variant}], metrics=["费用美元", "扣款"]))
+    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, "巴西共 3 张。"])
+    assert EventType.CLARIFY not in _types(events)
+    assert "涉及费用：是（按费用明细认定）" in _text(events) and "涉及费用的单 3 张" in _text(events)
+
+
+async def test_cost_over_amount_compares_that_currency():
+    """「费用超过 200 美元」按费用美元合计比（巴西「费用」），不问「选是还是否」。"""
+    reply = plan(step("list_issues", domains=BR, filters=[{"field": "其他", "column": "费用（美元）", "op": "大于",
+                                                           "value": "50", "from": "user"}]))
+    h, events = await _go("巴西费用超过 50 美元的单", [reply, "共 1 张。最需要关注的是 BR9901001。"])
+    assert EventType.CLARIFY not in _types(events)
+    assert [r[0] for r in _tables(events)[0]["rows"]] == ["BR9901001"]
+
+
+async def test_cost_over_amount_without_currency_asks_which_and_click_resolves():
+    """没说币种的金额条件：问按美元还是雷亚尔，不按「是 / 否」问；点了之后照选定的币种比，不再问。"""
+    reply = plan(step("list_issues", domains=BR, filters=[{"field": "其他", "column": "费用", "op": "大于",
+                                                           "value": "50", "from": "user"}]))
+    h, events = await _go("巴西费用超过 50 的单", [reply])
+    assert _types(events) == [EventType.CLARIFY] and "美元还是雷亚尔" in events[0].data["question"]
+    button = next(r for r in events[0].data["recommendations"] if r["label"] == "雷亚尔")
+    h, events = await _go(button["query"], [reply, "共 1 张。最需要关注的是 BR9901003。"])
+    assert [r[0] for r in _tables(events)[0]["rows"]] == ["BR9901003"]
+
+
+@pytest.mark.parametrize(("said", "kept"), [("没有费用", ["BR9901002"]), ("不涉及费用", ["BR9901002"]),
+                                           ("没有产生费用", ["BR9901002"]), ("未产生过任何费用", ["BR9901002"])])
 async def test_cost_condition_said_negatively_in_the_value(said, kept):
     reply = plan(step("list_issues", domains=BR, filters=[{**BR004_COST, "value": said}]))
     h, events = await _go("巴西没有费用的单", [reply, "共 1 张。最需要关注的是 BR9901002。"])

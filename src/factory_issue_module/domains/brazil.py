@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -117,7 +118,11 @@ _ABSENT = {
     "处理结果": "巴西没有「处理结果」，巴西未计入",
 }
 _COST_WORDS = ("费用", "涉案金额")
-_NEGATIONS = ("不", "没", "无", "未")
+#: 「没有费用」「不涉及费用」「未产生费用」「无费用」（说到费用之前紧挨着否定）
+_NO_COST = re.compile(r"(不|没|无|未)(有|涉及|产生|发生|过|任何)*(费用|涉案金额)")
+_NUMERIC_KINDS = ("gt", "lt", "ge", "le", "between")
+#: 币种 → (视图列, 显示名)；费用美元、雷亚尔分别合计（巴西「费用」）
+_CURRENCIES = {"美元": ("_usd", "费用（美元）"), "雷亚尔": ("_brl", "费用（雷亚尔）")}
 
 
 def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep | Ask:
@@ -259,7 +264,10 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         elif fld == "其他":
             said = str(f.get("column") or "")
             if columns.resolve(said) == "is_cost" or any(w in said for w in _COST_WORDS):
-                ask = _cost_condition(values[0], neg, out, R.query)
+                if kind in _NUMERIC_KINDS:
+                    ask = _cost_amount(said, values, kind, str(f.get("op") or ""), out, R.query)
+                else:
+                    ask = _cost_condition(values[0], neg, out, R.query)
                 if ask is not None:
                     return ask
             else:
@@ -271,15 +279,17 @@ def _cost_condition(said: str, neg: bool, out: DomainStep, query: str) -> Ask | 
     """巴西「费用」：用户明说「是否涉及费用」时按单上的标记筛，只看是、否两种（0 是测试脏值，不计入，J-D12）；
     其余说法（「涉及费用的单」「有费用的单」）按费用明细合计大于 0 认定，不看标记（巴西业务描述「费用」）。
 
-    规划器常把条件本身写进取值（BR-004：列「费用明细合计大于 0」、取值「涉及费用」）：取值里说到费用时就是
-    「是」，前面带否定词（「没有费用」「不涉及费用」）时是「否」。
+    规划器常把条件本身写进取值（BR-004：列「费用明细合计大于 0」、取值「涉及费用」）。依次看：取值是不是
+    是 / 否；取值里说没说到费用（前面带否定词即「否」）；问句末尾有没有点按钮带回的「（是）」「（否）」；
+    用户原话里说没说到费用（「涉及费用的单子」）。都看不出才问。
     """
     yn = base.yes_no(said)
-    k = names.key(said)
-    if yn is None and any(w in k for w in _COST_WORDS):
-        yn = 0 if k.startswith(_NEGATIONS) else 1
+    if yn is None:
+        yn = _cost_said(said)
     if yn is None:
         yn = base.yes_no_or_chosen(said, query)
+    if yn is None:
+        yn = _cost_said(query)
     if yn is None:
         return Ask("是否涉及费用，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
     if neg:
@@ -289,9 +299,43 @@ def _cost_condition(said: str, neg: bool, out: DomainStep, query: str) -> Ask | 
         out.conds.append({"kind": "in", "col": "is_cost", "values": ["是" if yn else "否"]})
         out.echo.append(("是否涉及费用", "是" if yn else "否"))
     else:
-        out.conds.append({"kind": "flag", "col": "_has_cost", "value": bool(yn)})
-        out.needs.add("cost")
-        out.echo.append(("涉及费用", "是（按费用明细认定）" if yn else "否（按费用明细认定）"))
+        _has_cost(bool(yn), out)
+    return None
+
+
+def _has_cost(yes: bool, out: DomainStep) -> None:
+    out.conds.append({"kind": "flag", "col": "_has_cost", "value": yes})
+    out.needs.add("cost")
+    out.echo.append(("涉及费用", "是（按费用明细认定）" if yes else "否（按费用明细认定）"))
+
+
+def _cost_said(text: str) -> int | None:
+    """一段话里说没说到费用：「涉及费用」「有费用」为 1，「没有费用」「不涉及费用」「未产生费用」为 0，没说到为 None。"""
+    k = names.key(text)
+    if not any(w in k for w in _COST_WORDS):
+        return None
+    return 0 if _NO_COST.search(k) else 1
+
+
+def _cost_amount(column: str, values: Sequence[str], kind: str, op_said: str, out: DomainStep,
+                 query: str) -> Ask | None:
+    """金额条件（「费用超过 200 美元」按费用美元合计比，巴西「费用」）。
+
+    币种从列名、取值、问句末尾点按钮带回的「（美元）」「（雷亚尔）」里找；没说币种时，「大于 0」就是涉及费用
+    （费用美元合计或雷亚尔合计大于 0），其余金额问按哪种币种比，不换算、不相加。
+    """
+    text = column + "".join(values)
+    currency = next((c for c in _CURRENCIES if c in text), None) or base.chosen(query, tuple(_CURRENCIES))
+    if currency is None:
+        nums = base.numbers(values)
+        if kind == "gt" and nums and nums[0] == 0:
+            _has_cost(True, out)
+            return None
+        return Ask("这个金额按美元还是雷亚尔比？两种费用分开记，不换算、不相加。", list(_CURRENCIES),
+                   reason="取值对不上")
+    col, shown = _CURRENCIES[currency]
+    out.needs.add("cost")
+    base.numeric_cond(col, kind, values, out, shown, op_said)
     return None
 
 
