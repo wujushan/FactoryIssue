@@ -1,7 +1,8 @@
 """按条件列清单（设计 §4.3 清单一行、§6.3、§9.2；总述「清单默认列」「跨域规则」清单呈现）。
 
 事件顺序：`delta`（开头：各域张数与合计、无权的域、「按 X 理解」）→ 每域一个 `table` → `delta`（分析）→ 统计口径
-（整轮合并，放最后）。导出随 S5，问题描述摘要随 S6（在那之前文字查找不可用，问题描述一列写「暂不可用」）。
+（整轮合并，放最后）→ 导出链接（S5：用户明说导出，或某域超过导出阈值时，`turn/execute.py::_export_lists`）。
+问题描述摘要随 S6（在那之前文字查找不可用，问题描述一列写「暂不可用」）。
 """
 
 from __future__ import annotations
@@ -119,7 +120,9 @@ def params(step: dict, keys_by_domain: dict[str, list[str]], answer: AnswerParam
     sort = p.get("sort") if isinstance(p.get("sort"), dict) else {}
     limit = p.get("limit") if isinstance(p.get("limit"), int) and not isinstance(p.get("limit"), bool) else None
     return {"columns": {label: list(keys) for label, keys in keys_by_domain.items()}, "table_rows": answer.table_rows,
-            "sort_by": sort.get("by"), "desc": sort.get("order", "降序") != "升序", "limit": limit}
+            "sort_by": sort.get("by"), "desc": sort.get("order", "降序") != "升序", "limit": limit,
+            # 导出（§9.3）：用户明说「导出」「全部给我」时不论多少都导出；否则某域超过阈值才导出
+            "export": p.get("export") is True, "export_threshold": answer.export_threshold}
 
 
 def no_conditions(step: dict) -> bool:

@@ -9,13 +9,17 @@
   每个域一张表，开头写按什么号找到几张、问题类型与是否结案的分布（数都来自沙箱）；料号、PN 两处都查、分开列
   （J-D03）；号是几种都没有时写明按哪几种号查过。
 - 国内手填的带连字符的订单号：给的号查不到、但有以「该号-」开头的号时列出请用户选；只有这一个号时做成追问，
-  按钮发回「原话（候选号）」，下一轮沙箱按问句末尾的号查，不再追问。
+  按钮发回「原话（候选号）」：工作区在时直接把候选号填进计划（设计 §4.4）；工作区读不到时下一轮沙箱按问句
+  末尾的号查，同样不再追问。
 - 按 CAR 编号查单不需要 CAR 报告权限，不读报告表（J-P08）；CAR 编号的链接对所有用户生成。
+- 一次给很多个问题编号（多于表格行数 `table_rows`，总述「按编号查单」超过约 20 个）：按清单呈现，开头给各域张数
+  与合计、没找到与无权未查的号，每域一张表（域内按建单时间从新到旧，前 `table_rows` 张），全量导出成文件、
+  每域一页，链接在统计口径之后（`present/export.py`）。
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from forge_core.events import Event
@@ -23,8 +27,8 @@ from forge_core.events import Event
 from factory_issue_module.declarations import DOMAINS, Domain
 from factory_issue_module.domains import base, numbers
 from factory_issue_module.domains.numbers import Number
-from factory_issue_module.plan import clarify, schema
-from factory_issue_module.present import columns, links
+from factory_issue_module.plan import schema
+from factory_issue_module.present import columns, export, links
 from factory_issue_module.skills import issue_detail
 from factory_issue_module.stats import runner
 from factory_issue_module.turn import errors
@@ -54,7 +58,9 @@ def ask_of(nums: Sequence[Number]) -> base.Ask | None:
         return None
     question = "；".join(dict.fromkeys(str(n.problem) for n in bad)) + "。"
     first = next((n for n in bad if n.options), None)
-    return base.Ask(question, list(first.options) if first else [], reason=bad[0].reason)
+    if first is None:
+        return base.Ask(question, [], reason=bad[0].reason, fill=base.FILL_NONE)
+    return base.Ask(question, list(first.options), reason=bad[0].reason, said=first.raw, fill=base.FILL_KIND_SAID)
 
 
 def _plan(nums: Sequence[Number], access: Any) -> tuple[list[dict[str, Any]], dict[int, list[str]], dict[int, bool]]:
@@ -76,12 +82,17 @@ def _plan(nums: Sequence[Number], access: Any) -> tuple[list[dict[str, Any]], di
     return todo, skipped, only_denied
 
 
-async def run_step(T: Any, step: dict, nums: Sequence[Number], C: Any) -> tuple[list[Event], dict[str, Any], bool, bool]:
-    """(事件, 给后一步的引用, 这一步答出来了没有, 这一步是追问、本轮到此为止)。"""
+async def run_step(T: Any, step: dict, nums: Sequence[Number], C: Any
+                   ) -> tuple[list[Event], dict[str, Any], bool, base.Ask | None]:
+    """(事件, 给后一步的引用, 这一步答出来了没有, 要追问时的追问)。有追问时本轮到此为止，事件为空，由编排发
+    `clarify` 并写工作区 `pending_clarify`（点了候选号直接填进计划，设计 §4.4）。"""
     todo, skipped, only_denied = _plan(nums, T.access)
     events: list[Event] = []
     res: dict[str, Any] = {"sections": [], "refs": {"issues": {}}}
     failed_doms: list[str] = []
+    # 问题编号多于表格行数（总述「按编号查单」超过约 20 个）：按清单呈现，全量导出
+    as_list = len([n for n in nums if _issue_only(n)]) > T.answer.table_rows
+    exports: dict[str, Any] = {}
     if todo:
         doms = [d for d in DOMAINS if any(x["domain"] == d.label for x in todo)]
         jobs = {}
@@ -105,25 +116,32 @@ async def run_step(T: Any, step: dict, nums: Sequence[Number], C: Any) -> tuple[
                  "names": {d.label: columns.view_columns(d) for d in ok},
                  "desc": {d.label: columns.DESC_UNAVAILABLE for d in ok},
                  "labels": columns.DETAIL, "chosen": base.trailing(T.query)}
-            outcome = await runner.run(T.ctx, "lookup", frames, P)
+            if as_list:
+                P["as_list"] = {"table_rows": T.answer.table_rows}
+            outcome = await runner.run(T.ctx, "lookup", frames, P, return_frames=as_list)
             if not outcome.ok:
-                return [Event.delta(f"{errors.SECTION_FAILED}。")], {}, False, False
+                return [Event.delta(f"{errors.SECTION_FAILED}。")], {}, False, None
             res = outcome.result or res
+            exports = {k: v for k, v in (getattr(outcome, "frames", None) or {}).items() if k.startswith("export_")}
     sections = res.get("sections") or []
     # 只有一个号、只有手填订单号的候选：追问
     if len(nums) == 1 and sections and not any(s["found"] for s in sections):
         cands = [c for s in sections for c in s.get("candidates") or []]
         if cands:
             question = errors.hand_orders(nums[0].raw, cands[:12])
-            return [clarify.event({"reason": HAND_REASON, "question": question, "options": cands[:4]}, T.query)], \
-                {}, True, True
-    events += _present(T, nums, sections, skipped, only_denied, failed_doms)
+            return [], {}, True, base.Ask(question, cands[:4], reason=HAND_REASON, said=nums[0].raw,
+                                          fill=base.FILL_NUMBER)
+    events += _present(T, nums, sections, skipped, only_denied, failed_doms, res if as_list else None)
+    if as_list and res.get("as_list"):
+        # 链接放进 `T.record.exports`，在统计口径之后发（与清单导出同一处，§4.3、§9.3）
+        T.record.exports.append(await export.save_lists(T.ctx, res.get("as_list_counts") or [], exports,
+                                                        export.ISSUE_FILENAME))
     found = [s for s in sections if s["found"]]
     if found:
         C.domains([d for d in dict.fromkeys(s["domain"] for s in sections)],
                   [errors.not_searched(v) for v in dict.fromkeys(tuple(x) for x in skipped.values() if x)])
         C.item(errors.LOOKUP_CALIBER)
-    return events, res.get("refs") or {}, True, False
+    return events, res.get("refs") or {}, True, None
 
 
 def _issue_only(n: Number) -> bool:
@@ -153,8 +171,43 @@ def _distribution(sec: dict[str, Any]) -> str:
     return ("：" + "；".join(parts)) if parts else ""
 
 
+def _as_list(T: Any, nums: Sequence[Number], issue_nums: Sequence[int], by_i: Mapping[int, list[dict[str, Any]]],
+             only_denied: Mapping[int, bool], failed: Sequence[str], res: Mapping[str, Any]) -> list[Event]:
+    """很多个问题编号按清单呈现（总述「按编号查单」超过约 20 个、「跨域规则」清单呈现）：开头给各域张数与合计，
+    再写没找到、无权未查的号；每域一张表，域内按建单时间从新到旧，表格给前 `table_rows` 张（数都来自沙箱）。"""
+    counts = res.get("as_list_counts") or []
+    head = [f"按问题编号逐个查，共找到 {res.get('as_list_total', 0)} 张"
+            + (f"：{'、'.join(f'{d} {n} 张' for d, n in counts)}" if len(counts) > 1 else "")]
+    if any(x.get("found", 0) > x.get("shown", 0) for x in res.get("as_list") or []):
+        head.append(f"表格每域按建单时间从新到旧列出前 {T.answer.table_rows} 张")
+    missing, denied = [], []
+    for i in issue_nums:
+        value = nums[i].lookups[0].value
+        if only_denied.get(i):
+            denied.append(value)
+        elif nums[i].lookups[0].domains[0].label not in failed and not any(s.get("ids") for s in by_i.get(i, [])):
+            missing.append(value)
+    lines = ["，".join(head) + "。"]
+    if missing:
+        lines.append(f"没有找到这些号（已删除的单查不到）：{'、'.join(missing)}。")
+    if denied:
+        lines.append(f"这些号所在的域您没有查看权限，未查：{'、'.join(denied)}。")
+    events: list[Event] = [Event.delta("\n".join(lines) + "\n\n")]
+    for k, x in enumerate(res.get("as_list") or []):
+        dom = _BY_LABEL[str(x["domain"])]
+        rows = [list(r) for r in x.get("rows") or []]
+        for row, pid in zip(rows, x.get("ids_shown") or [], strict=False):
+            row[0] = links.issue(T.sites, dom, row[0], pid)
+        if k:
+            events.append(Event.delta("\n\n"))
+        events.append(Event.table(list(x.get("columns") or []), rows, title=f"{dom.label}问题单"))
+    return events
+
+
 def _present(T: Any, nums: Sequence[Number], sections: Sequence[dict[str, Any]], skipped: dict[int, list[str]],
-             only_denied: dict[int, bool], failed: Sequence[str]) -> list[Event]:
+             only_denied: dict[int, bool], failed: Sequence[str], as_list: Mapping[str, Any] | None = None
+             ) -> list[Event]:
+    """问题编号合成一张表、其余每种号每域一张表；`as_list`（沙箱按清单排好的结果）给了时问题编号按清单呈现。"""
     by_i: dict[int, list[dict[str, Any]]] = {}
     for s in sections:
         by_i.setdefault(int(s["i"]), []).append(s)
@@ -190,7 +243,12 @@ def _present(T: Any, nums: Sequence[Number], sections: Sequence[dict[str, Any]],
             return [Event.delta(f"{errors.DOMAIN_NOT_PERMITTED}。")]
         if pid is None:
             return [Event.delta(("\n".join(lines) + "\n\n" if lines else "") + f"{errors.issue_not_found(row[0])}。")]
-    if issue_rows:
+    if as_list is not None and issue_rows:
+        if lines:
+            events.append(Event.delta("\n".join(lines) + "\n\n"))
+            lines = []
+        events += _as_list(T, nums, issue_nums, by_i, only_denied, failed, as_list)
+    elif issue_rows:
         for row, (dom, pid) in zip(issue_rows, issue_ids, strict=True):
             row[0] = links.issue(T.sites, dom, row[0], pid)
         lines.append("按问题编号逐个查，一号一行（查不到、无权的在该行注明）：")

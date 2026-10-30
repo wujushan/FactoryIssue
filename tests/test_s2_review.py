@@ -92,7 +92,8 @@ async def test_a2_recent_says_thirty_days_and_offers_wider_windows():
     h, events = await _go("国内最近的问题", [reply, NARR])
     assert "按近 30 天" in _text(events)
     recs = next(e for e in events if e.type is EventType.SUGGESTIONS).data["recommendations"]
-    assert [r["query"] for r in recs] == ["国内近 90 天的问题", "国内今年的问题"]
+    # 两个时间范围在前，S5 的模板按钮在后（§9.5）
+    assert [r["query"] for r in recs][:2] == ["国内近 90 天的问题", "国内今年的问题"]
 
 
 async def test_a3_relax_counts_do_not_call_the_model_again():

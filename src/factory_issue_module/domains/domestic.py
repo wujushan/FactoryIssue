@@ -199,7 +199,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                     return base.not_found("加工厂", v, R.entities, None)
                 if len(got) > 1:
                     return Ask(f"「{v}」对上了这几家工厂：{base.join(got)}。按哪几家查？", [base.join(got), *got][:4],
-                               reason="多工厂")
+                               reason="多工厂", said=v)
                 hit += [x for x in got if x not in hit]
             codes = m.factory_codes(hit)
             out.sql.append(cond("m.Factory", "NOT_IN" if neg else "IN", codes))
@@ -242,7 +242,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 got_s = enums.status_kind(v)
                 if got_s is None:
                     return Ask(f"「{v}」这个状态对不上，可以选：", enums.status_options(), reason="状态对不上",
-                               missing=f"没有「{v}」这一状态")
+                               missing=f"没有「{v}」这一状态", said=v)
                 items.append([got_s[0], got_s[1]])
                 if got_s[0] == "环节":
                     out.needs.add("state")
@@ -304,7 +304,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         elif fld == "是否设计变更":
             yn = base.yes_no_or_chosen(values[0], R.query)
             if yn is None:
-                return Ask("是否设计变更，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
+                return Ask("是否设计变更，选「是」还是「否」？", ["是", "否"], reason="取值对不上", said=values[0])
             if neg:
                 yn = 1 - yn
             out.sql.append(cond("m.IsDesignChange", "EQ", yn))
@@ -331,7 +331,7 @@ def series_of(values: Sequence[str], m: MasterData, domain: Domain) -> list[str]
             tip = f"「{machine[0]}」是机型，属于{m.machine_series[machine[0]]}。" if (
                 machine and machine[0] in m.machine_series) else ""
             return Ask(f"没有找到「{v}」这个系列。{tip}可选的系列有：{base.join(pool[:12])}。",
-                       list(pool[:4]), reason="系列对不上", missing=f"没有「{v}」这个系列")
+                       list(pool[:4]), reason="系列对不上", missing=f"没有「{v}」这个系列", said=v)
         hit += [x for x in got if x not in hit]
     return hit
 
@@ -342,7 +342,8 @@ def levels_of(values: Sequence[str]) -> list[str] | Ask:
     for v in values:
         got = enums.level_codes(v)
         if got is None:
-            return Ask(f"问题等级「{v}」对不上，等级有 A+、A、B、C。", list(enums.CN_LEVELS), reason="等级对不上")
+            return Ask(f"问题等级「{v}」对不上，等级有 A+、A、B、C。", list(enums.CN_LEVELS), reason="等级对不上",
+                       said=v)
         out += [x for x in got if x not in out]
     return out
 
@@ -352,7 +353,7 @@ def enum_codes(fld: str, values: Sequence[str], table: dict[int, str]) -> list[i
     for v in values:
         got = enums.code_of(table, v)
         if not got:
-            return Ask(f"{fld}「{v}」对不上，可以选：", list(table.values())[:4], reason="取值对不上")
+            return Ask(f"{fld}「{v}」对不上，可以选：", list(table.values())[:4], reason="取值对不上", said=v)
         codes += got
     return base.unique(codes)
 

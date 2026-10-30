@@ -316,6 +316,10 @@ DEBIT = BR_VIEW_COLUMNS["debit"]
 REASONS = _derived("原因与措施")
 #: 几个问题编号合成一张表时另加的一列（总述「按编号查单」一次给多个号）
 OWNER_DOMAIN = _derived("所属域")
+#: 质疑上一轮、重查后有变化的单那张表的「变化」一列与它的两种说法（总述「表格列名」）
+VERIFY_CHANGE = _derived("变化")
+VERIFY_ADDED = _derived("这次新查到")
+VERIFY_REMOVED = _derived("这次没查到")
 
 #: 清单默认 6 列（总述「清单默认列」）
 DEFAULT_LIST = ("number", "machine", "type", "rate", "bad_qty", "desc")

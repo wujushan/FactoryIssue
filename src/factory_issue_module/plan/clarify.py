@@ -9,9 +9,10 @@
 - 接不上上一轮：原话多是「？？？」、乱码或「帮我看一下详情」，拼上去没有意义，`query` 直接用选项文字。
 - 时间认不出：把原话里那段说法换成选定的时间，免得新问句里仍带着认不出的说法、再追问一次。
 - 第 18 条「上一轮没有结果」：选项已是更早那次的原话接上本轮原话，`label`「按更早那次的条件查」。
-- 计划的 `alternatives`（其他理解）做成答后按钮时同样是原话加这条理解（`alternative_recommendations`，S5 的
-  `present/suggestions.py` 调用）。
-- 按钮至多 4 个，`label` 不超过 15 个字。`pending_clarify` 的写入随 S5（§10）。
+- 计划的 `alternatives`（其他理解）做成答后按钮时同样是原话加这条理解（`alternative_recommendations`，
+  `turn/execute.py` 交 `present/suggestions.py` 合并）。
+- 按钮至多 4 个，`label` 不超过 15 个字。代码追问的按钮另写进工作区 `pending_clarify`，点了直接填进计划
+  （`turn/workspace.py`，§4.4）。
 """
 
 from __future__ import annotations

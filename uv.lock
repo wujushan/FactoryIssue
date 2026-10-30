@@ -122,6 +122,7 @@ name = "forge-module-factory-issue"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "openpyxl" },
     { name = "paxsz-forge-core" },
 ]
 
@@ -137,7 +138,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "paxsz-forge-core", specifier = ">=0.3.7", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" }]
+requires-dist = [
+    { name = "openpyxl", specifier = ">=3.1" },
+    { name = "paxsz-forge-core", specifier = ">=0.3.7", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" },
+]
 
 [package.metadata.requires-dev]
 dev = [

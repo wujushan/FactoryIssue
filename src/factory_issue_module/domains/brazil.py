@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
@@ -250,7 +250,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         elif fld == "是否设计变更":
             yn = base.yes_no_or_chosen(values[0], R.query)
             if yn is None:
-                return Ask("是否设计更改，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
+                return Ask("是否设计更改，选「是」还是「否」？", ["是", "否"], reason="取值对不上", said=values[0])
             if neg:
                 yn = 1 - yn
             # 巴西处理过程上存「需要 / 不需要」（最新一条处理过程）
@@ -259,7 +259,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         elif fld == "是否需要回复8D":
             yn = base.yes_no_or_chosen(values[0], R.query)
             if yn is None:
-                return Ask("是否需要回复 8D，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
+                return Ask("是否需要回复 8D，选「是」还是「否」？", ["是", "否"], reason="取值对不上", said=values[0])
             if neg:
                 yn = 1 - yn
             out.sql.append(cond("m.IsRequire8D", "EQ", 1 if yn else 2))
@@ -270,7 +270,8 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 if kind in _NUMERIC_KINDS:
                     ask = _cost_amount(said, values, kind, str(f.get("op") or ""), out, R.query)
                 else:
-                    ask = _cost_condition(values[0], neg, out, R.query)
+                    carried = R.carried if (R.replay or f.get("from") == "previous") else None
+                    ask = _cost_condition(values[0], neg, out, R.query, carried)
                 if ask is not None:
                     return ask
             else:
@@ -278,26 +279,46 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
     return out
 
 
-def _cost_condition(said: str, neg: bool, out: DomainStep, query: str) -> Ask | None:
+#: `DomainStep.decided` 的键：「涉及费用」按单上标记（`COST_FLAG`）还是按费用明细（`COST_DETAIL`）；取值认不出、
+#: 看原话才定下的是（"1"）或否（"0"，否定之前）
+COST_BASIS = "涉及费用"
+COST_FLAG = "标记"
+COST_DETAIL = "明细"
+COST_VALUE = "涉及费用取值"
+
+
+def _cost_condition(said: str, neg: bool, out: DomainStep, query: str,
+                    carried: Mapping[str, str] | None = None) -> Ask | None:
     """巴西「费用」：用户明说「是否涉及费用」时按单上的标记筛，只看是、否两种（0 是测试脏值，不计入，J-D12）；
     其余说法（「涉及费用的单」「有费用的单」）按费用明细合计大于 0 认定，不看标记（巴西业务描述「费用」）。
 
     规划器常把条件本身写进取值（BR-004：列「费用明细合计大于 0」、取值「涉及费用」）。依次看：取值是不是
     是 / 否；取值里说没说到费用（前面带否定词即「否」）；问句末尾有没有点按钮带回的「（是）」「（否）」；
     用户原话里说没说到费用（「涉及费用的单子」）。都看不出才问。
+
+    按标记还是按明细看的是用户提这个条件时的原话。沿用上一轮的条件、重放上一轮的计划时（`carried` 是上一轮
+    执行时定下的判据），照上一轮的判据，不看本轮问句：「你确定吗」「那上个月呢」里没有「是否涉及费用」，看本轮
+    问句会把按标记查的条件换成按费用明细查（S5 评审 M1）。定下来的判据记进 `out.decided`，工作区存下。
     """
+    carried = carried or {}
     yn = base.yes_no(said)
     if yn is None:
         yn = _cost_said(said)
+    if yn is None and carried.get(COST_VALUE) in ("1", "0"):
+        yn = int(carried[COST_VALUE])  # 当时看原话才定下的是 / 否
     if yn is None:
         yn = base.yes_no_or_chosen(said, query)
     if yn is None:
         yn = _cost_said(query)
     if yn is None:
-        return Ask("是否涉及费用，选「是」还是「否」？", ["是", "否"], reason="取值对不上")
+        return Ask("是否涉及费用，选「是」还是「否」？", ["是", "否"], reason="取值对不上", said=said)
+    out.decided[COST_VALUE] = str(yn)
     if neg:
         yn = 1 - yn
-    if "是否涉及费用" in names.key(query):
+    basis = carried.get(COST_BASIS)
+    flag = basis == COST_FLAG if basis in (COST_FLAG, COST_DETAIL) else "是否涉及费用" in names.key(query)
+    out.decided[COST_BASIS] = COST_FLAG if flag else COST_DETAIL
+    if flag:
         out.sql.append(cond("m.IsCost", "EQ", 1 if yn else 2))
         out.conds.append({"kind": "in", "col": "is_cost", "values": ["是" if yn else "否"]})
         out.echo.append(("是否涉及费用", "是" if yn else "否"))
@@ -335,7 +356,7 @@ def _cost_amount(column: str, values: Sequence[str], kind: str, op_said: str, ou
             _has_cost(True, out)
             return None
         return Ask("这个金额按美元还是雷亚尔比？两种费用分开记，不换算、不相加。", list(_CURRENCIES),
-                   reason="取值对不上")
+                   reason="取值对不上", said=values[0] if values else None, fill=base.FILL_APPEND)
     col, shown = _CURRENCIES[currency]
     out.needs.add("cost")
     base.numeric_cond(col, kind, values, out, shown, op_said)
@@ -350,7 +371,7 @@ def status_items(values: Sequence[str], stages: tuple[str, ...], label: str, out
         got = enums.status_kind(v, stages)
         if got is None:
             return Ask(f"「{v}」这个状态对不上，{label}的状态有：{base.join(stages)}。", list(stages)[:4],
-                       reason="状态对不上", missing=f"没有「{v}」这一状态")
+                       reason="状态对不上", missing=f"没有「{v}」这一状态", said=v)
         if got[0] in enums.CN_ONLY_KINDS:
             out.excluded.append(f"{label}没有「{got[0]}」这一状态，{label}未计入")
             continue
