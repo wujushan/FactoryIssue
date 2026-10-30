@@ -252,7 +252,8 @@ async def test_rule13_still_mismatched_opens_with_basis_and_offers_other_reading
     h, events = await _go("今年结案了多少单", [bad, bad, "共 4 张。其中未结案 3 张。"])
     assert "「今年」按建单时间理解" in _text(events)
     sugg = next(e for e in events if e.type is EventType.SUGGESTIONS)
-    assert sugg.data["recommendations"][0]["query"] == "今年结案了多少单（按结案时间算）"
+    rec = sugg.data["recommendations"][0]
+    assert rec["label"] == "按结案时间算" and rec["query"] == "改按结案时间算"
 
 
 async def test_rule15_gets_machine_names_from_master_data():

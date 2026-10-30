@@ -14,8 +14,12 @@
   - `charts`：本轮各段图的数据行（沙箱产出，原样），换图用。
   - `focus`：最近一张被单独说到的单（域、问题编号、单 ID），「这单」「它」用；本轮没有就留着上一张。
   - `pending_clarify`：代码追问时的计划、问话与每个选项怎么填回计划；下一轮问句与某个选项的 `query` 完全相同
-    时直接填、不重新规划（`fill`），填好的计划照常过 §4.2 第 6 步。模型自己写的追问与规整改成的追问（第 17、
-    18 条）计划本身就是追问，没有可填的计划，按钮的问句已说全，照常规划。
+    时直接填、不重新规划（`fill`），填好的计划照常过 §4.2 第 6 步。写进去了按钮的 `query` 就是选项本身，问句
+    全文（原话加这一项）存在选项的 `full` 里，本轮按它理解；写不进去时按钮发问句全文（`plan/clarify.py`）。
+    模型自己写的追问与规整改成的追问（第 17、18 条）计划本身就是追问，没有可填的计划，按钮的问句已说全，照常
+    规划。
+- 点了追问按钮直填的轮次：`last.query` 记用户发来的原话（隔了很多轮的判断要拿它和会话历史比），`turn.query`
+  与 `last.earlier_query` 记问句全文（重放、第 18 条拼「按更早那次的条件查」要一句说全的问句）。
 """
 
 from __future__ import annotations
@@ -150,10 +154,11 @@ async def read_previous(ctx: Any, history: Sequence[Mapping[str, Any]]) -> Previ
     )
 
 
-async def write_last(ctx: Any, query: str, outcome: str, plan: dict | None) -> None:
-    """`last`：最近一次查到结果的问句原话，本轮查到结果就是本轮，否则照抄上一份 `last` 的。"""
+async def write_last(ctx: Any, query: str, outcome: str, plan: dict | None, *, asked: str | None = None) -> None:
+    """`last`：最近一次查到结果的问句原话，本轮查到结果就是本轮，否则照抄上一份 `last` 的。`asked` 是本轮按什么
+    问句理解（点了追问按钮直填时是原话加选定的一项），记作最近一次查到结果的问句。"""
     if outcome == OUTCOME_FOUND:
-        earlier = query
+        earlier = asked or query
     else:
         before = await read(ctx, LAST)
         earlier = (before or {}).get("earlier_query")
@@ -295,6 +300,9 @@ class Filled:
     question: str
     inferred: list[Inferred]
     check_errors: list[str]
+    #: 本轮按什么问句理解：追问那一轮的原话加选定的这一项（按钮只写了选项；对库、写分析、答后按钮、
+    #: 填不进去时重新规划都按它，§4.4）
+    asked: str = ""
 
 
 def _patch(ask: Ask, option: str) -> dict[str, Any] | None:
@@ -304,22 +312,29 @@ def _patch(ask: Ask, option: str) -> dict[str, Any] | None:
 
 
 async def write_pending(ctx: Any, *, query: str, plan: dict, ask: Ask, recommendations: Sequence[Mapping[str, Any]],
-                        inferred: Sequence[Inferred] = (), check_errors: Sequence[str] = ()) -> None:
-    """代码追问的轮次：把计划、问话与每个按钮怎么填写进 `pending_clarify`。没有可填的（位数不对）不写。"""
+                        full: Sequence[Mapping[str, Any]] = (), inferred: Sequence[Inferred] = (),
+                        check_errors: Sequence[str] = ()) -> bool:
+    """代码追问的轮次：把计划、问话与每个按钮怎么填写进 `pending_clarify`。没有可填的（位数不对）不写。
+
+    `recommendations` 是发出去的按钮（`query` 用来认下一轮点的是哪个）；`full` 是同一顺序的问句全文（原话加
+    这一项，`clarify.recommendations`），点了之后本轮按它理解。返回写没写进去：写进去了按钮才能只写选项（§4.4）。
+    """
     options = []
     shown = [str(o).strip() for o in ask.options if str(o).strip()]  # 与 `clarify.recommendations` 同一顺序
-    for option, rec in zip(shown, recommendations, strict=False):
+    fulls = [str(r.get("query") or "") for r in full]
+    for i, (option, rec) in enumerate(zip(shown, recommendations, strict=False)):
         patch = _patch(ask, str(option))
         if patch is not None:
-            options.append({"query": str(rec.get("query") or ""), "patch": patch})
+            options.append({"query": str(rec.get("query") or ""), "full": fulls[i] if i < len(fulls) else "",
+                            "patch": patch})
     if not options:
         await drop(ctx, PENDING)
-        return
-    await write(ctx, PENDING, {"query": query, "plan": plan, "question": ask.question, "reason": ask.reason,
-                               "options": options,
-                               "inferred": [{"step": x.step, "field": x.field, "values": list(x.values)}
-                                            for x in inferred],
-                               "check_errors": list(check_errors)})
+        return False
+    return await write(ctx, PENDING, {"query": query, "plan": plan, "question": ask.question, "reason": ask.reason,
+                                      "options": options,
+                                      "inferred": [{"step": x.step, "field": x.field, "values": list(x.values)}
+                                                   for x in inferred],
+                                      "check_errors": list(check_errors)})
 
 
 def fill(pending: Mapping[str, Any] | None, query: str) -> Filled | None:
@@ -339,7 +354,8 @@ def fill(pending: Mapping[str, Any] | None, query: str) -> Filled | None:
     inferred = [Inferred(step=str(x.get("step")), field=str(x.get("field")), values=tuple(x.get("values") or ()))
                 for x in pending.get("inferred") or [] if isinstance(x, Mapping)]
     return Filled(plan=plan, query=str(pending.get("query") or ""), question=str(pending.get("question") or ""),
-                  inferred=inferred, check_errors=[str(x) for x in pending.get("check_errors") or []])
+                  inferred=inferred, check_errors=[str(x) for x in pending.get("check_errors") or []],
+                  asked=str(option.get("full") or "").strip() or said)
 
 
 def _same(a: Any, b: str) -> bool:

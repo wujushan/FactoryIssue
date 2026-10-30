@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import io
 from datetime import date, timedelta
 
@@ -182,14 +183,21 @@ async def test_previous_time_uses_the_stored_dates_and_answer_says_what_is_carri
 # ---------------------------------------------------------------------------- 追问选项直填（§4.4 第二条）
 
 
+_ODD_TYPE = {"field": "问题类型", "op": "是", "value": "外观问题", "from": "user"}
+_ASK_TYPE = "近 30 天国内外观问题有哪些"
+
+
 async def test_type_button_fills_the_plan_without_replanning():
     c = Conversation(scopes.account_jia())
-    odd = {"field": "问题类型", "op": "是", "value": "外观问题", "from": "user"}
-    events = await c.ask("近 30 天国内外观问题有哪些", plan(step("list_issues", domains=CN, time=T30, filters=[odd])))
+    events = await c.ask(_ASK_TYPE, plan(step("list_issues", domains=CN, time=T30, filters=[_ODD_TYPE])))
     rec = next(r for r in _buttons(events) if r["label"] == "硬件问题")
+    # 工作区写进去了：按钮只写选项（INFO 网页前端把 `query` 当按钮文字），问句全文存在 `pending_clarify` 里
+    assert rec["query"] == "硬件问题"
     pending = c.ws(workspace.PENDING)
     assert pending["options"][0]["patch"]["kind"] == base.FILL_VALUE and pending["plan"]["steps"][0]["skill"] == \
         "list_issues"
+    option = next(o for o in pending["options"] if o["query"] == "硬件问题")
+    assert option["full"] == f"{_ASK_TYPE}（硬件问题）"
     before = _planner_calls(c.h)
     c.h.queries.clear()
     events = await c.ask(rec["query"], NARR)
@@ -201,19 +209,61 @@ async def test_type_button_fills_the_plan_without_replanning():
     assert c.ws(workspace.TURN)["plan"]["steps"][0]["params"]["filters"][0]["value"] == "硬件问题"
 
 
+async def test_click_round_is_understood_as_the_full_question():
+    """点了只写选项的按钮：`last.query` 记用户发来的原话（隔了很多轮要拿它比会话历史），`turn.query` 与
+    `last.earlier_query` 记问句全文；写分析的模型拿到的也是问句全文；下一轮照常拿到上一轮计划。"""
+    c = Conversation(scopes.account_jia())
+    events = await c.ask(_ASK_TYPE, plan(step("list_issues", domains=CN, time=T30, filters=[_ODD_TYPE])))
+    await c.ask(next(r for r in _buttons(events) if r["label"] == "硬件问题")["query"], NARR)
+    full = f"{_ASK_TYPE}（硬件问题）"
+    last = c.ws(workspace.LAST)
+    assert last["query"] == "硬件问题" and last["earlier_query"] == full
+    assert c.ws(workspace.TURN)["query"] == full
+    assert full in str(c.h.llm.calls[-1])  # 分析段的提示里是问句全文
+    previous = await workspace.read_previous(c.h.ctx, c.h.ctx.session.rows)
+    assert previous.plan is not None and previous.plan["steps"][0]["skill"] == "list_issues"
+
+
+async def test_code_ask_buttons_send_the_full_question_when_pending_cannot_be_written():
+    """工作区没有或写不进去：按钮发问句全文（原话加选项），点了照常规划也说得全。"""
+    for c in (Conversation(scopes.account_jia(), ws=False), Conversation(scopes.account_jia())):
+        if c.h.workspace is not None:
+            c.h.ctx.workspace.quota_bytes = 10
+        events = await c.ask(_ASK_TYPE, plan(step("list_issues", domains=CN, time=T30, filters=[_ODD_TYPE])))
+        rec = next(r for r in _buttons(events) if r["label"] == "硬件问题")
+        assert rec["query"] == f"{_ASK_TYPE}（硬件问题）"
+
+
+async def test_fill_without_effect_replans_with_the_full_question(monkeypatch):
+    """填进去之后第 6 步又问出同一句：按问句全文规划一次（不是只拿「硬件问题」这几个字去规划）。"""
+    c = Conversation(scopes.account_jia())
+    events = await c.ask(_ASK_TYPE, plan(step("list_issues", domains=CN, time=T30, filters=[_ODD_TYPE])))
+    rec = next(r for r in _buttons(events) if r["label"] == "硬件问题")
+    monkeypatch.setattr(workspace, "apply_fill", lambda p, _patch: copy.deepcopy(p))  # 填了等于没填
+    hw = {**_ODD_TYPE, "value": "硬件问题"}
+    events = await c.ask(rec["query"], plan(step("list_issues", domains=CN, time=T30, filters=[hw])), NARR)
+    planned = [m for m in c.h.llm.calls if "的规划器" in str(m[0].get("content") or "")][-1]
+    assert f"{_ASK_TYPE}（硬件问题）" in planned[-1]["content"]
+    assert EventType.CLARIFY not in _types(events) and EventType.TABLE in _types(events)
+
+
 async def test_yes_no_button_fills_and_never_loops():
-    """BR-004 那一类：点「是」直接填进计划，不再问同一句；工作区读不到时退回问句末尾的「（是）」（S3 的做法）。"""
+    """BR-004 那一类：点「是」直接填进计划，不再问同一句；工作区读不到时按钮发「原话（是）」，模型照旧抄回认不出
+    的取值也按问句末尾选定的那一项（S3 的做法）。"""
     c = Conversation(data=s3_data)
     odd = {"field": "是否需要回复8D", "op": "是", "value": "要回 8D 的", "from": "user"}
     reply = plan(step("list_issues", domains={"value": ["巴西"], "from": "user"}, filters=[odd]))
     events = await c.ask("巴西要回 8D 的单", reply)
     rec = _buttons(events)[0]
-    assert rec["label"] == "是"
+    assert rec["label"] == "是" and rec["query"] == "是"
     events = await c.ask(rec["query"], "共 1 张。最需要关注的是 BR9901001。")
     assert EventType.CLARIFY not in _types(events)
     assert [r[0] for r in _tables(events)[0]["rows"]][0].startswith("[BR9901001]")
-    # 没有工作区：模型照旧抄回认不出的取值，按问句末尾选定的那一项
+    # 没有工作区：按钮发问句全文，模型照旧抄回认不出的取值，按问句末尾选定的那一项
     c = Conversation(data=s3_data, ws=False)
+    events = await c.ask("巴西要回 8D 的单", reply)
+    rec = _buttons(events)[0]
+    assert rec["query"] == "巴西要回 8D 的单（是）"
     events = await c.ask(rec["query"], reply, "共 1 张。")
     assert EventType.CLARIFY not in _types(events)
 
@@ -224,6 +274,7 @@ async def test_unknown_number_button_fills_kind_said():
     events = await c.ask("202501011234 是什么单？", reply)
     c.h.llm.replies.clear()  # 号码直通时用不上这份回复
     rec = next(r for r in _buttons(events) if r["label"] == "订单号")
+    assert rec["query"] == "订单号"
     assert c.ws(workspace.PENDING)["options"][0]["patch"]["kind"] == base.FILL_KIND_SAID
     before = _planner_calls(c.h)
     events = await c.ask(rec["query"])
@@ -237,7 +288,10 @@ async def test_hand_filled_order_button_fills_the_number():
                          plan(step("lookup_numbers", numbers=[{"raw": "990002", "kind_said": "订单号"}])))
     c.h.llm.replies.clear()  # 号码直通时用不上这份回复
     assert _types(events) == [EventType.CLARIFY]
+    # 执行时才知道的候选：编排先写 `pending_clarify` 再发 `clarify`，按钮同样只写选项
+    assert _buttons(events)[0]["query"] == "990002-1"
     assert c.ws(workspace.PENDING)["options"][0]["patch"]["kind"] == base.FILL_NUMBER
+    assert c.ws(workspace.PENDING)["options"][0]["full"] == "订单 990002 关联了哪张单（990002-1）"
     assert c.ws(workspace.LAST)["outcome"] == workspace.OUTCOME_CLARIFY
     events = await c.ask(_buttons(events)[0]["query"])
     assert EventType.CLARIFY not in _types(events)
@@ -250,9 +304,13 @@ async def test_time_button_fills_the_time_and_goes_through_step_six():
     reply = plan(step("list_issues", domains=CN, time=[{"said": "国庆以来", "basis": "建单", "from": "user"}]))
     events = await c.ask("国庆以来国内的问题有哪些", reply)
     rec = next(r for r in _buttons(events) if r["label"] == "近 30 天")
-    assert rec["query"] == "近 30 天国内的问题有哪些"
+    assert rec["query"] == "近 30 天"
+    # 问句全文把认不出的那段说法换成选定的时间（不在句末追加）
+    assert next(o for o in c.ws(workspace.PENDING)["options"] if o["query"] == "近 30 天")["full"] == \
+        "近 30 天国内的问题有哪些"
     events = await c.ask(rec["query"], NARR)
     assert EventType.TABLE in _types(events) and "近 30 天" in c.ws(workspace.TURN)["steps"]["s1"]["times"][0]["said"]
+    assert c.ws(workspace.TURN)["query"] == "近 30 天国内的问题有哪些"
 
 
 async def test_filled_plan_still_goes_through_this_rounds_access():
@@ -281,12 +339,16 @@ def test_apply_fill_returns_none_when_the_value_is_gone():
 
 def test_pending_keeps_inferred_and_check_errors():
     pending = {"plan": plan(step("list_issues", filters=[{"field": "加工厂", "op": "是", "value": "亮", "from": "user"}])),
-               "question": "q", "query": "原话", "options": [{"query": "原话（亮亮）", "patch": {
+               "question": "q", "query": "原话", "options": [{"query": "亮亮", "full": "原话（亮亮）", "patch": {
                    "kind": base.FILL_VALUE, "sid": "s1", "said": "亮", "option": "亮亮"}}],
                "inferred": [{"step": "s1", "field": "加工厂", "values": ["亮"]}], "check_errors": ["e"]}
-    got = workspace.fill(pending, "原话（亮亮）")
+    got = workspace.fill(pending, "亮亮")
     assert got.inferred == [Inferred(step="s1", field="加工厂", values=("亮",))] and got.check_errors == ["e"]
-    assert workspace.fill(pending, "原话（别的）") is None
+    assert got.asked == "原话（亮亮）"
+    assert workspace.fill(pending, "别的") is None
+    # 没有 `full` 的（按钮发的就是问句全文）：本轮按按钮的问句理解
+    del pending["options"][0]["full"]
+    assert workspace.fill(pending, "亮亮").asked == "亮亮"
 
 
 # ---------------------------------------------------------------------------- 质疑重查（§4.3 `verify_previous`）
@@ -307,7 +369,7 @@ async def test_verify_replays_the_plan_and_says_it_matches():
     assert "机型：A920" in text and "上一轮按「按条件查」理解" in text
     assert any(q.tables[0] == "ZCTracking_ProblemList" for q in data_queries(c.h))
     recs = _buttons(events)
-    assert recs and recs[0]["query"] == "近 30 天国内 A920 的问题（A920 系列）"
+    assert recs and recs[0]["query"] == "换个理解：A920 系列" and recs[0]["label"] == "A920 系列"
     assert c.ws(workspace.LAST)["outcome"] == workspace.OUTCOME_FOUND
 
 
@@ -475,26 +537,60 @@ async def test_alternatives_first_then_templates_at_most_four():
                                                      alternatives=["A920 系列", "A920 各款"]), NARR)
     recs = _buttons(events)
     assert [r["label"] for r in recs] == ["A920 系列", "A920 各款", suggestions.STAT_BY_TYPE]
-    assert recs[2]["query"] == "近 30 天国内 A920 的问题（按问题类型统计这些单）"
+    # 不再拼本轮原话（INFO 网页前端把 `query` 当按钮文字显示，§19）：短的、动作在前
+    assert [r["query"] for r in recs] == ["换个理解：A920 系列", "换个理解：A920 各款", "按问题类型统计这些单"]
     assert [r["id"] for r in recs] == ["1", "2", "3"] and all(len(r["label"]) <= 15 for r in recs)
+
+
+async def test_export_all_template_when_the_table_is_cut():
+    c = Conversation(scopes.account_jia(), config={"answer_params.toml": "table_rows = 2"})
+    events = await c.ask("近 30 天国内的问题有哪些", plan(step("list_issues", domains=CN, time=T30)), NARR)
+    rec = next(r for r in _buttons(events) if r["label"] == suggestions.EXPORT_ALL)
+    assert rec["query"] == "把这些单全部导出"
 
 
 async def test_detail_templates_and_focus_for_this_issue():
     c = Conversation(data=s4_data)
     events = await c.ask("ZC9901001")
-    labels = [r["label"] for r in _buttons(events)]
-    assert suggestions.FULL_PROCESS in labels and suggestions.REASONS in labels
+    by_label = {r["label"]: r["query"] for r in _buttons(events)}
+    assert by_label[suggestions.FULL_PROCESS] == "ZC9901001 的完整处理过程"
+    assert by_label[suggestions.REASONS] == "ZC9901001 的原因与措施"
     assert c.ws(workspace.FOCUS)["number"] == "ZC9901001"
     events = await c.ask("这单的原因是什么", plan(step("issue_detail", issue={"value": "这单", "from": "previous"},
                                                        aspects=["原因"])))
     assert "ZC9901001" in _text(events) and EventType.CLARIFY not in _types(events)
+    # 看过原因：只剩「看完整处理过程」
+    labels = [r["label"] for r in _buttons(events)]
+    assert suggestions.FULL_PROCESS in labels and suggestions.REASONS not in labels
+
+
+async def test_detail_templates_only_for_a_single_issue():
+    """几张单的详情、按号查单找到几张：说不清是哪一张，不给「看完整处理过程」「看原因与措施」。"""
+    c = Conversation(data=s4_data)
+    events = await c.ask("ZC9901001、ZC9901002")
+    labels = [r["label"] for r in _buttons(events)]
+    assert suggestions.FULL_PROCESS not in labels and suggestions.REASONS not in labels
 
 
 async def test_aggregate_template_lists_the_first():
     c = Conversation(scopes.account_jia())
     events = await c.ask("近 30 天国内哪个工厂问题最多",
                          plan(step("aggregate", domains=CN, time=T30, group_by=["加工厂"], ranking=True)), NARR)
-    assert suggestions.LIST_TOP1 in [r["label"] for r in _buttons(events)]
+    rec = next(r for r in _buttons(events) if r["label"].startswith("列出"))
+    assert rec["label"] == rec["query"] == "列出柯洱斯的单"
+
+
+@pytest.mark.parametrize(("group_by", "top1", "want"), [
+    (["加工厂"], ["柯洱斯", "亮亮"], "列出柯洱斯、亮亮的单"),
+    (["问题等级"], ["A"], "列出 A 级的单"),
+    (["月"], ["2026-10"], None),  # 按时间分组不给
+    (["加工厂", "问题类型"], ["柯洱斯", "硬件问题"], None),  # 两个维度说不清
+    (["问题类型"], ["未填"], None),
+    (["加工厂"], ["a", "b", "c", "d"], None),  # 并列第一太多
+])
+def test_aggregate_template_shapes(group_by, top1, want):
+    got = suggestions.aggregate_templates(step("aggregate", group_by=group_by), top1=top1)
+    assert [r["query"] for r in got] == ([want] if want else [])
 
 
 def _fix_today(monkeypatch, day: date) -> None:
@@ -633,8 +729,8 @@ async def test_m2_verify_refetches_people_named_in_the_previous_plan():
 
 
 async def test_a3_replay_that_asks_writes_pending_and_last_clarify():
-    """A3：重放时又要追问（上一轮的名字这次对上了两个人）：记「追问」、写 `pending_clarify`，按钮是上一轮原话加选项，
-    点了直接填进上一轮的计划。"""
+    """A3：重放时又要追问（上一轮的名字这次对上了两个人）：记「追问」、写 `pending_clarify`（问句全文是上一轮问句
+    加选项，按钮只写选项），点了直接填进上一轮的计划。"""
     c = Conversation(scopes.account_jia())
     staff = cn_data.FRAMES["Employee"]
     c.h.connectors["info"].frames["Employee"] = _only_named(staff)
@@ -648,11 +744,14 @@ async def test_a3_replay_that_asks_writes_pending_and_last_clarify():
     events = await c.ask("你确定吗", plan(step("verify_previous")))
     assert _types(events) == [EventType.CLARIFY]
     rec = _buttons(events)[0]
-    assert rec["query"].startswith(first + "（") and "测试甲" in rec["label"]
+    assert "测试甲" in rec["label"] and not rec["query"].startswith(first)
     assert c.ws(workspace.LAST)["outcome"] == workspace.OUTCOME_CLARIFY
     assert c.ws(workspace.TURN) == before and c.ws(workspace.PENDING)["options"]
+    option = next(o for o in c.ws(workspace.PENDING)["options"] if o["query"] == rec["query"])
+    assert option["full"].startswith(first + "（")
     events = await c.ask(rec["query"], NARR)
     assert EventType.CLARIFY not in _types(events) and EventType.TABLE in _types(events)
+    assert c.ws(workspace.TURN)["query"] == option["full"]
 
 
 async def test_a3_failed_rounds_do_not_overwrite_turn():

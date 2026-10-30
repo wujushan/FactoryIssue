@@ -1014,12 +1014,12 @@ def _opening_notes(T: Turn) -> list[str]:
 
 
 def _alternative_buttons(T: Turn) -> list[dict[str, str]]:
-    """第 13 条修一次仍不一致：另一种理解的按钮（原话加这条理解）。"""
+    """第 13 条修一次仍不一致：另一种理解的按钮（「按结案时间算」，问句「改按结案时间算」）。"""
     if not (T.result.check_errors and T.result.plan is not None):
         return []
     alts = [f"按{cal.BASIS_TEXT.get(hit, hit)}算" for _sid, _said, _basis, hit in
             normalize.basis_mismatches(T.result.plan, T.query)]
-    return clarify.alternative_recommendations(list(dict.fromkeys(alts)), T.query)
+    return [suggestions.basis_switch(alt) for alt in dict.fromkeys(alts)][:clarify.MAX_OPTIONS]
 
 
 async def _relax_buttons(plan: dict, runs: Sequence[StepRun], T: Turn) -> list[dict[str, str]]:
@@ -1189,28 +1189,38 @@ def _record(T: Turn, r: StepRun, out: StepOut) -> None:
         T.record.results[r.sid] = by
 
 
-def _templates(r: StepRun, out: StepOut, refs: Mapping[str, Any], T: Turn) -> list[dict[str, str]]:
+def _one_number(r: StepRun, out: StepOut) -> str | None:
+    """这一步只说到一张单时它的问题编号（详情：给出了详情的那张；按号查单：只找到一张）；否则 None。"""
+    if r.skill == "issue_detail":
+        shown = out.refs.get(f"{r.sid}.shown") or []
+        return str(shown[0]["number"]) if len(shown) == 1 and shown[0].get("number") else None
+    focus = _focus_of(out.refs.get(f"{r.sid}.issues") or {})
+    return str(focus["number"]) if focus and focus.get("number") else None
+
+
+def _templates(r: StepRun, out: StepOut, refs: Mapping[str, Any]) -> list[dict[str, str]]:
     """这一步之后的模板按钮（§9.5）。"""
     if r.skill == "list_issues":
-        return suggestions.list_templates(r.step, T.query, found=out.found_any, truncated=out.truncated,
+        return suggestions.list_templates(r.step, found=out.found_any, truncated=out.truncated,
                                           exported=out.exported)
     if r.skill == "aggregate":
-        return suggestions.aggregate_templates(r.step, T.query, top1=refs.get(f"{r.sid}.top1") or [])
+        return suggestions.aggregate_templates(r.step, top1=refs.get(f"{r.sid}.top1") or [])
     if r.skill == "issue_detail":
-        return suggestions.detail_templates(issue_detail.aspects_of(r.step), T.query, found=out.found_any)
+        return suggestions.detail_templates(issue_detail.aspects_of(r.step), _one_number(r, out))
     if r.skill == "lookup_numbers":
-        return suggestions.detail_templates([], T.query, found=out.found_any)
+        return suggestions.detail_templates([], _one_number(r, out))
     return []
 
 
 def plan_alternatives(T: Turn) -> list[dict[str, str]]:
-    """计划的 `alternatives`（其他理解）：原话加这条理解（§9.5，`plan/clarify.py::alternative_recommendations`）。"""
+    """计划的 `alternatives`（其他理解）：「换个理解：…」（§9.5，`plan/clarify.py::alternative_recommendations`）。"""
     plan = T.result.plan or {}
-    return clarify.alternative_recommendations(plan.get("alternatives"), T.query)
+    return clarify.alternative_recommendations(plan.get("alternatives"))
 
 
 async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Event]:
-    """第 8–9 步。执行记录写进 `T.record`；执行时产生的追问（手填订单号）发 `clarify` 后本轮到此为止。"""
+    """第 8–9 步。执行记录写进 `T.record`；执行时产生的追问（手填订单号）记进 `T.record.ask`、本轮到此为止，
+    由编排写 `pending_clarify` 并发 `clarify`。"""
     C = cal.Caliber()
     refs: dict[str, Any] = {}
     for r in runs:  # 递进筛选：上一轮那次按号查单直接用存下的单 ID，不单独成段
@@ -1254,16 +1264,15 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         else:
             out = await run_step(r, T, refs, C, notes)
         if out.final:
+            # 执行时才产生的追问：编排先写 `pending_clarify` 再发 `clarify`（写进去了按钮问句才能只写选项，§4.4）
             if out.ask is not None:
                 T.record.ask = out.ask
-                yield clarify.event({"reason": out.ask.reason, "question": out.ask.question,
-                                     "options": out.ask.options}, T.query)
             for ev in out.events:
                 yield ev
             return
         refs |= out.refs
         _record(T, r, out)
-        templates += _templates(r, out, refs, T)
+        templates += _templates(r, out, refs)
         any_ok = any_ok or out.ok
         any_empty = any_empty or out.empty
         any_found = any_found or out.found_any

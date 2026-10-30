@@ -9,13 +9,14 @@ S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含�
    - 三域都无权：代码规则判断是不是寒暄或问能力，是就做能力介绍，不是就只答请先申请。
 3. 读最近几轮对话与工作区（`turn/workspace.py`）：上一轮的计划与结局交给规划器。本轮问句与上一轮代码追问的某个
    选项的 `query` 完全相同时，把选项直接填进上一轮的计划，跳过第 4、5 步（§4.4）；填好的计划照常过第 6 步。
+   这种轮次按钮只写了选项（「惠州百富」），本轮按存下的问句全文（原话加这一项）理解。
 4–5. 号码直通、规划、规整与校验（`plan/planner.py`）；规划失败按 §14「没能理解这个问题」答。
 4 之前：按可查的域取一次主数据（`domains/shared.py`），交规划器作第 7 条的 `classes`、第 15 条的 `entities` 与
    号码直通的机型清单。
 6. 对库与换算：时间换算（沿用上一轮的时间按上一轮换算出的日期），换算不了的说法产生追问；名字对库（§6.5），
    对不上、对上多个、重名时追问。
-7. 追问：计划本身是追问，或第 6 步产生了追问 → 发 `Event.clarify`，本轮结束（§4.4）；代码追问另写
-   `pending_clarify`。
+7. 追问：计划本身是追问，或第 6 步产生了追问 → 发 `Event.clarify`，本轮结束（§4.4）；代码追问先写
+   `pending_clarify`，写进去了按钮的 `query` 就是选项本身，写不进去时是问句全文。
 8–9. 执行与呈现（`turn/execute.py`）：清单、统计、单张单详情、按号查单；质疑重查（`skills/verify_previous.py`）、
    换图（`skills/rerender.py`）按工作区里上一轮的执行计划重放；其余技能先答「暂时还答不了」。
 10. 写工作区（§10）：`last` 每轮写（寒暄、能力介绍、没看懂的轮次除外）；只有取过数的轮次覆盖 `turn`、`results`、
@@ -82,17 +83,20 @@ def _ask_params(ask: Ask) -> dict[str, Any]:
 
 async def _clarify_with_pending(ctx: Any, query: str, plan: dict, ask: Ask, result: PlanResult | None = None,
                                *, button_query: str | None = None) -> Event:
-    """代码追问：发 `clarify`，把计划与每个按钮怎么填写进 `pending_clarify`，`last` 记追问。
+    """代码追问：把计划与每个按钮怎么填写进 `pending_clarify`，`last` 记追问，返回 `clarify`。
 
-    `button_query` 是按钮问句的底子（默认本轮问句）：重放上一轮时是上一轮的原话，点了能单独发送、也能直填。"""
+    写进去了，按钮的 `query` 就是选项本身（INFO 网页前端把 `query` 当按钮文字，§19「S5 提交后 INFO 前端按钮显示
+    问题的处理」），点了按工作区直填；写不进去（没有会话号、超限）时按钮发问句全文，点了照常规划也说得全。
+    `button_query` 是问句全文的底子（默认本轮问句）：重放上一轮时是上一轮的问句，点直填的轮次是原话加选定的一项。"""
     base_query = button_query or query
     params = _ask_params(ask)
-    recs = clarify.recommendations(params, base_query)
-    await workspace.write_pending(ctx, query=base_query, plan=plan, ask=ask, recommendations=recs,
-                                  inferred=result.inferred if result else (),
-                                  check_errors=result.check_errors if result else ())
+    full = clarify.recommendations(params, base_query)
+    short = clarify.short_recommendations(params)
+    written = await workspace.write_pending(ctx, query=base_query, plan=plan, ask=ask, recommendations=short,
+                                            full=full, inferred=result.inferred if result else (),
+                                            check_errors=result.check_errors if result else ())
     await workspace.write_last(ctx, query, workspace.OUTCOME_CLARIFY, plan)
-    return clarify.event(params, base_query)
+    return clarify.event(params, base_query, short if written else full)
 
 
 async def run_turn(
@@ -124,14 +128,17 @@ async def run_turn(
     if pending is not None:
         await workspace.drop(ctx, workspace.PENDING)
     filled = workspace.fill(pending, query)
+    # 本轮按什么问句理解：点了代码追问的按钮时按钮只写了选项，取存下的问句全文（原话加这一项，§4.4）；
+    # 取人、对库、写分析、答后按钮、填不进去时重新规划都按它。`last.query` 仍记用户发来的原话
+    asked = (filled.asked or query) if filled is not None else query
     topics = await config_files.load(ctx, TOPIC_TERMS)
     dept_aliases = await config_files.load(ctx, DEPT_ALIASES)
     regions = await config_files.load(ctx, FACTORY_REGIONS)
-    master = await shared.load(ctx, access.allowed(), query)
+    master = await shared.load(ctx, access.allowed(), asked)
     entities = master.entities(dept_aliases, regions)
     planner = Planner(manifest, topics)
     inputs = PlanInputs(
-        query=query, history=history, previous_plan=previous.plan, previous_outcome=previous.outcome,
+        query=asked, history=history, previous_plan=previous.plan, previous_outcome=previous.outcome,
         earlier_query=previous.earlier_query, today=today, classes=master.classes(dept_aliases, regions),
         entities=entities, machines=master.machines or None)
     llm = getattr(ctx, "llm", None)
@@ -148,7 +155,7 @@ async def run_turn(
     steps = [s for s in result.plan.get("steps") or [] if isinstance(s, dict)]
     first = steps[0] if steps else {}
     if first.get("skill") == "clarify":
-        yield clarify.event(first.get("params") or {}, query)
+        yield clarify.event(first.get("params") or {}, asked)
         await workspace.write_last(ctx, query, workspace.OUTCOME_CLARIFY, result.plan)
         return
     if first.get("skill") == "introduce":
@@ -166,8 +173,8 @@ async def run_turn(
     def make_turn(result: PlanResult) -> execute.Turn:
         return execute.Turn(ctx=ctx, manifest=manifest, access=access, master=master, answer=answer,
                             resolver=base.Resolver(master=master, dept_aliases=dept_aliases, regions=regions,
-                                                   entities=entities, today=today, query=query, carried=carried),
-                            query=query, today=today, result=result, entities=entities, sites=sites,
+                                                   entities=entities, today=today, query=asked, carried=carried),
+                            query=asked, today=today, result=result, entities=entities, sites=sites,
                             previous_turn=previous.turn, previous_results=results, focus=focus)
 
     if first.get("skill") in REPLAY_SKILLS:
@@ -180,7 +187,7 @@ async def run_turn(
         params = clarify.time_unknown_step(unknown)["params"]
         ask = Ask(params["question"], list(params["options"]), reason=params["reason"], said=unknown,
                   fill=base.FILL_TIME)
-        yield await _clarify_with_pending(ctx, query, result.plan, ask, result)
+        yield await _clarify_with_pending(ctx, query, result.plan, ask, result, button_query=asked)
         return
     spans = workspace.follow_spans(result.plan, spans, previous.turn)
 
@@ -196,7 +203,7 @@ async def run_turn(
     await execute.add_people(result.plan, turn)
     prepared = execute.prepare(result.plan, spans, turn)
     if isinstance(prepared, Ask) and filled is not None and prepared.question == filled.question:
-        # 填进去的值没起作用（同一句追问又来了）：不再循环，按问句本身规划一次（问句已带着选定的那一项）
+        # 填进去的值没起作用（同一句追问又来了）：不再循环，按问句全文规划一次（`asked` 带着选定的那一项）
         logger.info("factory_issue_fill_no_effect", reason=prepared.reason)
         result = await planner.plan(llm, inputs)
         if result.plan is None:
@@ -205,44 +212,43 @@ async def run_turn(
             return
         spans, unknown = timespan.plan_spans(result.plan, today)
         if unknown is not None:
-            yield clarify.event(clarify.time_unknown_step(unknown)["params"], query)
+            yield clarify.event(clarify.time_unknown_step(unknown)["params"], asked)
             await workspace.write_last(ctx, query, workspace.OUTCOME_CLARIFY, result.plan)
             return
         turn = make_turn(result)
         await execute.add_people(result.plan, turn)
         prepared = execute.prepare(result.plan, spans, turn)
     if isinstance(prepared, Ask):
-        yield await _clarify_with_pending(ctx, query, result.plan, prepared, result)
+        yield await _clarify_with_pending(ctx, query, result.plan, prepared, result, button_query=asked)
         return
     async for event in execute.run(result.plan, prepared, turn):
         yield event
-    await _write_after(ctx, query, execute.merge_details(result.plan), turn, result)
+    ask_event = await _write_after(ctx, query, execute.merge_details(result.plan), turn, result)
+    if ask_event is not None:
+        yield ask_event
 
 
-async def _write_after(ctx: Any, query: str, plan: dict, turn: execute.Turn, result: PlanResult) -> None:
-    """本轮结束：执行中追问的写 `pending_clarify`；取过数的覆盖 `turn`；`last` 记结局。"""
+async def _write_after(ctx: Any, query: str, plan: dict, turn: execute.Turn, result: PlanResult) -> Event | None:
+    """本轮结束：执行中追问的写 `pending_clarify`，返回要发的 `clarify`（写进去了按钮才只写选项，所以在写之后
+    发）；取过数的覆盖 `turn`；`last` 记结局。`turn.query` 是本轮按什么问句理解（`asked`）。"""
     record = turn.record
     if record.ask is not None:
-        params = _ask_params(record.ask)
-        await workspace.write_pending(ctx, query=query, plan=plan, ask=record.ask,
-                                      recommendations=clarify.recommendations(params, query),
-                                      inferred=result.inferred, check_errors=result.check_errors)
-        await workspace.write_last(ctx, query, workspace.OUTCOME_CLARIFY, plan)
-        return
+        return await _clarify_with_pending(ctx, query, plan, record.ask, result, button_query=turn.query)
     if record.failed:  # 整轮都失败的轮次不覆盖 `turn`、`results`、`charts`（§10）
         outcome = workspace.OUTCOME_FAILED
     else:
         outcome = workspace.OUTCOME_FOUND if record.found else workspace.OUTCOME_EMPTY
         if record.fetched:
-            await workspace.write_turn(ctx, query, plan, record)
-    await workspace.write_last(ctx, query, outcome, plan)
+            await workspace.write_turn(ctx, turn.query, plan, record)
+    await workspace.write_last(ctx, query, outcome, plan, asked=turn.query)
+    return None
 
 
 async def _replay(ctx: Any, query: str, result: PlanResult, step: dict, previous: workspace.Previous,
                   turn: execute.Turn, results: dict | None) -> AsyncIterator[Event]:
     """质疑重查与换图：按工作区里上一轮的执行计划重放（§4.3）。读不到上一轮时按「接不上上一轮」追问。
 
-    重放时要追问（如上一轮的名字这次对上了几个人）：按钮问句是上一轮原话加选项，写 `pending_clarify`，点了直接
+    重放时要追问（如上一轮的名字这次对上了几个人）：问句全文是上一轮问句加选项，写 `pending_clarify`，点了直接
     填进上一轮的计划；`last` 记「追问」。重放每步都没查成记「出错」、不覆盖 `turn`（S5 评审 A3）。"""
     if previous.turn is None or not isinstance(previous.turn.get("plan"), dict):
         yield clarify.event(NO_PREVIOUS, query)
