@@ -233,6 +233,12 @@ def chosen(query: str, options: Sequence[str]) -> str | None:
     return m.group(1) if m is not None and m.group(1) in options else None
 
 
+def trailing(query: str) -> str | None:
+    """问句末尾「（X）」里的 X（点了追问按钮带回的那一项；手填订单号的候选是查到后才知道的，交沙箱比）。"""
+    m = _CHOSEN.search(query or "")
+    return m.group(1) if m is not None else None
+
+
 def yes_no_or_chosen(said: str, query: str) -> int | None:
     """「是 / 否」说法；认不出时看问句末尾是否带着「（是）」「（否）」。"""
     yn = yes_no(said)

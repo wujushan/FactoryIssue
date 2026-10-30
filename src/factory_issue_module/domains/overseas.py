@@ -68,7 +68,11 @@ def enum_params() -> dict[str, Any]:
             "design_result": enums.OS_DESIGN_RESULT, "yes_no": enums.OS_YES_NO, "step_close": enums.OS_STEP_CLOSE,
             "step_reject": enums.OS_STEP_REJECT, "non_block": list(enums.OS_NON_BLOCK_STEPS),
             "status_steps": {k: list(v) for k, v in enums.OS_STATUS_STEPS.items()},
-            "block_main": {k: list(v) for k, v in enums.OS_BLOCK_MAIN.items()}}
+            "block_main": {k: list(v) for k, v in enums.OS_BLOCK_MAIN.items()},
+            # 单张单详情（S4）
+            "step_assign": enums.OS_STEP_ASSIGN, "step_confirm": enums.OS_STEP_CONFIRM,
+            "step_effect": enums.OS_STEP_EFFECT, "step_factory": enums.OS_STEP_FACTORY, "step_sqe": enums.OS_STEP_SQE,
+            "need_design": enums.CN_NEED_DESIGN}
 
 
 # ---------------------------------------------------------------------------- 分组维度
@@ -301,4 +305,81 @@ async def fetch(ctx: Any, dstep: DomainStep, master: MasterData) -> dict[str, pd
     frames |= dict(zip(second, await asyncio.gather(*second.values()), strict=True))
     for name in ("departments", "factories", "products"):
         frames[name] = master.frames.get(name, pd.DataFrame())
+    return frames
+
+
+# ---------------------------------------------------------------------------- 单张单详情与按号查单（S4）
+
+DELIVERY = "CoreINFO.dbo.OverseasProblem_DeliveryOrder"
+PREASON = "CoreINFO.dbo.AfterSaleIssueClassPhenomenonReason"
+#: 单张单详情另取的主表列：叙述原文、已选问题现象、附件、效果确认与设计变更（§13）
+DETAIL_COLUMNS = (*MAIN_COLUMNS, "ProblemDesc", "Improve", "Remark", "Reason", "Measures", "Prevention", "Confirmation",
+                  "ConfirmUser", "ConfirmDate", "RConfirm", "DesignUser", "DesignDate", "hasCheckedPhenomenon", "DocId")
+
+
+def issue_step(numbers: Sequence[str] = (), ids: Sequence[int] = ()) -> DomainStep:
+    if ids:
+        return DomainStep(domain=DOMAIN, sql=[cond("m.Id", "IN", [int(i) for i in ids])])
+    return DomainStep(domain=DOMAIN, sql=[cond("m.Numbers", "IN", list(numbers))])
+
+
+def _child(table: str, select: Sequence[str], dstep: DomainStep, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    flt = _main_filter(dstep)
+    if extra is not None:
+        flt["groups"].append(extra)
+    return {"source": INFO, "from": {"table": table, "alias": "c"},
+            "joins": [{"table": {"table": MAIN, "alias": "m"}, "type": "INNER",
+                       "on": [{"left": "c.ProblemId", "right": "m.Id"}]}],
+            "select": [f"c.{c}" for c in select], "filter": flt}
+
+
+async def detail_fetch(ctx: Any, dstep: DomainStep, master: MasterData, *, car: bool = False) -> dict[str, pd.DataFrame]:
+    """单张单详情的帧（海外「单张单详情」）：主表含叙述列、全部处理步骤、涉及发货单；再按单上登记的附件 ID 取文档
+    （海外附件只能从单上登记的 ID 出发取，文档清单表文件）、人员、PN 名称；现象可能原因整表小，整表取。"""
+    first: dict[str, Any] = {
+        "os_main": base.fetch(ctx, {**main_spec(dstep), "select": [f"m.{c}" for c in DETAIL_COLUMNS]}),
+        "os_steps": base.fetch_all(ctx, _child(STEPS, ("Id", "ProblemId", "StepStr", "Result", "Opinon", "Measures",
+                                                       "DocID", "AddUser", "AddDate"), dstep), "c.Id"),
+        "os_delivery": base.fetch_all(ctx, _child(DELIVERY, ("Id", "ProblemId", "PO", "OrderNumber", "Date", "PN",
+                                                             "DeliveryVersion", "ProdVersion", "Quantity", "Remark"),
+                                                  dstep), "c.Id"),
+        "os_preason": base.fetch(ctx, {"source": INFO, "from": PREASON, "select": ["ID", "PhenomenonID", "ReasonDesc"]}),
+    }
+    frames = dict(zip(first, await asyncio.gather(*first.values()), strict=True))
+    main, steps = frames["os_main"], frames["os_steps"]
+    codes = base.unique(part.strip() for x in [*base.column(main, "PNList"), *base.column(frames["os_delivery"], "PN")]
+                        if x is not None for part in str(x).replace("，", ",").split(",") if part.strip())
+    second: dict[str, Any] = {
+        "documents": base.fetch_in(ctx, domestic.documents_spec(), "ID",
+                                   base.int_keys([*base.column(main, "DocId"), *base.column(steps, "DocID")])),
+        "employees": base.fetch_in(ctx, {"source": INFO, "from": EMPLOYEE, "select": ["ID", "Name", "Unit"]}, "ID",
+                                   base.int_keys([*base.column(main, "RUser"), *base.column(main, "AddUser"),
+                                                  *base.column(main, "ConfirmUser"), *base.column(main, "DesignUser"),
+                                                  *base.column(steps, "AddUser")])),
+        "pns": base.fetch_in(ctx, {"source": INFO, "from": PNS, "select": ["PartNumber", "Name"]}, "PartNumber", codes),
+    }
+    frames |= dict(zip(second, await asyncio.gather(*second.values()), strict=True))
+    for name in ("departments", "factories", "products"):
+        frames[name] = master.frames.get(name, pd.DataFrame())
+    return frames
+
+
+async def lookup_fetch(ctx: Any, lookups: Sequence[Any], master: MasterData) -> dict[str, pd.DataFrame]:
+    """按号查单：问题编号在主表上精确匹配；发货单号、PO 在涉及发货单上精确匹配；料号在物料清单里、PN 在主表 PN 里
+    （都是单内的多值，海外未删除的单只有十几张，取全部在沙箱里逐段比）。"""
+    by: dict[str, list[str]] = {}
+    for lk in lookups:
+        by.setdefault(lk.kind, []).append(lk.value)
+    frames: dict[str, pd.DataFrame] = {}
+    conds = ([cond("c.OrderNumber", "IN", by["delivery"])] if by.get("delivery") else []) + \
+            ([cond("c.PO", "IN", by["po"])] if by.get("po") else [])
+    if conds:
+        frames["os_hit_delivery"] = await base.fetch_all(
+            ctx, _child(DELIVERY, ("Id", "ProblemId", "PO", "OrderNumber", "Date", "PN", "Quantity"),
+                        DomainStep(domain=DOMAIN), {"logic": "OR", "conditions": conds}), "c.Id")
+    if by.get("pn_name"):
+        frames["lk_pns"] = await base.fetch_in(ctx, {"source": INFO, "from": PNS, "select": ["PartNumber", "Name"]},
+                                               "Name", by["pn_name"])
+    sql = [cond("m.Numbers", "IN", by["issue"])] if set(by) == {"issue"} else []
+    frames |= await fetch(ctx, DomainStep(domain=DOMAIN, sql=sql, needs={"pn"}), master)
     return frames

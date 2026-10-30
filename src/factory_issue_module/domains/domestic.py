@@ -17,6 +17,8 @@ from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
+import structlog
+from forge_core.errors import TableDenied
 
 from factory_issue_module.declarations import INFO, TASK_TABLE, Domain
 from factory_issue_module.domains import base, enums
@@ -25,6 +27,8 @@ from factory_issue_module.domains.shared import KIND_MACHINE, KIND_PERSON, Maste
 from factory_issue_module.plan import names, schema
 from factory_issue_module.plan.timespan import Span
 from factory_issue_module.present import columns
+
+logger = structlog.get_logger(__name__)
 
 DOMAIN = Domain.DOMESTIC
 LABEL = DOMAIN.label
@@ -71,6 +75,14 @@ def enum_params() -> dict[str, Any]:
         "task_prevention": enums.CN_TASK_PREVENTION, "task_accepted": enums.CN_TASK_ACCEPTED,
         "step_close": enums.CN_STEP_CLOSE, "step_restart": enums.CN_STEP_RESTART,
         "step_reclassify": enums.CN_STEP_RECLASSIFY, "risk_running": enums.CN_RISK_RUNNING,
+        # 单张单详情（S4）
+        "detail_stages": enums.CN_DETAIL_STAGES, "step_fill": enums.CN_STEP_FILL, "step_reject": enums.CN_STEP_REJECT,
+        "restart_steps": list(enums.CN_RESTART_STEPS), "step_restart_review": enums.CN_STEP_RESTART_REVIEW,
+        "step_restart_scheme": enums.CN_STEP_RESTART_SCHEME, "stop_reviewing": enums.CN_STOP_REVIEWING,
+        "stop_scheme": enums.CN_STOP_SCHEME, "review_result": enums.CN_REVIEW_RESULT,
+        "role_agree": enums.CN_ROLE_AGREE, "role_disagree": enums.CN_ROLE_DISAGREE, "need_design": enums.CN_NEED_DESIGN,
+        "return_type": enums.CN_RETURN_TYPE, "five_status": enums.CN_FIVE_WHY_STATUS,
+        "five_pending": enums.CN_FIVE_WHY_PENDING, "five_stage": enums.CN_FIVE_WHY_STAGE,
     }
 
 
@@ -414,6 +426,10 @@ def task_spec() -> dict[str, Any]:
                 cond("fstat", "EQ", enums.CN_TASK_ACCEPTED)]}]}}
 
 
+def _people_of(frames: dict[str, pd.DataFrame], cols: dict[str, Sequence[str]]) -> list[int]:
+    return base.int_keys([x for name, names in cols.items() for c in names for x in base.column(frames.get(name), c)])
+
+
 async def fetch(ctx: Any, dstep: DomainStep, master: MasterData) -> dict[str, pd.DataFrame]:
     """本步国内的全部帧。`TableDenied` 原样抛给调用方（该域改记无权，§14）。
 
@@ -441,4 +457,152 @@ async def fetch(ctx: Any, dstep: DomainStep, master: MasterData) -> dict[str, pd
         ctx, {"source": INFO, "from": EMPLOYEE, "select": ["ID", "Name", "Unit"]}, "ID", people)
     for name in ("departments", "factories", "vendors"):
         frames[name] = master.frames.get(name, pd.DataFrame())
+    return frames
+
+
+# ---------------------------------------------------------------------------- 单张单详情与按号查单（S4）
+
+OTHER = "CoreINFO.dbo.ZCTracking_OtherOrder"
+XB = "CoreINFO.dbo.ZCTracking_XBOrders"
+CHECK = "CoreINFO.dbo.ZCTracking_CheckReason"
+PINV = "CoreINFO.dbo.ZCTracking_PossibleInvCode"
+FIVE = "CoreINFO.dbo.ZCTracking_ProblemFiveWhy"
+PHEN = "CoreINFO.dbo.AfterSaleIssueClassPhenomenon"
+PREASON = "CoreINFO.dbo.AfterSaleIssueClassPhenomenonReason"
+PCLASS = "CoreINFO.dbo.AfterSaleIssueClass"
+DOCUMENTS = "info.dbo.DocumentList"
+CAR_REPORT = "info.dbo.tbIQCreportOut"
+
+#: 单张单详情另取的主表列：叙述原文与只在详情里给的几项（§13：一次只取要看的那几张单）
+DETAIL_COLUMNS = (*MAIN_COLUMNS, "ProblemDesc", "Reason", "Improve", "Measures", "Prevention", "ReasonClassRemark",
+                  "Remark", "RConfirm", "DesignUser", "DesignDate", "ZLConfirmResult", "IsChangeOrderV", "OrderVersion",
+                  "ReStartScheme", "ReStartSchemeUser", "ReStartExamineUser", "Confirmation")
+_DETAIL_CHILDREN: dict[str, tuple[str, tuple[str, ...]]] = {
+    "cn_models": (MODELS, ("ID", "ProblemId", "ProductName", "Series")),
+    "cn_steps": (STEPS, ("ID", "ProblemId", "Step", "StepStr", "Result", "Opinon", "Measures", "FileUrl", "AddUser",
+                         "AddDate")),
+    "cn_orders": (ORDERS, ("ID", "ProblemId", "OrderNumber", "PartNumber", "PartName", "IssueDate", "OrderQty",
+                           "ReceiptQty", "OnlineQty", "Version")),
+    "cn_xb": (XB, ("ID", "ProblemId", "OrderNumber", "InvCode", "InvStd", "Qty", "InQty", "NoQty", "Factory",
+                   "Description")),
+    "cn_other": (OTHER, ("ID", "ProblemId", "OrderNo", "ProductName", "Qty", "IssuedQty", "IssQty", "FaliaoDate",
+                         "ReturnQty", "ReturnType", "ReceivingQty", "TotalinQty", "Factory")),
+    "cn_risk": (RISK, ("ID", "ProblemId", "Step", "Status", "UserID")),
+    "cn_check": (CHECK, ("ID", "ProblemId", "ClassID", "PhenomenonID", "ReasonID")),
+    "cn_pinv": (PINV, ("ID", "ProblemId", "InvCode", "InvName", "InvStd")),
+    "cn_five": (FIVE, ("ID", "ProblemId", "Question", "Reason", "Status", "AddUser", "AddDate", "UpdateUser",
+                       "UpdateDate")),
+}
+DOC_COLUMNS = ["ID", "DocumentName", "DocumentRealName", "frecid", "BusinessType", "EffectFlag"]
+
+
+def documents_spec() -> dict[str, Any]:
+    """文档清单：只取没删除的（`EffectFlag = 0`），再按附件 ID 分块。"""
+    return {"source": INFO, "from": DOCUMENTS, "select": DOC_COLUMNS,
+            "filter": {"logic": "AND", "groups": [{"logic": "AND", "conditions": [cond("EffectFlag", "EQ", 0)]}]}}
+
+
+#: CAR 报告表取数时被拒（与权限前置不一致）：只当没有 CAR 报告权限，问题单其余内容照常（`privileges.md`「CAR 报告」）
+CAR_DENIED = "cn_car_denied"
+
+
+async def _car_reports(ctx: Any, car_ids: Sequence[int]) -> pd.DataFrame | None:
+    try:
+        return await base.fetch_in(ctx, {"source": INFO, "from": CAR_REPORT, "select": [
+            "fid", "fdesc", "fstep2how1", "fstep2how2", "fstep2how3", "fstep3memo", "fstep4memo", "fstep5memo",
+            "fstep6memo"]}, "fid", car_ids)
+    except TableDenied as exc:
+        logger.warning("factory_issue_table_denied", domain="car_report", error=type(exc).__name__)
+        return None
+
+
+def issue_step(numbers: Sequence[str] = (), ids: Sequence[int] = ()) -> DomainStep:
+    """按编号或单 ID 取一张（几张）单。"""
+    if ids:
+        return DomainStep(domain=DOMAIN, sql=[cond("m.ID", "IN", [int(i) for i in ids])])
+    return DomainStep(domain=DOMAIN, sql=[cond("m.Numbers", "IN", list(numbers))])
+
+
+async def detail_fetch(ctx: Any, dstep: DomainStep, master: MasterData, *, car: bool) -> dict[str, pd.DataFrame]:
+    """单张单详情的帧（§6.3 `issue_detail` 一行）：主表含叙述列、全部子表（带主表条件）、待办任务、文档、现象查表、
+    人员；有 CAR 报告权限、物料问题且 CAR 报告 ID 有值时才读 CAR 报告（`privileges.md`「CAR 报告」）。"""
+    first: dict[str, Any] = {"cn_main": base.fetch(ctx, {**main_spec(dstep), "select": [f"m.{c}" for c in DETAIL_COLUMNS]})}
+    for name, (table, select) in _DETAIL_CHILDREN.items():
+        first[name] = base.fetch_all(ctx, _child(table, select, dstep), "c.ID")
+    frames = dict(zip(first, await asyncio.gather(*first.values()), strict=True))
+    main, steps, checks = frames["cn_main"], frames["cn_steps"], frames["cn_check"]
+    second: dict[str, Any] = {
+        "cn_tasks": base.fetch_in(ctx, task_spec(), "frecID", [str(i) for i in base.int_keys(base.column(main, "ID"))]),
+        "inventory": base.fetch_in(ctx, {"source": INFO, "from": INVENTORY, "select": ["cInvCode", "cInvName", "cInvStd"]},
+                                   "cInvCode", base.unique(str(x).strip() for x in base.column(main, "CInvCode")
+                                                           if x is not None)),
+        "documents": base.fetch_in(ctx, documents_spec(), "ID", base.int_keys(base.column(steps, "FileUrl"))),
+        "cn_phen": base.fetch_in(ctx, {"source": INFO, "from": PHEN, "select": ["ID", "PhenomenonDesc"]}, "ID",
+                                 base.int_keys(base.column(checks, "PhenomenonID"))),
+        "cn_preason": base.fetch_in(ctx, {"source": INFO, "from": PREASON, "select": ["ID", "ReasonDesc"]}, "ID",
+                                    [i for i in base.int_keys(base.column(checks, "ReasonID")) if i > 0]),
+        "cn_pclass": base.fetch_in(ctx, {"source": INFO, "from": PCLASS, "select": ["ID", "TypeName", "ClassName"]}, "ID",
+                                   base.int_keys(base.column(checks, "ClassID"))),
+    }
+    material = enums.code_of(enums.CN_PROBLEM_TYPES, "物料问题")  # 只有物料问题展示 CAR（国内「物料问题专属」）
+    car_ids: list[int] = []
+    for kind, car_id in zip(base.column(main, "ProblemType"), base.column(main, "CARID"), strict=False):
+        if base.int_keys([kind]) == material:
+            car_ids += base.int_keys([car_id])
+    if car and car_ids:
+        second["cn_car"] = _car_reports(ctx, car_ids)
+    frames |= dict(zip(second, await asyncio.gather(*second.values()), strict=True))
+    if "cn_car" in frames and frames["cn_car"] is None:
+        del frames["cn_car"]
+        frames[CAR_DENIED] = pd.DataFrame()
+    people = _people_of(frames, {"cn_main": ("RUser", "AddUser", "DesignUser", "ReStartSchemeUser", "ReStartExamineUser"),
+                                 "cn_steps": ("AddUser",), "cn_tasks": ("fuserID",), "cn_risk": ("UserID",),
+                                 "cn_five": ("AddUser", "UpdateUser")})
+    frames["employees"] = await base.fetch_in(
+        ctx, {"source": INFO, "from": EMPLOYEE, "select": ["ID", "Name", "Unit"]}, "ID", people)
+    for name in ("departments", "factories", "vendors"):
+        frames[name] = master.frames.get(name, pd.DataFrame())
+    return frames
+
+
+def _any_of(conds: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"logic": "OR", "conditions": conds}
+
+
+async def lookup_fetch(ctx: Any, lookups: Sequence[Any], master: MasterData) -> dict[str, pd.DataFrame]:
+    """按号查单（§6.3 `lookup_numbers` 一行）：先按号在主表编号、CAR 编号、料号与生产订单、小板订单上精确匹配，再按
+    对上的单 ID 取清单那一套帧（不取叙述原文，§6.1）。手填的带连字符的订单号一起取出来（以「该号-」开头）。"""
+    by: dict[str, list[str]] = {}
+    for lk in lookups:
+        by.setdefault(lk.kind, []).append(lk.value)
+    frames: dict[str, pd.DataFrame] = {}
+    tasks: dict[str, Any] = {}
+    main_conds = [cond(f"m.{col}", "IN", by[kind]) for kind, col in (("issue", "Numbers"), ("car", "CAR"),
+                                                                     ("inv", "CInvCode")) if by.get(kind)]
+    if main_conds:
+        spec = main_spec(DomainStep(domain=DOMAIN))
+        spec["select"] = ["m.ID"]
+        spec["filter"]["groups"].append(_any_of(main_conds))
+        tasks["cn_hit_main"] = base.fetch_all(ctx, spec, "m.ID")
+    order_conds = [cond("c.OrderNumber", "IN", by["prod_order"])] if by.get("prod_order") else []
+    order_conds += [cond("c.OrderNumber", "STARTS_WITH", v + "-") for v in by.get("prod_order", [])
+                    if re.fullmatch(r"\d{6}", v)]
+    order_conds += [cond("c.PartNumber", "IN", by["pn_code"])] if by.get("pn_code") else []
+    order_conds += [cond("c.PartName", "IN", by["pn_name"])] if by.get("pn_name") else []
+    if order_conds:
+        tasks["cn_hit_orders"] = base.fetch_all(ctx, _child(ORDERS, ("ID", "ProblemId", "OrderNumber", "PartNumber",
+                                                                     "PartName", "OrderQty"), DomainStep(domain=DOMAIN),
+                                                            _any_of(order_conds)), "c.ID")
+    if by.get("xb_order"):
+        tasks["cn_hit_xb"] = base.fetch_all(ctx, _child(XB, ("ID", "ProblemId", "OrderNumber", "InvCode", "InvStd", "Qty"),
+                                                        DomainStep(domain=DOMAIN),
+                                                        _any_of([cond("c.OrderNumber", "IN", by["xb_order"])])), "c.ID")
+    frames |= dict(zip(tasks, await asyncio.gather(*tasks.values()), strict=True))
+    ids = base.int_keys([*base.column(frames.get("cn_hit_main"), "ID"),
+                         *base.column(frames.get("cn_hit_orders"), "ProblemId"),
+                         *base.column(frames.get("cn_hit_xb"), "ProblemId")])
+    if ids:
+        dstep = DomainStep(domain=DOMAIN, sql=[cond("m.ID", "IN", ids)] if len(ids) <= base.IN_CHUNK else [],
+                           needs={"state"})
+        frames |= await fetch(ctx, dstep, master)
     return frames

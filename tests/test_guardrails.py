@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 import s3_data
+import s4_data
 import scopes
 import structlog
 from fakes import MANIFEST, FakeLLM, Harness, make_harness, run
@@ -98,6 +99,40 @@ EXEC_SCENARIOS: list[tuple[str, dict, str, list]] = [
 ]
 
 
+def _detail(number: str, *aspects: str) -> dict:
+    params: dict = {"issue": {"value": number, "from": "user"}}
+    if aspects:
+        params["aspects"] = list(aspects)
+    return _plan("issue_detail", **params)
+
+
+#: S4 接上的详情与按号查单（假数据 `tests/s4_data.py`）：（说明, 权限, 问句, 模型回复）；回复为空表示号码直通
+S4_SCENARIOS: list[tuple[str, dict, str, list]] = [
+    ("国内详情·整张", scopes.GREEN, "ZC9901001", []),
+    ("国内详情·各项", scopes.GREEN, "ZC9901006 的处理过程、5Why、原因、责任人、设计更改、附件、订单",
+     [_detail("ZC9901006", "完整处理过程", "驳回", "5Why", "原因", "责任人", "设计更改", "附件", "订单", "费用",
+              "其他:手机号")]),
+    ("国内详情·重启审核中", scopes.GREEN, "ZC9901005 停线", [_detail("ZC9901005", "停线与重启", "完整处理过程")]),
+    ("国内详情·物料单与 CAR", scopes.account_jia(), "ZC9901002 的 CAR 和订单",
+     [_detail("ZC9901002", "CAR", "订单", "其他在线订单", "机型", "物料", "PN", "原因")]),
+    ("国内详情·有 CAR 权限", scopes.privileges([Domain.DOMESTIC], car=True), "ZC9901002", []),
+    ("巴西详情·整张", scopes.GREEN, "BR9901001", []),
+    ("巴西详情·各项", scopes.GREEN, "BR9901001 的费用、8D、补料、库存处理、5Why、PN、处理过程",
+     [_detail("BR9901001", "费用", "8D", "补料", "库存处理", "5Why", "PN", "完整处理过程", "当前责任人", "订单")]),
+    ("海外详情·整张", scopes.GREEN, "HW9901002", []),
+    ("海外详情·各项", scopes.GREEN, "HW9901001 的现象、原因、处理过程、附件",
+     [_detail("HW9901001", "问题现象", "可能原因", "原因", "完整处理过程", "附件", "责任人", "费用", "设计更改")]),
+    ("按号·15 位", scopes.GREEN, "999999999999999", []),
+    ("按号·订单", scopes.GREEN, "订单 990001 关联了哪些单", [_plan("lookup_numbers", numbers=[
+        {"raw": "990001", "kind_said": "订单号"}, {"raw": "2406648", "kind_said": None},
+        {"raw": "CLAIM-0099/99", "kind_said": None}, {"raw": "AB9900001", "kind_said": None}])]),
+    ("按号·CAR 无报告权限", scopes.account_jia(), "CAR999999999", []),
+    ("按号·几个问题编号", scopes.account_jia(), "ZC9901001、BR9901002、ZC9909999", []),
+    ("按号·认不出", scopes.GREEN, "202501011234 是什么单", [_plan("lookup_numbers", numbers=[
+        {"raw": "202501011234", "kind_said": None}])]),
+]
+
+
 async def _all_events() -> list[tuple[str, Harness, list[Event]]]:
     out = []
     for name, privileges, query in SCENARIOS:
@@ -108,6 +143,12 @@ async def _all_events() -> list[tuple[str, Harness, list[Event]]]:
         s3_data.load(h)
         events = await run(h, query)
         assert any(e.type in (EventType.TABLE, EventType.CLARIFY) for e in events), name
+        out.append((name, h, events))
+    for name, privileges, query, replies in S4_SCENARIOS:
+        h = make_harness(privileges, llm_replies=replies, config_files={"link_sites.toml": _SITES})
+        s4_data.load(h)
+        events = await run(h, query)
+        assert any(e.type is not EventType.ERROR for e in events) and events, name
         out.append((name, h, events))
     for domains in ([], [Domain.DOMESTIC], list(DOMAINS)):
         access = gate.DomainAccess(
@@ -385,3 +426,70 @@ async def test_link_values_never_reach_logs_or_events(monkeypatch, caplog, capsy
                           for r in failed)
     seen = repr(logs) + caplog.text + "".join(capsys.readouterr()) + repr([e.data for e in events])
     assert [f for f in _fragments(pair) if f in seen] == []
+
+
+# ---------------------------------------------------------------- 附件摘要用的那一项值不进日志与事件（§9.1，S4）
+
+_SALT_STAND_IN = "QxSaltStandInValueForTestOnlyQx"
+
+
+async def test_attachment_value_never_reaches_logs_or_events(monkeypatch, caplog, capsys):
+    """附件预览链接：正常与出错两条路径，日志与事件里都没有那一项值的片段；出错时日志只记异常类型、只给文档名称。
+    代码里已经有值时测真值，没有时用一组替身。"""
+    from factory_issue_module.present import _q3, links
+
+    word = _q3.word() or _SALT_STAND_IN
+    monkeypatch.setattr(_q3, "word", lambda: word)
+    events: list[Event] = []
+    with structlog.testing.capture_logs() as logs:
+        h = make_harness(scopes.GREEN, config_files={"link_sites.toml": _SITES})
+        s4_data.load(h)
+        ok_events = await run(h, "ZC9901001")
+        events += ok_events
+
+        def broken(*_a, **_k):
+            raise ValueError(f"坏了 {word}")
+
+        monkeypatch.setattr(links.hashlib, "md5", broken)
+        h2 = make_harness(scopes.GREEN, config_files={"link_sites.toml": _SITES})
+        s4_data.load(h2)
+        bad_events = await run(h2, "ZC9901001")
+        events += bad_events
+    ok_text = "".join(e.data.get("text", "") for e in ok_events if e.type is EventType.DELTA)
+    assert "/#/DocumentBusinessView?id=901&digest=" in ok_text
+    bad_text = "".join(e.data.get("text", "") for e in bad_events if e.type is EventType.DELTA)
+    assert "测试照片" in bad_text and "DocumentBusinessView" not in bad_text
+    failed = [r for r in logs if r.get("event") == "factory_issue_link_param_failed"]
+    assert failed and all(r["error"] == "ValueError" and set(r) <= {"event", "log_level", "error", "timestamp"}
+                          for r in failed)
+    seen = repr(logs) + caplog.text + "".join(capsys.readouterr()) + repr([e.data for e in events])
+    frags = [word[i : i + 6] for i in range(len(word) - 5)]
+    assert [f for f in frags if f in seen] == []
+
+
+def test_attachment_value_is_in_code():
+    """附件摘要的那一项值已写进代码（开发者 2026-10-30 给出）：只查形状，不在测试里重复这个值。"""
+    from factory_issue_module.present import _q3, links
+
+    word = _q3.word()
+    assert links.attachment_ready() and word is not None and len(word) >= 16
+    assert all(32 < ord(c) < 127 for c in word)
+
+
+def test_attachment_digest_follows_link_rules(monkeypatch):
+    """`link_rules.md`「GetDigest」：两头各接一段、UTF-8 取 MD5、Base64，去掉末尾的 `=` 与所有 `+`。"""
+    import base64
+    import hashlib
+
+    from factory_issue_module.config.files import LinkSites
+    from factory_issue_module.present import _q3, links
+
+    monkeypatch.setattr(_q3, "word", lambda: "s+")
+    raw = base64.b64encode(hashlib.md5(b"s+901s+").digest()).decode().rstrip("=").replace("+", "")
+    sites = LinkSites(issue="https://a", brazil="https://a", attachment="https://b")
+    assert links.attachment(sites, "照片[1]", 901) == f"[照片\\[1\\]](https://b/#/DocumentBusinessView?id=901&digest={raw})"
+    monkeypatch.setattr(_q3, "word", lambda: None)
+    assert links.attachment(sites, "照片", 901) == "照片"
+    assert links.car(sites, "CAR999999999", 5) == \
+        "[CAR999999999](https://a/QualityManage/Vendor/VendorReportOutDetail.aspx?VendorReportOutID=5)"
+    assert links.car(None, "CAR999999999", 5) == "CAR999999999"

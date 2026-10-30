@@ -40,8 +40,11 @@ def cn_names(employees):
     return fi_lookup(employees, "ID", "Name", cast="int")
 
 
-def cn_states(main, tasks, risk, employees, E):
+def cn_states(main, tasks, risk, employees, E, comp_out=None):
     """当前状态（国内「当前状态」）：问题单 ID → [(环节, [姓名], [员工 ID])]，一行一个环节。
+
+    `comp_out` 给一个字典时，顺带写进按待办现算后的状态码（单张单详情的环节显示条件要用，状态 30、36、37 不直接
+    用库里的状态码）。
 
     - 已完成只一行「已完成」，不追加 IQC、退货 / 退库段。
     - 状态 30、36、37 按两类已接受的待办现算（要做预防对策确认的类型才算；两类都没有时保持库里原状态），
@@ -71,6 +74,8 @@ def cn_states(main, tasks, risk, employees, E):
             continue
         handlers = (fi_split(r.get("MemberListName")), fi_ids(r.get("MemberList")))
         rows = []
+        if comp_out is not None:
+            comp_out[pid] = s
         if s in E["parallel"]:
             mine = by_task.get(pid, [])
             kinds = {str(t.get("ftable")) for t in mine}
@@ -85,6 +90,8 @@ def cn_states(main, tasks, risk, employees, E):
                     comp = 36
                 elif prevention:
                     comp = 37
+            if comp_out is not None:
+                comp_out[pid] = comp
             prev_ids = fi_unique([fi_int(t.get("fuserID")) for t in mine
                                   if str(t.get("ftable")) == E["task_prevention"] and fi_int(t.get("fuserID")) is not None])
             prev = ([names[i] for i in prev_ids if i in names], [i for i in prev_ids if i in names])
@@ -179,7 +186,8 @@ def cn_view(data, E, desc_text):
     models = fi_group(fi_records(data.get("cn_models")), "ProblemId")
     orders = fi_group(fi_records(data.get("cn_orders")), "ProblemId")
     steps = cn_steps_by_issue(data.get("cn_steps"))
-    states = cn_states(main, data.get("cn_tasks"), data.get("cn_risk"), data.get("employees"), E)
+    comp = {}
+    states = cn_states(main, data.get("cn_tasks"), data.get("cn_risk"), data.get("employees"), E, comp)
     rows = []
     for r in fi_records(main):
         pid = fi_int(r.get("ID"))
@@ -220,7 +228,7 @@ def cn_view(data, E, desc_text):
         if restart is not None and stop is not None:
             stop_days = int((restart.normalize() - stop.normalize()).days)
         rows.append({
-            "_id": pid, "_type": t, "_status": s, "_done": done, "_unclosed": not done, "_rejected": s == E["rejected"],
+            "_id": pid, "_type": t, "_status": s, "_comp_status": comp.get(pid, s), "_done": done, "_unclosed": not done, "_rejected": s == E["rejected"],
             "_closed_label": "已结案" if done else "未结案", "_stat": None, "_not_stopped": stop_code == 3,
             "_pn_codes": fi_unique([str(o.get("PartNumber")).strip() for o in orders.get(pid, [])
                                     if not fi_blank(o.get("PartNumber"))]),
@@ -228,6 +236,7 @@ def cn_view(data, E, desc_text):
                                     if not fi_blank(o.get("PartName"))]),
             "_material_flag": material_flag, "_machines": machines, "_series": series,
             "_stages": fi_unique([stage for stage, _p, _i in st_rows]), "_current_ids": cur_ids,
+            "_state_lines": [stage + (" " + ",".join(people) if people else "") for stage, people, _i in st_rows],
             "_current_names": cur_names, "_responsible_ids": [] if resp is None else [resp],
             "_follower_ids": [] if follower_id is None else [follower_id],
             "_resp_dept_ids": resp_ids, "_resp_dept_names": [depts[i] for i in resp_ids if i in depts],

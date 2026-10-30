@@ -30,7 +30,10 @@ LIB_FILES = (
     "stats/lib/derive_overseas.py",
     "stats/lib/domains.py",
 )
-TASK_FILES = {"list": "stats/tasks/list.py", "aggregate": "stats/tasks/aggregate.py"}
+TASK_FILES = {"list": "stats/tasks/list.py", "aggregate": "stats/tasks/aggregate.py", "detail": "stats/tasks/detail.py",
+              "lookup": "stats/tasks/lookup.py"}
+#: 只有某个任务要的公共库（详情的各块只在详情脚本里拼，清单与统计的脚本不带它）
+TASK_LIBS = {"detail": ("stats/lib/detail.py",)}
 _PLACEHOLDER = "PARAMS = {}"
 _INTERNAL = re.compile(r"^(from\s+(__future__|factory_issue_module)\b|import\s+factory_issue_module\b)")
 
@@ -62,7 +65,8 @@ def script(task: str, params: dict[str, Any]) -> str:
         raise RuntimeError(f"任务模板 {task} 里要有且只有一行 {_PLACEHOLDER}")
     literal = repr(json.dumps(params, ensure_ascii=False, default=str))
     body = body.replace(_PLACEHOLDER, f"PARAMS = json.loads({literal})")
-    return "\n\n".join(["import json", *(_source(f) for f in LIB_FILES), body])
+    libs = (*LIB_FILES, *TASK_LIBS.get(task, ()))
+    return "\n\n".join(["import json", *(_source(f) for f in libs), body])
 
 
 async def run(ctx: Any, task: str, datasets: dict[str, Any], params: dict[str, Any],

@@ -69,7 +69,10 @@ SORT_NEEDS: dict[str, str] = {}
 def enum_params() -> dict[str, Any]:
     return {"status": enums.BR_STATUS, "done": enums.BR_DONE, "draft": enums.BR_DRAFT,
             "terminated": enums.BR_TERMINATED, "unclosed": list(enums.BR_UNCLOSED), "yes_no": enums.BR_YES_NO,
-            "stop_yes": enums.BR_STOP_YES, "restarted": enums.BR_RESTARTED}
+            "stop_yes": enums.BR_STOP_YES, "restarted": enums.BR_RESTARTED,
+            # 单张单详情（S4）
+            "doc_8d": enums.BR_DOC_8D, "doc_claim": enums.BR_DOC_CLAIM, "doc_design": enums.BR_DOC_DESIGN,
+            "yes_text": enums.BR_YES_TEXT, "no_text": enums.BR_NO_TEXT}
 
 
 # ---------------------------------------------------------------------------- 分组维度
@@ -417,4 +420,95 @@ async def fetch(ctx: Any, dstep: DomainStep, master: MasterData) -> dict[str, pd
                                             "PartNumber", codes)
     for name in ("departments", "vendors", "products"):
         frames[name] = master.frames.get(name, pd.DataFrame())
+    return frames
+
+
+# ---------------------------------------------------------------------------- 单张单详情与按号查单（S4）
+
+DOCUMENTS = "info.dbo.DocumentList"
+#: 单张单详情另取的主表列：叙述原文、问题现象、补料（§13）
+DETAIL_COLUMNS = (*MAIN_COLUMNS, "ProblemDesc", "ProblemPhenomenon", "SupplementQty", "SupplementResult", "SupplementMemo",
+                  "SupplementUserID", "SupplementDate", "Memo")
+DETAIL_PROCESS = ("ID", "ProblemID", "DisposeResult", "PlanCompleteDate", "ReasonAnalysis", "ImprovementMeasure",
+                  "ImprovementBatch", "PrecautionPolicy", "IsStockPrecess", "StockPrecessQty", "IsCostShift", "DebitMoney",
+                  "DebitNumber", "UnCostShiftReason", "IsSupplementMaterial", "SupplementMaterialQty", "InStoreNumber",
+                  "IsDesignChange", "DesignUserID", "DesignResult", "DesignMemo", "DesignEstimateDate", "DesignDate",
+                  "SQEResult", "SQEMemo", "SQEUserID", "SQEDate", "ProcessResult", "ProcessMemo", "ProcessUserID",
+                  "ProcessDate", "ConfirmResult", "ConfirmMemo", "ConfirmUserID", "ConfirmDate", "FinishResult",
+                  "FinishMemo", "FinishUserID", "FinishDate")
+
+
+def issue_step(numbers: Sequence[str] = (), ids: Sequence[int] = ()) -> DomainStep:
+    if ids:
+        return DomainStep(domain=DOMAIN, sql=[cond("m.ID", "IN", [int(i) for i in ids])])
+    return DomainStep(domain=DOMAIN, sql=[cond("m.OrderNumber", "IN", list(numbers))])
+
+
+def _documents(types: Sequence[str]) -> dict[str, Any]:
+    """巴西附件：限定业务名称（主表 ID 与处理过程 ID 号码互相重叠），再按业务记录 ID 分块（文档清单表文件）。"""
+    return {"source": INFO, "from": DOCUMENTS, "select": domestic.DOC_COLUMNS,
+            "filter": {"logic": "AND", "groups": [{"logic": "AND", "conditions": [
+                cond("EffectFlag", "EQ", 0), cond("BusinessType", "IN", list(types))]}]}}
+
+
+async def detail_fetch(ctx: Any, dstep: DomainStep, master: MasterData, *, car: bool = False) -> dict[str, pd.DataFrame]:
+    """单张单详情的帧（巴西「单张单详情」）：主表含叙述列、全部处理过程（8D 报告、设计更改附件挂在全部处理过程上）、
+    费用明细、关联申请单，再按键取申请单、PN、存货、人员与三种附件。"""
+    first: dict[str, Any] = {
+        "br_main": base.fetch(ctx, {**main_spec(dstep), "select": [f"m.{c}" for c in DETAIL_COLUMNS]}),
+        "br_process": base.fetch_all(ctx, _child(PROCESS, DETAIL_PROCESS, dstep), "c.ID"),
+        "br_cost": base.fetch_all(ctx, _child(COST, ("ID", "ProblemID", "CostType", "CostMoney", "CostBrlMoney",
+                                                     "ConstBrlRate", "CostMemo"), dstep), "c.ID"),
+        "br_po": base.fetch_all(ctx, _child(PO, ("ID", "ProblemID", "RequestID"), dstep), "c.ID"),
+    }
+    frames = dict(zip(first, await asyncio.gather(*first.values()), strict=True))
+    main, process = frames["br_main"], frames["br_process"]
+    frecids = base.int_keys([*base.column(main, "ID"), *base.column(process, "ID")])
+    second: dict[str, Any] = {
+        "br_requests": base.fetch_in(ctx, {"source": INFO, "from": REQUESTS, "select": ["ID", "PartNumber"]}, "ID",
+                                     base.int_keys(base.column(frames["br_po"], "RequestID"))),
+        "inventory": base.fetch_in(ctx, {"source": INFO, "from": INVENTORY, "select": ["cInvCode", "cInvName", "cInvStd"]},
+                                   "cInvCode", base.unique(str(x).strip() for x in base.column(main, "cInvCode")
+                                                           if x is not None)),
+        "documents": base.fetch_in(ctx, _documents((enums.BR_DOC_8D, enums.BR_DOC_CLAIM, enums.BR_DOC_DESIGN)),
+                                   "frecid", frecids),
+        "employees": base.fetch_in(ctx, {"source": INFO, "from": EMPLOYEE, "select": ["ID", "Name", "Unit"]}, "ID",
+                                   base.int_keys([*base.column(main, "AddUserID"), *base.column(main, "ActorUserID"),
+                                                  *base.column(main, "SupplementUserID"),
+                                                  *(x for c in ("ProcessUserID", "DesignUserID", "SQEUserID",
+                                                                "ConfirmUserID", "FinishUserID")
+                                                    for x in base.column(process, c))])),
+    }
+    frames |= dict(zip(second, await asyncio.gather(*second.values()), strict=True))
+    codes = base.unique(str(x).strip() for x in base.column(frames["br_requests"], "PartNumber")
+                        if x is not None and str(x).strip() not in ("", "0"))
+    frames["pns"] = await base.fetch_in(ctx, {"source": INFO, "from": PNS, "select": ["PartNumber", "Name"]},
+                                        "PartNumber", codes)
+    for name in ("departments", "vendors", "products"):
+        frames[name] = master.frames.get(name, pd.DataFrame())
+    return frames
+
+
+async def lookup_fetch(ctx: Any, lookups: Sequence[Any], master: MasterData) -> dict[str, pd.DataFrame]:
+    """按号查单：问题编号、料号在主表上精确匹配；投诉单号要去空格比，`fetch` 写不出，取巴西全部未删除的单（约 200 张）
+    在沙箱里比（§6.3）；PN 经关联申请单；扣款单号、入库单号看最新一条处理过程。"""
+    by: dict[str, list[str]] = {}
+    for lk in lookups:
+        by.setdefault(lk.kind, []).append(lk.value)
+    frames: dict[str, pd.DataFrame] = {}
+    if by.get("pn_name"):
+        frames["lk_pns"] = await base.fetch_in(ctx, {"source": INFO, "from": PNS, "select": ["PartNumber", "Name"]},
+                                               "Name", by["pn_name"])
+    kinds = set(by)
+    sql: list[dict[str, Any]] = []
+    if kinds == {"issue"}:
+        sql = [cond("m.OrderNumber", "IN", by["issue"])]
+    elif kinds == {"inv"}:
+        sql = [cond("m.cInvCode", "IN", by["inv"])]
+    dstep = DomainStep(domain=DOMAIN, sql=sql, needs={"pn"} if kinds & {"pn_code", "pn_name"} else set())
+    got = await fetch(ctx, dstep, master)
+    frames |= got
+    if kinds & {"debit", "instore"}:
+        frames["br_hit_process"] = await base.fetch_all(
+            ctx, _child(PROCESS, ("ID", "ProblemID", "DebitNumber", "InStoreNumber"), DomainStep(domain=DOMAIN)), "c.ID")
     return frames

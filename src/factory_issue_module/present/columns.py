@@ -193,6 +193,93 @@ _BY_DOMAIN: dict[Domain, dict[str, str]] = {
     Domain.DOMESTIC: VIEW_COLUMNS, Domain.BRAZIL: BR_VIEW_COLUMNS, Domain.OVERSEAS: OS_VIEW_COLUMNS,
 }
 
+# ---------------------------------------------------------------------------- 单张单详情与按号查单（S4）
+
+_STEPS = "CoreINFO.dbo.ZCTracking_ProblemSteplog"
+_ORDERS = "CoreINFO.dbo.ZCTracking_ProblemOrders"
+_XB = "CoreINFO.dbo.ZCTracking_XBOrders"
+_OTHER = "CoreINFO.dbo.ZCTracking_OtherOrder"
+_PHEN = "CoreINFO.dbo.AfterSaleIssueClassPhenomenon"
+_PREASON = "CoreINFO.dbo.AfterSaleIssueClassPhenomenonReason"
+_CLASS = "CoreINFO.dbo.AfterSaleIssueClass"
+_PINV = "CoreINFO.dbo.ZCTracking_PossibleInvCode"
+_FIVE = "CoreINFO.dbo.ZCTracking_ProblemFiveWhy"
+_CAR = "info.dbo.tbIQCreportOut"
+_BRC = "CoreINFO.dbo.BrazilProblemCost"
+_OSS = "CoreINFO.dbo.OverseasProblem_StepLog"
+_OSD = "CoreINFO.dbo.OverseasProblem_DeliveryOrder"
+
+
+def _cols(prefix: str, table: str, names: str) -> dict[str, str]:
+    return {f"{prefix}.{c}": _shown(table, c) for c in names.split()}
+
+
+#: 详情各块与按号查单各表的标签：内部键 → 显示名（沙箱参数 `labels`）。表里的列取表文件的显示名，其余取
+#: 各域业务描述「单张单详情」、处理步骤表「单张单详情里的结论」里的叫法，导入时逐个核对（`_shown`、`_derived`）
+DETAIL: dict[str, str] = {
+    **_cols("cn", _MAIN, "Reason Improve Measures Prevention ReasonClassRemark Remark RConfirm DesignUser DesignDate "
+                         "ZLConfirmResult IsChangeOrderV OrderVersion ReStartScheme ReStartSchemeUser "
+                         "ReStartExamineUser IQCMemberListName Confirmation MHead"),
+    **_cols("step", _STEPS, "StepStr Result Opinon Measures FileUrl AddUser AddDate"),
+    **_cols("ord", _ORDERS, "OrderNumber IssueDate OrderQty ReceiptQty OnlineQty Version"),
+    **_cols("xb", _XB, "OrderNumber InvCode InvStd Qty InQty NoQty Factory Description"),
+    **_cols("oo", _OTHER, "OrderNo ProductName Qty IssuedQty IssQty FaliaoDate ReturnQty ReturnType ReceivingQty "
+                          "TotalinQty Factory"),
+    **_cols("phen", _PHEN, "PhenomenonDesc"),
+    **_cols("preason", _PREASON, "ReasonDesc"),
+    **_cols("pclass", _CLASS, "TypeName ClassName"),
+    **_cols("pinv", _PINV, "InvCode InvStd"),
+    **_cols("fw", _FIVE, "Question Reason Status AddUser AddDate UpdateUser UpdateDate"),
+    **_cols("car", _CAR, "fdesc fstep2how1 fstep2how2 fstep2how3 fstep3memo fstep4memo fstep5memo fstep6memo"),
+    **_cols("br", _BR, "ProblemPhenomenon SupplementQty SupplementResult SupplementMemo SupplementUserID "
+                       "SupplementDate Memo"),
+    **_cols("brp", _BRP, "DisposeResult PlanCompleteDate ReasonAnalysis ImprovementMeasure ImprovementBatch "
+                         "PrecautionPolicy IsStockPrecess StockPrecessQty IsCostShift DebitMoney DebitNumber "
+                         "UnCostShiftReason IsSupplementMaterial SupplementMaterialQty InStoreNumber IsDesignChange "
+                         "DesignUserID DesignResult DesignMemo DesignEstimateDate DesignDate SQEResult SQEMemo "
+                         "SQEUserID SQEDate ProcessResult ProcessMemo ProcessUserID ProcessDate ConfirmResult "
+                         "ConfirmMemo ConfirmUserID ConfirmDate FinishResult FinishMemo FinishUserID FinishDate"),
+    **_cols("brc", _BRC, "CostType CostMoney CostBrlMoney ConstBrlRate CostMemo"),
+    **_cols("os", _OS, "hasCheckedPhenomenon Improve Remark Reason Measures Prevention Confirmation RConfirm DocId "
+                       "DesignUser DesignDate"),
+    **_cols("oss", _OSS, "StepStr Result Opinon Measures DocID AddUser AddDate"),
+    **_cols("osd", _OSD, "PO OrderNumber Date PN DeliveryVersion ProdVersion Quantity Remark"),
+    "os.materialDesc": _key_shown(_OS, "materialDesc"),
+    # 各块里的叫法（国内处理步骤表「单张单详情里的结论」、各域「单张单详情」）
+    "handler": _derived("处理人"),
+    "confirm_result": _derived("确认结果"),
+    "note": _derived("备注"),
+    "seq": _derived("序号"),
+    "new_type": _derived("修改后的问题分类"),
+    "need_design": _derived("是否设计更改"),
+    "sqe_result": _derived("SQE跟进结果"),
+    "reason_note": _derived("原因说明"),
+    "countermeasure": _derived("制定对策"),
+    "prevention_confirm": _derived("预防对策确认"),
+    "effect_result": _derived("效果确认结果"),
+    "close_conclusion": _derived("结案结论"),
+    "restart_note": _derived("重启备注"),
+    "restart_review": _derived("重启审核意见"),
+    "prod_orders": _derived("生产订单"),
+    "xb_orders": _derived("小板订单"),
+    "other_orders": _derived("其他在线订单"),
+    "possible_inv": _derived("可能的问题物料"),
+    "car_report": _derived("CAR 报告"),
+    "claim_docs": _derived("投诉单附件"),
+    "eight_d": _derived("8D 报告"),
+    "design_docs": _derived("设计更改附件"),
+    "delivery_total": _derived("订单数量合计"),
+    "domain": _derived("所属域"),
+    #: 巴西「当前状态」即主表状态（术语表「当前状态」），按号查单的表三域都写这一列名
+    "current_state": _derived("当前状态"),
+    "pn": _derived("PN"),
+    "debit": _derived("扣款"),
+}
+
+
+def detail(key: str) -> str:
+    return DETAIL[key]
+
 
 def view_columns(domain: Domain) -> dict[str, str]:
     """某一域「一单一行」视图的列：内部键 → 显示名（沙箱参数 `names` 按域给）。"""
@@ -224,6 +311,11 @@ UNCLOSED_SHARE = _derived("未结案占比（%）")
 COST_USD = _derived("费用（美元）")
 COST_BRL = _derived("费用（雷亚尔）")
 DEBIT = BR_VIEW_COLUMNS["debit"]
+
+#: 第 5 条前半：详情只要原因或措施时并进前一步的清单，清单加这一列（总述「原因与措施怎么给」）
+REASONS = _derived("原因与措施")
+#: 几个问题编号合成一张表时另加的一列（总述「按编号查单」一次给多个号）
+OWNER_DOMAIN = _derived("所属域")
 
 #: 清单默认 6 列（总述「清单默认列」）
 DEFAULT_LIST = ("number", "machine", "type", "rate", "bad_qty", "desc")

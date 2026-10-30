@@ -59,6 +59,36 @@ CN_STEP_RECLASSIFY = "修改问题分类"
 #: 处理步骤要取的环节：责任人四种、停线重启、结案确认
 CN_STEPS_NEEDED = (3, 4, 6, 10, CN_STEP_RESTART, CN_STEP_CLOSE)
 
+#: 单张单详情的环节（国内「单张单详情各环节怎么显示」）：环节编码 → 块名。显示条件写在
+#: `stats/lib/detail.py::dt_cn_stages`；7、8 两个编码同属「IQC确认」
+CN_DETAIL_STAGES: dict[int, str] = {
+    33: "生产角色确认", 2: "指定责任人", 3: "责任人确认", 14: "IQC意见", 4: "工程确认", 7: "IQC确认", 8: "IQC确认",
+    10: "SQE跟进", 11: "设计更改", 13: "SQE确认", 5: "PMC确认", 6: "工厂制程分析", 35: "预防对策确认", 30: "效果确认",
+    31: "结案确认",
+}
+#: 处理步骤的环节编码：填写问题（填单附件在这一步上）、驳回、停线重启三步（另列「重启操作日志」）
+CN_STEP_FILL = 1
+CN_STEP_REJECT = 28
+CN_STEP_RESTART_REVIEW = 32
+CN_STEP_RESTART_SCHEME = 34
+CN_RESTART_STEPS = (CN_STEP_RESTART, CN_STEP_RESTART_REVIEW, CN_STEP_RESTART_SCHEME)
+#: 停线状态：重启审核中（不展示重启方案、审核意见与重启操作日志）、责任人填写重启方案（不展示上一轮的）
+CN_STOP_REVIEWING = 4
+CN_STOP_SCHEME = 6
+#: 停线重启审核的结论：1 = 同意，0 = 不同意，其他值不写；生产角色确认：0 = 不同意，其余 = 同意
+CN_REVIEW_RESULT: dict[int, str] = {1: "同意", 0: "不同意"}
+CN_ROLE_AGREE = "同意"
+CN_ROLE_DISAGREE = "不同意"
+#: SQE跟进的结论：0 = 不需要，1 = 需要（「是否设计更改」）
+CN_NEED_DESIGN: dict[int, str] = {0: "不需要", 1: "需要"}
+#: 其他在线订单的处理方式
+CN_RETURN_TYPE: dict[int, str] = {1: "就地销毁", 2: "退回仓库", 3: "继续使用"}
+#: 5Why 的答复状态
+CN_FIVE_WHY_STATUS: dict[int, str] = {0: "待答复", 1: "已答复"}
+CN_FIVE_WHY_PENDING = 0
+#: 5Why 随哪个分析环节显示（国内「问题现象、可能问题原因、可能的问题物料、5Why」）：问题类型 → 环节编码
+CN_FIVE_WHY_STAGE: dict[int, int] = {1: 3, 2: 3, 6: 3, 7: 3, 3: 10, 4: 4, 5: 6}
+
 #: 环节名称（当前状态各行）：主表状态与 IQC 状态的文案、风险订单步骤、并行阶段的两个环节
 CN_STAGES: tuple[str, ...] = tuple(dict.fromkeys([
     *(v for k, v in CN_STATUS.items() if k != CN_DONE), *CN_RISK_STEPS.values(), "预防对策确认", "效果确认",
@@ -83,6 +113,13 @@ BR_YES_NO: dict[int, str] = {1: "是", 2: "否"}
 #: 是否停线存「是 / 否」；停线状态为「停线重启」表示已标记重启
 BR_STOP_YES = "是"
 BR_RESTARTED = "停线重启"
+#: 巴西附件的业务名称（文档清单「各域选取附件的条件」）：8D 报告、设计更改附件挂在处理过程上，投诉单附件挂在单上
+BR_DOC_8D = "巴西制程问题单8D报告"
+BR_DOC_CLAIM = "巴西制程问题单附件"
+BR_DOC_DESIGN = "巴西制程问题单设计更改"
+#: 处理过程上的「是」（是否库存处理、费用转嫁、是否供应商补料为「是」时另给几项，巴西「单张单详情」）
+BR_YES_TEXT = "是"
+BR_NO_TEXT = "否"
 
 # ---------------------------------------------------------------------------- 海外主表
 
@@ -107,6 +144,12 @@ OS_YES_NO: dict[int, str] = {0: "否", 1: "是"}
 #: 处理步骤按环节名称认（海外处理步骤表）：结案确认、驳回
 OS_STEP_CLOSE = "结案确认"
 OS_STEP_REJECT = "驳回"
+#: 单张单详情各块的内容按环节名称认（海外「单张单详情」区块内容）
+OS_STEP_ASSIGN = "指定责任人"
+OS_STEP_CONFIRM = "责任人确认"
+OS_STEP_EFFECT = "效果确认"
+OS_STEP_FACTORY = "工厂制程分析"
+OS_STEP_SQE = "SQE跟进"
 #: 处理步骤里不成块的记录（单张单详情「按单上走过的环节逐块给」只给环节）
 OS_NON_BLOCK_STEPS = ("填写问题", "驳回", "任务转移", "修改问题", "删除问题")
 #: 当前状态与环节名称的对应：状态「IQC意见」对环节「IQC填写意见」（用于判断「该环节已退回重新处理」）

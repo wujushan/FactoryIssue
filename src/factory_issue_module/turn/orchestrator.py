@@ -1,5 +1,5 @@
 """一轮的编排（设计 §4.2）。S1 接上第 1–7 步；S2 接上国内清单与统计的第 6、8、9 步（`turn/execute.py`），
-S3 接上巴西、海外与跨域合并；其余技能随 S4–S6，写工作区随 S5。
+S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含号码直通的执行）；其余技能随 S5–S7，写工作区随 S5。
 
 1. 权限前置（`gate.resolve`）；拿不到可用的权限判断时按「没拿到权限」答，三个域都不出数。
 2. 代码先接住的两种，都不调模型、不取数：
@@ -12,7 +12,7 @@ S3 接上巴西、海外与跨域合并；其余技能随 S4–S6，写工作区
    号码直通的机型清单。
 6. 对库与换算：时间换算，换算不了的说法产生追问；名字对库（§6.5），对不上、对上多个、重名时追问。
 7. 追问：计划本身是追问，或第 6 步产生了追问 → 发 `Event.clarify`，本轮结束（§4.4）。
-8–9. 执行与呈现（`turn/execute.py`）：清单与统计；其余技能先答「暂时还答不了」。
+8–9. 执行与呈现（`turn/execute.py`）：清单、统计、单张单详情、按号查单；其余技能先答「暂时还答不了」。
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ async def run_turn(
         return
 
     if not any(s.get("skill") in execute.EXECUTABLE for s in steps):
-        # 详情、按号查单、文字查找等随 S3–S6 各片接上
+        # 文字查找、质疑、换图、临时统计随 S5–S7 各片接上
         logger.info("factory_issue_skill_not_ready", skills=[str(s.get("skill")) for s in steps])
         for event in _not_ready(access):
             yield event
