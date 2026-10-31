@@ -7,7 +7,8 @@
   `stats/runner.py` 外不 import `stats.lib`、`stats.tasks`。内建的 `len`、`max`、`sorted`、`sum`
   查不出来，列在任务单每片的评审清单里。
 - 取数写法：`src` 里没有 `ctx.data.query(` 与 `ctx.data.raw(`（`jobs/` 经 `ctx.etl`，不在此列）。
-- 按钮形状：`suggestions` 与 `clarify` 的每个选项都是带 id、name、label、query 的对象，label 不超过 15 字。
+- 按钮形状：`suggestions` 与 `clarify` 的每个选项都是带 id、name、label、query 的对象，label 不超过 15 字；
+  答后按钮的 query 不是「原话（这一项）」（INFO 网页前端把 query 当按钮文字显示，设计 §19）。
 - 只有一条 system 且在最前：假模型每次调用都查（`fakes.FakeLLM.check_messages`），这里再兜一遍。
 
 - 巴西链接用的两项值（§9.1）的片段不进日志、不进事件，出错时日志只有异常类型（S3 起；附件摘要的盐值随 S4）。
@@ -320,6 +321,8 @@ async def test_buttons_are_objects_with_short_labels():
                 for key in ("id", "name", "label", "query"):
                     assert isinstance(rec.get(key), str) and rec[key].strip(), (name, key, rec)
                 assert len(rec["label"]) <= 15, (name, rec)
+                if event.type is EventType.SUGGESTIONS:  # 答后按钮不拼「原话（这一项）」（设计 §9.5、§19）
+                    assert not rec["query"].endswith(f"（{rec['label']}）"), (name, rec)
     assert seen > 0
 
 

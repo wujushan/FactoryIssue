@@ -1,12 +1,11 @@
 """沙箱公共函数（设计 §8.1）：取值清洗、翻译表、排序带次键、列表附项数。只用沙箱白名单里的库。"""
 
-import json
 import math
 import re
 
 import pandas as pd
 
-from factory_issue_module.textnorm import to_halfwidth
+from factory_issue_module.textnorm import json_items, to_halfwidth
 
 _FI_DATE = re.compile(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})")
 
@@ -111,20 +110,11 @@ def fi_text_date(v):
 def fi_json_list(v):
     """JSON 数组列（海外物料、巴西与海外的问题现象）：空、不以 `[` 开头、解析不了都按空数组。
 
-    巴西问题现象可能含非法转义：先按原样解析，不行再把孤立的反斜杠换成两个再解析一次。
+    解析规则只有一份，在 `textnorm.json_items`（治理任务也用）；这里先按沙箱的口径判空（含 NaT、NA）。
     """
     if fi_blank(v):
         return []
-    text = str(v).strip()
-    if not text.startswith("["):
-        return []
-    for attempt in (text, re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", text)):
-        try:
-            data = json.loads(attempt)
-        except ValueError:
-            continue
-        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
-    return []
+    return json_items(v)
 
 
 def fi_day(ts):

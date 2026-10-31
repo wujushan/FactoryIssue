@@ -49,6 +49,8 @@ CN_RISK_RUNNING = 1
 CN_TASK_EFFECT = "ZCTracking_ProblemSoftware3"
 CN_TASK_PREVENTION = "ZCTracking_PreventionConfirm"
 CN_TASK_ACCEPTED = "已接受"
+#: 处理步骤的环节编码：工厂制程分析（结论是文字，按文字找单另取它，设计 §12）
+CN_STEP_FACTORY = 6
 #: 处理步骤的环节编码：结案确认、停线重启
 CN_STEP_CLOSE = 31
 CN_STEP_RESTART = 29

@@ -81,7 +81,7 @@ def denied_domains(turn: Mapping[str, Any], access: Any) -> list[str]:
 async def run(T: execute.Turn, turn: Mapping[str, Any], results: Mapping[str, Any] | None
               ) -> tuple[list[Event], str, Ask | None]:
     """(事件, 本轮结局 `workspace.OUTCOME_*`, 重放时要追问的)。要追问时事件为空，由编排发 `clarify` 并写
-    `pending_clarify`（按钮问句是上一轮原话加选项）；每步都没查成时结局为「出错」，不覆盖 `turn`（§10）。"""
+    `pending_clarify`（问句全文是上一轮问句加选项）；每步都没查成时结局为「出错」，不覆盖 `turn`（§10）。"""
     plan = turn.get("plan") if isinstance(turn.get("plan"), dict) else {}
     previous_query = str(turn.get("query") or "")
     denied = denied_domains(turn, T.access)
@@ -121,7 +121,7 @@ async def run(T: execute.Turn, turn: Mapping[str, Any], results: Mapping[str, An
         tail.append(got.caliber.text())
     if tail:
         events.append(Event.delta("\n\n" + "\n\n".join(tail)))
-    recs = clarify.alternative_recommendations(plan.get("alternatives"), previous_query) if previous_query else []
+    recs = clarify.alternative_recommendations(plan.get("alternatives"))
     if recs:
         events.append(Event.suggestions(recs))
     if not any(out.ok for out in got.outs.values()):

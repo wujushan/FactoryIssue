@@ -46,9 +46,9 @@ def _heads(h) -> set[str]:
     return {q.tables[0] for q in data_queries(h)}
 
 
-async def _go(query: str, replies: list, privileges=None, edit=None, **load):
+async def _go(query: str, replies: list, privileges=None, edit=None, *, ws: bool = True, **load):
     h = make_harness(scopes.GREEN if privileges is None else privileges, llm_replies=replies,
-                     config_files={"link_sites.toml": SITES})
+                     config_files={"link_sites.toml": SITES}, workspace=ws)
     s4_data.load(h, **load)
     if edit is not None:  # 在假数据上改几格再跑
         edit(h.connectors["info"].frames)
@@ -342,9 +342,10 @@ async def test_order_lookup_columns_and_distribution():
 
 
 async def test_hand_filled_order_asks_then_the_click_round_does_not_loop():
-    """国内手填的带连字符的订单号：查不到 990002、有 990002-1 时追问；点了按钮那一轮按选回的号查，不再追问。"""
+    """国内手填的带连字符的订单号：查不到 990002、有 990002-1 时追问；点了按钮那一轮按选回的号查，不再追问。
+    每轮一个新环境、没有工作区：测的是按钮发问句全文的退路（直填见 `test_s5_multiturn.py`）。"""
     reply = plan(step("lookup_numbers", numbers=[{"raw": "990002", "kind_said": "订单号"}]))
-    _h, events = await _go("订单 990002 关联了哪张单？", [reply])
+    _h, events = await _go("订单 990002 关联了哪张单？", [reply], ws=False)
     assert [e.type for e in events] == [EventType.CLARIFY]
     rec = events[0].data["recommendations"][0]
     assert rec["label"] == "990002-1" and rec["query"].endswith("（990002-1）")
@@ -356,7 +357,7 @@ async def test_hand_filled_order_asks_then_the_click_round_does_not_loop():
 async def test_unknown_number_asks_with_kinds_then_the_click_round_does_not_loop():
     """XC-012：认不出是什么号，列出能用来查单的号并给选项；点了「订单号」那一轮不再追问。"""
     reply = plan(step("lookup_numbers", numbers=[{"raw": "202501011234", "kind_said": None}]))
-    h, events = await _go("202501011234 是什么单？", [reply])
+    h, events = await _go("202501011234 是什么单？", [reply], ws=False)
     assert [e.type for e in events] == [EventType.CLARIFY] and data_queries(h) == []
     text = events[0].data["question"]
     assert "问题编号" in text and "投诉单号" in text

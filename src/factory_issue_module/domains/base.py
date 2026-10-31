@@ -240,7 +240,8 @@ def yes_no(said: str) -> int | None:
     return None
 
 
-#: 追问按钮发回的问句末尾带着选定的那一项（`plan/clarify.py::with_choice`：「原话（是）」）
+#: 问句末尾带着选定的那一项（`plan/clarify.py::with_choice`：「原话（是）」）：工作区写不进去时追问按钮发的
+#: 就是这样一句；直填的轮次本轮按存下的问句全文理解，也是这个写法（`turn/workspace.py::Filled.asked`）
 _CHOSEN = re.compile(r"（\s*([^（）]+?)\s*）\s*$")
 
 

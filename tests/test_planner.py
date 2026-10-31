@@ -185,12 +185,22 @@ def test_model_options_with_meaningful_question_append_to_it(reason, query, opti
     assert recs[0]["query"] == want and recs[0]["label"] == option
 
 
-def test_alternatives_become_original_question_plus_understanding():
-    recs = clarify.alternative_recommendations(["「普瑞特」指物料名称", "", "按供应商为普瑞特查物料问题的单"], "普瑞特 物料问题")
-    assert [r["query"] for r in recs] == ["普瑞特 物料问题（「普瑞特」指物料名称）",
-                                          "普瑞特 物料问题（按供应商为普瑞特查物料问题的单）"]
+def test_alternatives_become_switch_to_that_understanding():
+    """其他理解的按钮不拼本轮原话（INFO 网页前端把 `query` 当按钮文字，设计 §19）：「换个理解：这条理解」。"""
+    recs = clarify.alternative_recommendations(["「普瑞特」指物料名称", "", "按供应商为普瑞特查物料问题的单。"])
+    assert [r["query"] for r in recs] == ["换个理解：「普瑞特」指物料名称", "换个理解：按供应商为普瑞特查物料问题的单"]
     assert all(set(r) == {"id", "name", "label", "query"} and len(r["label"]) <= 15 for r in recs)
-    assert clarify.alternative_recommendations(None, "q") == []
+    assert clarify.alternative_recommendations(None) == []
+
+
+def test_short_code_options_send_the_option_itself():
+    """代码追问、`pending_clarify` 写进去了：按钮的 `query` 就是选项本身，与问句全文的按钮同一顺序。"""
+    params = {"reason": "名称对上多个", "question": "…", "options": ["惠州百富", "惠州二厂", "TT：巴西的加工厂"]}
+    short, full = clarify.short_recommendations(params), clarify.recommendations(params, "惠州工厂的问题？")
+    assert [r["query"] for r in short] == ["惠州百富", "惠州二厂", "TT：巴西的加工厂"]
+    assert [r["label"] for r in short] == [r["label"] for r in full]
+    assert full[0]["query"] == "惠州工厂的问题（惠州百富）"
+    assert all(set(r) == {"id", "name", "label", "query"} for r in short)
 
 
 def test_earlier_query_option_label():

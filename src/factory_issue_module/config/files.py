@@ -244,7 +244,8 @@ def parse_factory_regions(text: str) -> NameTable:
 
 _RULES = ("whole", "field", "field_split")
 _OVERLAPS = ("sentence", "none")
-FIELD_CODES = ("phen", "desc", "reason", "improve", "measure", "prev", "sqe", "step")
+#: 分段表的字段代号，取自分段表表族文件「字段代号」（S6；原先写死的 8 个与它相同）
+FIELD_CODES = tuple(landed.seg_fields())
 
 
 def _toml(text: str) -> dict[str, Any]:

@@ -45,8 +45,8 @@ def _tables(events) -> list[dict]:
     return [e.data for e in events if e.type is EventType.TABLE]
 
 
-async def _go(query: str, replies: list, *, privileges=None, **load):
-    h = make_harness(privileges or scopes.GREEN, llm_replies=replies)
+async def _go(query: str, replies: list, *, privileges=None, ws: bool = True, **load):
+    h = make_harness(privileges or scopes.GREEN, llm_replies=replies, workspace=ws)
     s3_data.load(h, **load)
     return h, await run(h, query)
 
@@ -174,10 +174,11 @@ async def test_cost_over_amount_compares_that_currency():
 
 
 async def test_cost_over_amount_without_currency_asks_which_and_click_resolves():
-    """没说币种的金额条件：问按美元还是雷亚尔，不按「是 / 否」问；点了之后照选定的币种比，不再问。"""
+    """没说币种的金额条件：问按美元还是雷亚尔，不按「是 / 否」问；点了之后照选定的币种比，不再问。
+    每轮一个新环境、没有工作区：测的是按钮发问句全文的退路（直填见 `test_s5_multiturn.py`）。"""
     reply = plan(step("list_issues", domains=BR, filters=[{"field": "其他", "column": "费用", "op": "大于",
                                                            "value": "50", "from": "user"}]))
-    h, events = await _go("巴西费用超过 50 的单", [reply])
+    h, events = await _go("巴西费用超过 50 的单", [reply], ws=False)
     assert _types(events) == [EventType.CLARIFY] and "美元还是雷亚尔" in events[0].data["question"]
     button = next(r for r in events[0].data["recommendations"] if r["label"] == "雷亚尔")
     h, events = await _go(button["query"], [reply, "共 1 张。最需要关注的是 BR9901003。"])
@@ -193,10 +194,11 @@ async def test_cost_condition_said_negatively_in_the_value(said, kept):
 
 
 async def test_yes_no_button_breaks_the_loop():
-    """「选是还是否」的按钮发回「原话（是）」：模型照旧写认不出的取值时按问句末尾选定的那一项，不再追问同一句。"""
+    """工作区写不进去时「选是还是否」的按钮发回「原话（是）」：模型照旧写认不出的取值时按问句末尾选定的那一项，
+    不再追问同一句。"""
     odd = {"field": "是否需要回复8D", "op": "是", "value": "要回 8D 的", "from": "user"}
     reply = plan(step("list_issues", domains=BR, filters=[odd]))
-    h, events = await _go("巴西要回 8D 的单", [reply])
+    h, events = await _go("巴西要回 8D 的单", [reply], ws=False)
     assert _types(events) == [EventType.CLARIFY]
     button = events[0].data["recommendations"][0]
     assert button["label"] == "是" and button["query"] == "巴西要回 8D 的单（是）"

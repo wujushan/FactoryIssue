@@ -32,7 +32,7 @@ from factory_issue_module.stats.lib.common import (
 from factory_issue_module.stats.lib.derive_brazil import br_enums, br_latest, br_view
 from factory_issue_module.stats.lib.derive_domestic import cn_enums, cn_view
 from factory_issue_module.stats.lib.derive_overseas import os_blocks, os_enums, os_view
-from factory_issue_module.textnorm import rich_display
+from factory_issue_module.textnorm import phen_text, rich_display
 
 # ---------------------------------------------------------------------------- 小工具
 
@@ -626,20 +626,8 @@ def dt_cn(data, E, L, T, P):
 
 
 def dt_br_phen(raw):
-    """巴西问题现象 JSON 展平（巴西主表「问题现象」）：手填 `parentType->Value otherVal`，各段用「；」连。"""
-    parts = []
-    for x in fi_json_list(raw):
-        key = fi_int(x.get("Key"))
-        val = str(x.get("Value") or "")
-        if key is not None and key < 0:
-            seg = str(x.get("parentType") or "") + "->" + val
-            other = str(x.get("otherVal") or "")
-            if other.strip():
-                seg += " " + other
-        else:
-            seg = val
-        parts.append(seg)
-    return "；".join(parts)
+    """巴西问题现象 JSON 展平（巴西主表「问题现象」）：规则在 `textnorm.phen_text`，治理任务共用。"""
+    return "" if fi_blank(raw) else phen_text(raw, "brazil")
 
 
 def dt_br(data, E, L, T, P):
@@ -847,21 +835,8 @@ def dt_br(data, E, L, T, P):
 
 
 def dt_os_phen(raw):
-    """海外已选问题现象 JSON 展平（海外主表「JSON 列结构」）：手填 `parentType -> Value (otherVal)`，各段用「；」连，
-    空段的位置仍保留。"""
-    parts = []
-    for x in fi_json_list(raw):
-        key = fi_int(x.get("Key"))
-        val = str(x.get("Value") or "")
-        if key is not None and key < 0:
-            seg = str(x.get("parentType") or "") + " -> " + val
-            other = str(x.get("otherVal") or "").strip()
-            if other:
-                seg += " (" + other + ")"
-        else:
-            seg = val
-        parts.append(seg)
-    return "；".join(parts)
+    """海外已选问题现象 JSON 展平（海外主表「JSON 列结构」）：规则在 `textnorm.phen_text`，治理任务共用。"""
+    return "" if fi_blank(raw) else phen_text(raw, "overseas")
 
 
 def dt_os(data, E, L, T, P):

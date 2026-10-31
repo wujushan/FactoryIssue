@@ -1,9 +1,9 @@
-"""manifest 的纯声明（设计 §2、§2.1、§2.2、§3、§11）。
+"""manifest 的纯声明（设计 §2、§2.1、§2.2、§3、§11；mart 别名与 `vectorize` 随 S6 加）。
 
-S6 之前的测试包**不声明** mart 别名 `forge_mart_factory_issue`、`vectorize` 与 `jobs()`：声明了平台
-未登记的别名，平台拒绝启动，同一测试环境上的其他模块也一起起不来（设计 §2 代码块下第一条）。
-mart 表名先作为常量放在 `Domain.mart_tables`，权限前置据此判断各域文字查找是否可用；没声明时
-`describe()` 里自然没有它们，各域文字查找一律不可用。
+S6 起声明 mart 别名 `forge_mart_factory_issue`（9 张表：三域各文字表、分段表、向量表）与 `vectorize`
+（三张向量表，来源是各域按意思找的段表，G2「向量表」）。平台没登记这个别名、或连得上而向量表不存在时，
+本助手在那个环境整个被隔离下线（设计 §2），所以这一版只在测试环境建库、登记别名之后发。
+权限前置按 `Domain.mart_tables` 判断各域文字查找是否可用（`privileges.md`「域闸门」）。
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from enum import StrEnum
 
 from forge_core.config_files import ConfigFileSpec
 from forge_core.dataquery import JoinType
-from forge_core.module import DataSourceRef, JoinEdge
+from forge_core.module import DataSourceRef, JoinEdge, VectorizeSpec
 
 from factory_issue_module import landed
 
@@ -34,7 +34,7 @@ KEYWORDS = [
 
 INFO = "info"
 ERP = "erp"
-MART = "forge_mart_factory_issue"  # S6 起才进 DATA_SOURCES
+MART = "forge_mart_factory_issue"
 
 
 # ---------------------------------------------------------------- 三个域
@@ -66,7 +66,24 @@ class Domain(StrEnum):
     @property
     def mart_tables(self) -> tuple[str, str, str]:
         """本域文字查找要读的三张 mart 表：文字表、分段表、向量表（G2；不带 `public.`）。"""
-        return (f"{self.value}_issue_text", f"{self.value}_issue_seg", f"{self.value}_issue_vec")
+        return (self.text_table, self.seg_table, self.vec_table)
+
+    @property
+    def text_table(self) -> str:
+        return f"{self.value}_issue_text"
+
+    @property
+    def seg_table(self) -> str:
+        return f"{self.value}_issue_seg"
+
+    @property
+    def vseg_table(self) -> str:
+        """按意思找的段表：只由治理任务写、平台向量化任务读，不进 `data_sources[].tables`（G2）。"""
+        return f"{self.value}_issue_vseg"
+
+    @property
+    def vec_table(self) -> str:
+        return f"{self.value}_issue_vec"
 
 
 DOMAINS: tuple[Domain, ...] = (Domain.DOMESTIC, Domain.BRAZIL, Domain.OVERSEAS)
@@ -148,6 +165,26 @@ DATA_SOURCES: list[DataSourceRef] = [
         joins=JOINS,
     ),
     DataSourceRef(alias=ERP, kind="sqlserver", description="ERP 实例：国内工厂主数据", tables=[FACTORY_TABLE]),
+    DataSourceRef(
+        alias=MART,
+        kind="postgres",
+        description="本助手的产物库：三域剥净后的叙述文字（文字表）、按词找的分段表、按意思找的向量表",
+        tables=[t for d in DOMAINS for t in d.mart_tables],
+    ),
+]
+
+#: G2「向量表」的 3 条，原样：每域一张，来源是本域按意思找的段表；`metadata_columns` 建表后不能再改
+VECTORIZE: list[VectorizeSpec] = [
+    VectorizeSpec(
+        source=MART,
+        vector_table=d.vec_table,
+        origin_table=d.vseg_table,
+        id_column="seg_id",
+        text_columns=["seg_text"],
+        default_cron="10,40 * * * *",
+        metadata_columns=["issue_id", "field"],
+    )
+    for d in DOMAINS
 ]
 
 #: §3：待办任务表的固定行规则字段 `ftable` 用表级映射（同一别名下其他表没有这一列）。mart 别名不填（G2）。
