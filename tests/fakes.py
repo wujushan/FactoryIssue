@@ -76,23 +76,38 @@ class FakeConnector:
 
 
 class FakeLLM:
-    """按顺序回放回复。回放用完还被调用 = 不该调模型的地方调了。"""
+    """按顺序回放回复。回放用完还被调用 = 不该调模型的地方调了。
+
+    回复也可以是函数 `(messages) -> 回复`（按本次输入现给）。`routes` 按 system 里的一段文字认调用（文字查找的
+    挑说法、判断、摘要），认出的不占顺序回放、可以调多次；几批并行时各批按输入作答，与先后无关。"""
 
     def __init__(self, replies: list[Any] | None = None) -> None:
         self.replies = list(replies or [])
         self.calls: list[list[dict[str, Any]]] = []
+        self.routes: dict[str, Any] = {}
 
     @staticmethod
     def check_messages(messages: list[dict[str, Any]]) -> None:
         systems = [i for i, m in enumerate(messages) if m.get("role") == "system"]
         assert systems == [0], f"只能有一条 system 且在最前，实际位置 {systems}"
 
+    def routed(self, marker: str) -> list[list[dict[str, Any]]]:
+        """system 里含 `marker` 的那几次调用。"""
+        return [m for m in self.calls if marker in str(m[0].get("content") or "")]
+
     async def chat(self, messages: list[dict[str, Any]], **_: Any) -> dict[str, Any]:
         self.check_messages(messages)
         self.calls.append(messages)
-        if not self.replies:
-            raise AssertionError("不该调模型：没有准备回放")
-        reply = self.replies.pop(0)
+        system = str(messages[0].get("content") or "")
+        route = next((fn for marker, fn in self.routes.items() if marker in system), None)
+        if route is not None:
+            reply = route(messages)
+        else:
+            if not self.replies:
+                raise AssertionError("不该调模型：没有准备回放")
+            reply = self.replies.pop(0)
+        if callable(reply):
+            reply = reply(messages)
         if isinstance(reply, Exception):
             raise reply
         content = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)

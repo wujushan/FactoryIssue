@@ -142,6 +142,23 @@ _PAREN = re.compile(r"[（(].*?[)）]")
 _TAIL = re.compile(r"(相关的?|有关的?|方面的?|类的?|的)?(问题|单|不良|异常)?$")
 
 
+def topic_core(topic: str | None) -> str:
+    """话题原话去掉括号里的例子与「相关的问题」一类尾巴，按比较用的写法归一（`topic_scope` 判范围用的同一个样子；
+    文字查找定说法时也用它，S6）。"""
+    return norm(_TAIL.sub("", _PAREN.sub("", str(topic or "")).strip()))
+
+
+def topic_index(topics: TopicTerms) -> tuple[dict[str, str], dict[str, frozenset[str]]]:
+    """(归一后的话题名 → 话题名, 归一后的说法 → 它在哪几个话题里)。"""
+    return _topic_index(topics)
+
+
+def topic_display(topic: str | None) -> str:
+    """话题原话去掉括号与尾巴、不改写法（回答里「与 X 有关」的 X）；去完为空时用原话。"""
+    raw = str(topic or "").strip()
+    return _TAIL.sub("", _PAREN.sub("", raw).strip()).strip() or raw
+
+
 def topic_scope(topic: str | None, topics: TopicTerms) -> str | None:
     """用户说的话题 → 话题本身 / 比话题小 / 组合说法 / 清单外（对照说法清单判断，不用模型填的值）。
 

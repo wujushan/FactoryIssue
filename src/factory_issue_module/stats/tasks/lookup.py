@@ -196,7 +196,8 @@ def run(data):
 
 def lk_as_list(sections, views, L, P):
     """一次给很多个问题编号（总述「按编号查单」：超过约 20 个时按清单呈现，全量导出）：按问题编号找到的单按域
-    分开列，域内按建单时间从新到旧，表格给前 `table_rows` 张；该域全部行作为明细帧（`export_<域>`）回传。"""
+    分开列，域内按建单时间从新到旧，表格给前 `table_rows` 张；该域全部行作为明细帧（`export_<域>`，同序的单 ID 在
+    `ids_<域>`）回传。"""
     limit = int(P["as_list"]["table_rows"])
     lists, frames, total = [], {}, 0
     for dom, view in views.items():
@@ -212,6 +213,9 @@ def lk_as_list(sections, views, L, P):
         lists.append({"domain": dom, "found": len(rows), "shown": min(len(rows), limit), "columns": cols,
                       "rows": rows[:limit], "ids_shown": [int(x) for x in sub["_id"].tolist()[:limit]]})
         frames["export_" + dom] = pd.DataFrame(rows, columns=cols)
+        # 与导出帧同序：编排按它把导出文件的问题描述换成全文（S6b）
+        frames["ids_" + dom] = pd.DataFrame({"_id": [int(x) for x in sub["_id"].tolist()],
+                                             "_number": [str(x) for x in sub["_number"].tolist()]})
         total += len(rows)
     return {"as_list": lists, "as_list_total": total,
             "as_list_counts": [[x["domain"], x["found"]] for x in lists], **frames}

@@ -10,7 +10,8 @@
   - `turn`：只有取过数的轮次覆盖：问句原话、执行计划（`plan` 是规整后、并过之后、直填过的计划，与对照集里
     「上一轮计划」同一形状，交给规划器；`steps` 是每步实际查了哪些域、换算出的起止日期连同原话、各域张数，
     只给执行层用：质疑重查、换图、沿用上一轮的时间）、时间。
-  - `results`：每步每域的结果单 ID 与问题编号（每域至多 `ID_CAP` 个），与 `turn` 一起写。
+  - `results`：每步每域的结果单 ID 与问题编号（每域至多 `ID_CAP` 个），与 `turn` 一起写；文字查找的步骤另记
+    找的是什么与用的说法（`texts`，S6b 加，版本号随之为 2）。
   - `charts`：本轮各段图的数据行（沙箱产出，原样），换图用。
   - `focus`：最近一张被单独说到的单（域、问题编号、单 ID），「这单」「它」用；本轮没有就留着上一张。
   - `pending_clarify`：代码追问时的计划、问话与每个选项怎么填回计划；下一轮问句与某个选项的 `query` 完全相同
@@ -41,8 +42,8 @@ from factory_issue_module.plan.timespan import Span
 
 logger = structlog.get_logger(__name__)
 
-#: 计划格式（`plan/schema.py`）或下面几个键的结构改了就加一
-VERSION = 1
+#: 计划格式（`plan/schema.py`）或下面几个键的结构改了就加一（2：`results` 加 `texts`，S6b）
+VERSION = 2
 
 TURN = "turn"
 LAST = "last"
@@ -173,6 +174,8 @@ class TurnRecord:
     steps: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: 步骤编号 → {域: {"ids", "numbers"}}
     results: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: 文字查找的步骤编号 → {"key": 找的是什么（`text/terms.py::key`）, "terms": 用的说法}（递进筛选，S6b）
+    texts: dict[str, dict[str, Any]] = field(default_factory=dict)
     charts: list[dict[str, Any]] = field(default_factory=list)
     focus: dict[str, Any] | None = None
     #: 本轮有没有真的取过数（只有取过数的轮次覆盖 `turn`）
@@ -201,7 +204,7 @@ async def write_turn(ctx: Any, query: str, plan: dict, record: TurnRecord) -> No
     """取过数的轮次：覆盖 `turn`、`results`、`charts`；有新的单独说到的单时覆盖 `focus`。"""
     await write(ctx, TURN, {"query": query, "plan": plan, "steps": record.steps,
                             "at": datetime.now().isoformat(timespec="seconds")})
-    await write(ctx, RESULTS, {"steps": _capped(record.results)})
+    await write(ctx, RESULTS, {"steps": _capped(record.results), "texts": record.texts})
     await write(ctx, CHARTS, {"items": record.charts})
     if record.focus:
         await write(ctx, FOCUS, record.focus)

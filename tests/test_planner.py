@@ -268,10 +268,11 @@ async def test_unknown_time_clarifies_without_fetching():
 
 
 async def test_skill_not_yet_wired_answers_not_ready():
-    """详情、按号查单、文字查找随 S3–S6 接上；在那之前答「暂时还答不了」，不取业务数据。"""
-    reply = plan_of(step("text_search", mode="关键词", terms=["花屏"]))
+    """临时统计随 S7 接上；在那之前答「暂时还答不了」，不取业务数据（文字查找 S6b 已接上）。"""
+    reply = plan_of(step("custom_stats", describe="按星期几统计建单数",
+                         time=[{"said": "今年", "basis": "建单", "from": "user"}]))
     h = make_harness(scopes.account_jia(), llm_replies=[reply])
-    events = await run(h, "搜一下花屏")
+    events = await run(h, "今年按星期几统计一下建单数")
     assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS] and errors.NOT_READY in _text(events)
     assert data_queries(h) == []
 

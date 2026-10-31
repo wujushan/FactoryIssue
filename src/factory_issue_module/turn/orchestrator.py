@@ -1,6 +1,6 @@
 """一轮的编排（设计 §4.2）。S1 接上第 1–7 步；S2 接上国内清单与统计的第 6、8、9 步（`turn/execute.py`），
 S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含号码直通的执行）；S5 接上工作区的写入、追问选项直填、
-质疑重查与换图；文字查找、临时统计随 S6、S7。
+质疑重查与换图；S6b 接上文字查找；临时统计随 S7。
 
 1. 权限前置（`gate.resolve`）；拿不到可用的权限判断时按「没拿到权限」答，三个域都不出数。
 2. 代码先接住的两种，都不调模型、不取数：
@@ -17,7 +17,7 @@ S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含�
    对不上、对上多个、重名时追问。
 7. 追问：计划本身是追问，或第 6 步产生了追问 → 发 `Event.clarify`，本轮结束（§4.4）；代码追问先写
    `pending_clarify`，写进去了按钮的 `query` 就是选项本身，写不进去时是问句全文。
-8–9. 执行与呈现（`turn/execute.py`）：清单、统计、单张单详情、按号查单；质疑重查（`skills/verify_previous.py`）、
+8–9. 执行与呈现（`turn/execute.py`）：清单、统计、单张单详情、按号查单、按文字找单；质疑重查（`skills/verify_previous.py`）、
    换图（`skills/rerender.py`）按工作区里上一轮的执行计划重放；其余技能先答「暂时还答不了」。
 10. 写工作区（§10）：`last` 每轮写（寒暄、能力介绍、没看懂的轮次除外）；只有取过数的轮次覆盖 `turn`、`results`、
     `charts`。
@@ -40,6 +40,7 @@ from factory_issue_module.declarations import (
     DEPT_ALIASES,
     FACTORY_REGIONS,
     LINK_SITES,
+    SEGMENTATION,
     TOPIC_TERMS,
 )
 from factory_issue_module.domains import base, shared
@@ -165,6 +166,7 @@ async def run_turn(
 
     answer = await config_files.load(ctx, ANSWER_PARAMS)
     sites = await config_files.load(ctx, LINK_SITES)
+    seg = await config_files.load(ctx, SEGMENTATION)
     results = await workspace.read(ctx, workspace.RESULTS) if previous.turn else None
     focus = await workspace.read(ctx, workspace.FOCUS) if (previous.plan or previous.turn) else None
 
@@ -175,7 +177,8 @@ async def run_turn(
                             resolver=base.Resolver(master=master, dept_aliases=dept_aliases, regions=regions,
                                                    entities=entities, today=today, query=asked, carried=carried),
                             query=asked, today=today, result=result, entities=entities, sites=sites,
-                            previous_turn=previous.turn, previous_results=results, focus=focus)
+                            previous_turn=previous.turn, previous_results=results, focus=focus,
+                            topics=topics, seg=seg)
 
     if first.get("skill") in REPLAY_SKILLS:
         async for event in _replay(ctx, query, result, first, previous, make_turn(result), results):
@@ -192,7 +195,7 @@ async def run_turn(
     spans = workspace.follow_spans(result.plan, spans, previous.turn)
 
     if not any(s.get("skill") in execute.EXECUTABLE for s in steps):
-        # 文字查找、临时统计随 S6、S7 接上
+        # 临时统计随 S7 接上
         logger.info("factory_issue_skill_not_ready", skills=[str(s.get("skill")) for s in steps])
         for event in _not_ready(access):
             yield event
