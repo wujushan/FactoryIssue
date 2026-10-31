@@ -220,6 +220,56 @@ async def test_second_group_stays_on_the_table_when_the_first_fills_it():
     assert "表格列出问题本身涉及的最近 2 张、处理中提到的 1 张" in text
 
 
+def test_topic_notes_are_read_from_the_explanations_section():
+    topics = config_files.default(TOPIC_TERMS)
+    leak = topics.notes_for(["漏电"])
+    assert len(leak) == 1 and leak[0].asks == (("漏电的问题", "只提到漏电流偏大、电池电压低、待机耗电快的单不列入。"),)
+    assert "问安全问题" in leak[0].text  # 整条（含按问法分的三种）交给判断
+    assert [n.terms for n in topics.notes_for(["批锋"])] == [("批锋", "披锋")]
+    assert topics.notes_for(["刷卡", "打印"]) == []  # 只收讲带 ＊ 说法的条目
+    # 管理员上传的清单可以没有「说明」：照常解析，只是没有判断提示
+    text = config_files.defaults.topic_terms_text().split("## 说明")[0]
+    assert config_files.parse_topic_terms(text).notes == ()
+
+
+async def test_asking_an_ambiguous_term_states_its_rule_and_judges_by_it():
+    """CN-056：问「漏电」只按漏电找；说法清单「说明」那一条交给判断，开头照写哪些单不列入。"""
+    texts = {1: {"desc": "整机待机漏电流偏大，耗电快"}, 2: {"desc": "外壳开裂"},
+             3: {"desc": "适配器漏电，有触电风险"}, 4: {"desc": ""}}
+    reply = plan(step("text_search", domains=CN, mode="话题", topic="漏电"))
+    h = harness(replies=[reply], texts=texts, extra={})
+    h.llm.routes[TERMS_MARK] = lambda m: {"terms": ["漏电"]}
+
+    def judge_by_guide(messages):
+        body = _user(messages)
+        assert any("只提到漏电流偏大" in g for g in body.get("判断说明") or [])
+        return {"results": [{"no": c["no"], "related": "触电" in c["文字"]} for c in body["候选"]]}
+
+    h.llm.routes[JUDGE_MARK] = judge_by_guide
+    events = await run(h, "国内有没有漏电的问题？")
+    text = _text(events)
+    assert "本次按这些说法找：漏电。只提到漏电流偏大、电池电压低、待机耗电快的单不列入" in text
+    table = _tables(events)[0]
+    assert dict(zip(_numbers(table), _col(table, "分组"), strict=True)) == {"ZC9901003": "可能相关"}
+    assert "找到 0 张与漏电有关的单" in text and "另有 1 张说法不同、可能相关" in text
+
+
+async def test_whole_topic_judges_by_the_notes_without_listing_them():
+    reply = plan(step("text_search", domains=CN, mode="话题", topic="安全"))
+    h = harness(replies=[reply], texts={1: {"desc": "整机漏电流偏大"}, 3: {"desc": "电池起火"}}, extra={})
+    seen: list[list[str]] = []
+
+    def judge(messages):
+        body = _user(messages)
+        seen.append(list(body.get("判断说明") or []))
+        return {"results": [{"no": c["no"], "related": False} for c in body["候选"]]}
+
+    h.llm.routes[JUDGE_MARK] = judge
+    text = _text(await run(h, "国内有没有安全问题"))
+    assert seen and any("问安全问题" in g for g in seen[0]) and any("鼓包" in g for g in seen[0])
+    assert "不列入" not in text  # 问整个话题时不逐条写
+
+
 # ---------------------------------------------------------------------------- J-P11：只返回有权的域
 
 
@@ -258,6 +308,36 @@ async def test_list_desc_is_unavailable_when_text_tables_are_denied():
     table = _tables(events)[0]
     assert set(_col(table, "问题描述")) == {"暂不可用"} and "问题描述摘要暂不可用，其他列照常" in _text(events)
     assert mart_queries(h) == []
+
+
+def _mart_renamed(rename) -> dict:
+    payload = scopes.privileges([Domain.DOMESTIC])
+    names = [item["table"] for item in payload["dataScope"] if item["table"]["name"].startswith("mart.")]
+    assert len(names) == 3
+    for table in names:
+        table["name"] = rename(table["name"])
+    return payload
+
+
+@pytest.mark.parametrize("rename", [lambda n: "pg_other." + n[len("mart."):],
+                                    lambda n: n.replace("forge_mart_factory_issue.public", "other_db.other")])
+async def test_mart_tables_match_on_the_table_name_only(rename):
+    """权限四段名：`privileges.md` 写 `mart.forge_mart_factory_issue.public.<表名>`。本助手按不带架构的表名查这几张表，
+    平台 SDK 只比四段名的最后几段（段数同查询的表名，这里就是表名一段），实例段、库、架构写成别的值文字查找也照常
+    （前置判断与取数两处，data 0.3.2 `_select_table_path`）。哪天升级 SDK 后这条失败，说明前几段开始参与匹配，要与
+    权限平台对齐写法。"""
+    reply = plan(step("text_search", domains=CN, mode="关键词", terms=["起火"]))
+    h = harness(_mart_renamed(rename), replies=[reply])
+    events = await run(h, "搜一下国内描述里有起火的单")
+    assert _numbers(_tables(events)[0]) == ["ZC9901003"]
+    assert "暂不可用" not in _text(events)
+
+
+async def test_mart_table_name_itself_must_match():
+    reply = plan(step("text_search", domains=CN, mode="关键词", terms=["起火"]))
+    h = harness(_mart_renamed(lambda n: n + "_x"), replies=[reply])
+    text = _text(await run(h, "搜一下国内描述里有起火的单"))
+    assert "国内的文字查找暂不可用，未计入" in text and mart_queries(h) == []
 
 
 async def test_semantic_unavailable_keeps_keyword_hits():

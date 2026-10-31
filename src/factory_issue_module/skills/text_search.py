@@ -429,7 +429,8 @@ async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mappin
     flags: dict[str, list[bool | None]] = {}
     if not sim:
         flags = await judge.judge(getattr(T.ctx, "llm", None), tp.description,
-                                  {dom: [x[1] for x in items] for dom, items in lists.items()}, judge_max)
+                                  {dom: [x[1] for x in items] for dom, items in lists.items()}, judge_max,
+                                  tp.guides)
     frames: dict[str, pd.DataFrame] = {}
     for dom, items in lists.items():
         related = flags.get(dom) or [True] * len(items)
@@ -460,7 +461,8 @@ def _present(run: Any, T: Any, tp: TermPlan, res: Mapping[str, Any], segs: Seque
         if tp.mode == "类似问题":
             tail = f"合计 {total_third} 张相近的问题"
         lines.append(tail)
-    extra = [x for x in (used_text(tp), adjust_hint(tp)) if x]
+    # 用户问的正是说法清单「说明」里点名的那种问法（问「漏电的问题」）：照写那一条怎么判（总述「涉及某个话题怎么找」）
+    extra = [x for x in (used_text(tp), tp.asked_rule, adjust_hint(tp)) if x]
     events.append(Event.delta("；\n".join(lines) + "。" + ("\n" + "。".join(extra) + "。" if extra else "")))
     for seg in segs:
         dom = X._BY_LABEL.get(str(seg.get("domain")), Domain.DOMESTIC)

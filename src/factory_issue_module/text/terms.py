@@ -79,6 +79,10 @@ class TermPlan:
     notes: list[str] = field(default_factory=list)
     #: 用户自己给的词（关键词、点名字段里引号给的词）：不套说法清单、不按意思补
     user_words: bool = False
+    #: 说法清单「说明」里讲本次带 ＊ 说法的条目：判断「可能相关」时交给模型（`topic_terms.md`「怎么读」）
+    guides: list[str] = field(default_factory=list)
+    #: 用户问的就是「说明」里点名的那种问法（问「漏电的问题」）时那一条怎么判：回答在所用说法之后照写
+    asked_rule: str = ""
 
 
 def term(text: str, amb: bool = False) -> dict[str, Any]:
@@ -321,6 +325,25 @@ NEEDS_PREVIOUS = "接不上上一轮"
 
 async def plan(llm: Any, step: dict, topics: TopicTerms, seg: Segmentation) -> TermPlan | base.Ask:
     """一步文字查找的找法。要追问时（现象描述指着上文）返回 `Ask`。"""
+    got = await _plan(llm, step, topics, seg)
+    if isinstance(got, TermPlan):
+        p = step.get("params") or {}
+        _attach_guides(got, topics, _said(p.get("topic")) or _said(p.get("approach")))
+    return got
+
+
+def _attach_guides(tp: TermPlan, topics: TopicTerms, said: str) -> None:
+    """说法清单「说明」里讲本次带 ＊ 说法的条目交给判断；用户问的正是其中「问『X』：…」那种问法时，记下那一条。"""
+    if tp.user_words or tp.mode == "类似问题":
+        return
+    notes = topics.notes_for(t["raw"] for p in tp.probes for t in p["terms"] if t.get("amb"))
+    tp.guides = [n.text for n in notes]
+    core = normalize.topic_core(said)
+    rule = next((r for n in notes for asked, r in n.asks if core and normalize.topic_core(asked) == core), "")
+    tp.asked_rule = rule.rstrip("。")
+
+
+async def _plan(llm: Any, step: dict, topics: TopicTerms, seg: Segmentation) -> TermPlan | base.Ask:
     p = step.get("params") or {}
     mode = str(p.get("mode") or "")
     ask = str(p.get("ask") or "现象")
