@@ -17,6 +17,7 @@ from factory_issue_module.declarations import (
     ERP,
     INFO,
     JOINS,
+    MART,
     Domain,
 )
 from factory_issue_module.module import FactoryIssueModule
@@ -113,9 +114,9 @@ def _field_rows(text: str) -> int:
 def test_every_table_doc_parses_with_all_rows():
     files = sorted((LANDED / "db_description").glob("db_*.md"))
     docs = landed.table_docs()
-    assert len(docs) == len(files) == 32
+    assert len(docs) == len(files) == 35  # 32 张原始表 + 产物库 3 个表族文件（S6）
     for doc in docs.values():
-        assert doc.source in {INFO, ERP}
+        assert doc.source in {INFO, ERP, MART}
         assert len(doc.columns) == _field_rows(_raw(doc.file)), doc.file
     main = docs[Domain.DOMESTIC.master_table]
     assert main.columns["ID"] is None  # 内部字段
@@ -123,15 +124,35 @@ def test_every_table_doc_parses_with_all_rows():
     assert landed.display_name("CoreINFO.dbo.ZCTracking_ProblemList", "AddDate") == "建单时间"
 
 
+def _family(table: str) -> set[str]:
+    """产物库的表族文件写的是国内那张（`public.domestic_…`）；`data_sources` 里三域各一张、不带 `public.`。"""
+    tail = table.removeprefix("public.")
+    return {tail.replace("domestic_", f"{d.value}_", 1) for d in DOMAINS}
+
+
 def test_declared_tables_match_db_description_sources():
     docs = landed.table_docs()
     by_source: dict[str, set[str]] = {}
     for doc in docs.values():
-        by_source.setdefault(doc.source, set()).add(doc.table)
+        tables = _family(doc.table) if doc.source == MART else {doc.table}
+        by_source.setdefault(doc.source, set()).update(tables)
     declared = {ref.alias: set(ref.tables) for ref in DATA_SOURCES}
     assert declared == by_source
-    assert len(declared[INFO]) == 31 and len(declared[ERP]) == 1
-    assert MANIFEST.source_aliases == {INFO, ERP}  # S6 之前不声明 mart
+    assert len(declared[INFO]) == 31 and len(declared[ERP]) == 1 and len(declared[MART]) == 9
+    assert declared[MART] == {t for d in DOMAINS for t in d.mart_tables}
+    assert MANIFEST.source_aliases == {INFO, ERP, MART}
+
+
+def test_mart_text_columns_and_seg_fields_match_source():
+    cols = _rows_under(landed.MART_TEXT_DOC, "## 成员差异：各域的叙述列", "| 字段 |")
+    parsed = landed.text_columns()
+    assert [c.name for c in parsed] == [r[0] for r in cols]
+    assert len(parsed) == 25
+    assert {c.name: set(c.sources) for c in parsed}["f_sqe"] == {"巴西"}
+    fields = _rows_under(landed.MART_SEG_DOC, "## 字段代号", "| 代号 |")
+    assert list(landed.seg_fields()) == [r[0] for r in fields]
+    assert list(landed.seg_fields()) == ["phen", "desc", "reason", "improve", "measure", "prev", "sqe", "step"]
+    assert landed.seg_fields()["phen"]["海外"] == "已选问题现象"
 
 
 def _privileges_listed_tables() -> set[str]:
@@ -153,14 +174,15 @@ def _privileges_listed_tables() -> set[str]:
 
 
 def test_declared_tables_match_privileges_list():
-    """`privileges.md` 列的 41 张去掉 mart 9 张、去掉实例段，即 `data_sources` 声明的 32 张。"""
+    """`privileges.md` 列的 41 张去掉实例段，即 `data_sources` 声明的 41 张（原始表 32 张 + mart 9 张）。"""
     listed = _privileges_listed_tables()
     assert len(listed) == 41
     raw = {n.split(".", 1)[1] for n in listed if not n.startswith("mart.")}
-    declared = {t for ref in DATA_SOURCES for t in ref.tables}
+    declared = {t for ref in DATA_SOURCES if ref.alias != MART for t in ref.tables}
     assert raw == declared
     mart = {n.rsplit(".", 1)[1] for n in listed if n.startswith("mart.")}
     assert mart == {t for d in DOMAINS for t in d.mart_tables}
+    assert mart == set(next(ref.tables for ref in DATA_SOURCES if ref.alias == MART))
 
 
 def test_joins_cover_every_sub_table_inner_only():
@@ -171,9 +193,28 @@ def test_joins_cover_every_sub_table_inner_only():
 
 
 def test_manifest_field_mappings_is_table_level_only():
+    """mart 别名不填 `field_mappings`（G2「权限承载列清单」：无）。"""
     assert MANIFEST.field_mappings == {INFO: {"info.dbo.tbTask": {"ftable": "ftable"}}}
     assert MANIFEST.require_privileges is True
-    assert MANIFEST.vectorize == []
+
+
+def test_vectorize_is_g2_three_specs_verbatim():
+    """G2「向量表」的 3 条：来源是按意思找的段表，`metadata_columns` 建表后不能再改。"""
+    got = [(v.source, v.vector_table, v.origin_table, v.id_column, v.text_columns, v.default_cron,
+            v.metadata_columns) for v in MANIFEST.vectorize]
+    assert got == [
+        (MART, f"{d}_issue_vec", f"{d}_issue_vseg", "seg_id", ["seg_text"], "10,40 * * * *", ["issue_id", "field"])
+        for d in ("domestic", "brazil", "overseas")
+    ]
+    mart_tables = next(ref.tables for ref in DATA_SOURCES if ref.alias == MART)
+    assert not any(t.endswith("_vseg") for t in mart_tables)  # 按意思找的段表不声明、不读（G2）
+
+
+def test_jobs_are_the_two_governance_tasks():
+    jobs = FactoryIssueModule().jobs()
+    assert [(j.spec.name, j.spec.default_cron) for j in jobs] == [
+        ("sync_issue_text", "*/30 * * * *"), ("rebuild_issue_text", "30 2 * * *"),
+    ]
 
 
 @pytest.mark.parametrize("bad", ["| 场景 | 能回答什么 |\n|---|---|\n| a | b |", "没有表"])

@@ -353,6 +353,52 @@ def display_name(table: str, column: str) -> str | None:
     return table_docs()[table].columns[column]
 
 
+# ---------------------------------------------------------------- mart 的文字表与分段表（S6）
+
+MART_TEXT_DOC = "db_description/db_forge_mart_factory_issue_public_domestic_issue_text.md"
+MART_SEG_DOC = "db_description/db_forge_mart_factory_issue_public_domestic_issue_seg.md"
+DOMAIN_LABELS = ("国内", "巴西", "海外")
+
+
+@dataclass(frozen=True)
+class MartColumn:
+    """文字表一个叙述列：列名、显示名、各域的来源说明（没有该列的域不在 `sources` 里）。"""
+
+    name: str
+    display: str
+    sources: dict[str, str]
+
+
+@cache
+def text_columns() -> tuple[MartColumn, ...]:
+    """文字表表族文件「成员差异：各域的叙述列」：治理任务建表与核对列、查询期按列找都照它。"""
+    where = f"{MART_TEXT_DOC}「成员差异」"
+    body = section(read(MART_TEXT_DOC), "## 成员差异：各域的叙述列", where=where)
+    table = table_with_header(body, ("字段", "用户可见显示名", *DOMAIN_LABELS), where=where)
+    out = []
+    for name, display, *cells in table.rows:
+        sources = {d: c for d, c in zip(DOMAIN_LABELS, cells, strict=True) if c != _EMPTY_CELL}
+        if not name.startswith("f_") or not display or not sources:
+            raise LandedParseError(f"{where}「{name}」一行要以 f_ 开头、有显示名、至少一个域有来源")
+        out.append(MartColumn(name=name, display=display, sources=sources))
+    return tuple(out)
+
+
+@cache
+def seg_fields() -> dict[str, dict[str, str]]:
+    """分段表表族文件「字段代号」：代号 → {域名: 栏目名}（没有该栏目的域不在里面）。"""
+    where = f"{MART_SEG_DOC}「字段代号」"
+    body = section(read(MART_SEG_DOC), "## 字段代号", where=where)
+    table = table_with_header(body, ("代号", *DOMAIN_LABELS, "取自"), where=where)
+    out: dict[str, dict[str, str]] = {}
+    for code, *cells, _from in table.rows:
+        names = {d: c for d, c in zip(DOMAIN_LABELS, cells, strict=True) if c != _EMPTY_CELL}
+        if not re.fullmatch(r"[a-z]+", code) or not names:
+            raise LandedParseError(f"{where}「{code}」一行的代号要是小写字母，且至少一个域有这个栏目")
+        out[code] = names
+    return out
+
+
 def _parse_all() -> None:
     """导入时把各张表都解析一遍：任一张对不上，模块加载即失败（设计 §2.3）。"""
     scenes()
@@ -362,6 +408,8 @@ def _parse_all() -> None:
     domains()
     problem_types()
     table_docs()
+    text_columns()
+    seg_fields()
 
 
 _parse_all()

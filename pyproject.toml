@@ -110,6 +110,8 @@ dev = [
     "pytest-asyncio>=0.25",
     "httpx>=0.28",
     "ruff>=0.9",
+    # pglast：单测断言治理任务写进 mart 的 SQL 能被 PostgreSQL 的解析器解析（设计 §15；本机 Windows 有 wheel）。
+    "pglast>=8.7",
 ]
 
 [build-system]

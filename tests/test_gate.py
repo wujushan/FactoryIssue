@@ -32,7 +32,7 @@ def test_account_jia_has_25_tables_and_only_domestic():
     assert access is not None
     assert access.domains == {Domain.DOMESTIC}
     assert access.car is False
-    assert access.text_search == frozenset()  # S6 之前没声明 mart
+    assert access.text_search == {Domain.DOMESTIC}  # 国内的三张 mart 表随国内给了「允许」
     assert access.denied() == (Domain.BRAZIL, Domain.OVERSEAS)
 
 
@@ -63,6 +63,17 @@ def test_jp10_master_denied_sub_table_allowed_still_denies_domain():
     access = gate.resolve(h.ctx)
     assert access is not None and access.domains == {Domain.BRAZIL}
     assert h.queries == []
+
+
+def test_text_search_needs_all_three_mart_tables():
+    """域闸门（`privileges.md`）：主表有权而本域 mart 表漏配一张，该域文字查找不可用，其余查询照常。"""
+    access = gate.resolve(make_harness(scopes.privileges(ALL, mart=False)).ctx)
+    assert access is not None and access.domains == ALL and access.text_search == frozenset()
+    extra = [scopes.outer(t) for t in Domain.BRAZIL.mart_tables[:2]]  # 巴西漏了向量表
+    access = gate.resolve(make_harness(scopes.privileges([Domain.BRAZIL], mart=False, extra=extra)).ctx)
+    assert access is not None and access.domains == {Domain.BRAZIL} and access.text_search == frozenset()
+    access = gate.resolve(make_harness(scopes.privileges(ALL)).ctx)
+    assert access is not None and access.text_search == ALL
 
 
 def test_car_needs_domestic():
@@ -213,8 +224,12 @@ async def test_blank_question_with_a_domain_gets_buttons():
     assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS]
     assert _text(events) == f"{errors.NOT_UNDERSTOOD}。"
     recs = events[1].data["recommendations"]
-    assert [r["name"] for r in recs] == ["问题单清单", "汇总统计", "停线查询"]
+    assert [r["name"] for r in recs] == ["问题单清单", "汇总统计", "类似问题"]
     assert h.queries == [] and h.llm.calls == [] and h.stats.calls == []
+    # 本域文字查找表没给「允许」：「类似问题」换成「停线查询」（§9.4）
+    h = make_harness(scopes.privileges([Domain.DOMESTIC], mart=False))
+    recs = (await run(h, "？？？"))[1].data["recommendations"]
+    assert [r["name"] for r in recs] == ["问题单清单", "汇总统计", "停线查询"]
 
 
 async def test_blank_question_still_needs_privileges_first():
