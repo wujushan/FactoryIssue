@@ -7,7 +7,7 @@
 | 类型 | 前端渲染与事件协议文档不一致（缺陷）。不阻塞上线，影响所有带按钮的回答 |
 | 涉及版本 | `paxsz-forge-core` 0.3.7、`paxsz-forge-data` 0.3.2、`paxsz-forge-platform` 0.3.7 |
 | 涉及代码 | INFO 网页前端的按钮组件（渲染 `clarify` / `suggestions` 事件的 `recommendations`，以及历史回读时解析 `<intent_routing_clarify>` 数据块，平台代码注释里称 `parseStoredAnswer`）；平台侧只作对照：`forge_core/events.py` 的 `Event.clarify`、`Event.suggestions`、`Event.to_sse`，`forge_platform/gateway/pipeline.py` 的 `render_clarify_answer`、`render_suggestions_answer`，`forge_platform/router.py` 的 `QwenClarifyPlanner`、`_fallback_recommendations`，`forge_platform/suggest.py` 的 `QwenSuggestionPlanner` |
-| 验证方式 | INFO 网页前端实际使用中看到的现象；平台下发与落库的数据用本地脚本复现（不连库、不调真模型，脚本与输出见文末） |
+| 验证方式 | INFO 网页前端实际使用中看到的现象；平台下发与落库的数据用本地脚本复现（不连库、不调真模型，脚本与输出见文末）；业务仓把 `query` 改短后发包，在 INFO 网页前端上复核（见「业务仓的临时做法」末条） |
 | 期望答复 | 是否按下文方案 1 改 INFO 网页前端（按钮显示 `label`），由哪一方改、预计什么时候上线；改不了的话是否按方案 2 改开发者文档 |
 
 ## 一句话
@@ -66,6 +66,7 @@
 - 本助手代码给的追问（名称对上多个、取值对不上、认不出的号、时间说法认不出），按钮的 `query` 就是选项本身（「惠州百富」「是」「订单号」「近 30 天」）。问句全文存在会话工作区里，点了之后直接把选项填回上一轮的计划，不重新理解问题；会话工作区写不进去时退回发问句全文。
 - 模型写的追问、缺时间的追问仍发问句全文（原因见「业务场景」最后一条），在前端改好前会显示成长句。
 - 本助手的按钮 `label` 一直按文档写（不超过 15 字）。前端改好后，上面几条改短的 `query` 也不恢复：点了之后它就是用户那条消息，短的看着更自然。
+- 2026-10-30 发包后在 INFO 网页前端上复核：改短后的按钮显示正常。这只说明临时做法有效，前端仍需按「期望」改：仍发问句全文的那几类按钮不受临时做法影响。
 
 ## 复现
 
