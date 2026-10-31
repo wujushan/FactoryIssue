@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,11 +61,30 @@ class Topic:
 
 
 @dataclass(frozen=True)
+class TermNote:
+    """「## 说明」里讲某个带 ＊ 说法的一条（`topic_terms.md`「怎么读」）：判断「可能相关」时整条交给模型；其中
+    「问『X』：…」那几种（用户问的就是这个说法时怎么判），回答里照写。"""
+
+    #: 这一条讲的带 ＊ 的说法（清单里有的）
+    terms: tuple[str, ...]
+    #: 整条原文，含按问法分的几种，每种一行
+    text: str
+    #: (问的说法原文「漏电的问题」, 这时怎么判)
+    asks: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
 class TopicTerms:
     topics: tuple[Topic, ...]
+    notes: tuple[TermNote, ...] = ()
 
     def get(self, name: str) -> Topic | None:
         return next((t for t in self.topics if t.name == name), None)
+
+    def notes_for(self, terms: Iterable[str]) -> list[TermNote]:
+        """讲到这几个说法的「说明」条目，按文件里的先后。"""
+        keys = {compact(t) for t in terms}
+        return [n for n in self.notes if keys & {compact(t) for t in n.terms}]
 
 
 @dataclass(frozen=True)
@@ -192,7 +211,35 @@ def parse_topic_terms(text: str) -> TopicTerms:
         )
     if not topics:
         raise ConfigFormatError("清单里没有话题")
-    return TopicTerms(topics=tuple(topics))
+    return TopicTerms(topics=tuple(topics), notes=_topic_notes(text, topics))
+
+
+_QUOTED = re.compile(r"「([^「」]+)」")
+_ASK = re.compile(r"^问「([^「」]+)」[：:]\s*(.+)$")
+
+
+def _topic_notes(text: str, topics: list[Topic]) -> tuple[TermNote, ...]:
+    """「## 说明」里讲带 ＊ 说法的条目。这一节可以没有；条目写法不合这里的约定时只是不用它，不报错（它是给助手的
+    判断提示，不影响按词找）。"""
+    try:
+        body = landed.section(text, "## 说明", where="文件里")
+    except landed.LandedParseError:
+        return ()
+    ambiguous = {compact(t.text): t.text for tp in topics for t in tp.terms if t.ambiguous}
+    items: list[list[str]] = []
+    for line in body.splitlines():
+        if line.startswith("- "):
+            items.append([line[2:].strip()])
+        elif line.lstrip().startswith("- ") and items and line[: len(line) - len(line.lstrip())]:
+            items[-1].append(line.lstrip()[2:].strip())
+    out: list[TermNote] = []
+    for head, *subs in items:
+        terms = [ambiguous[compact(q)] for q in _QUOTED.findall(head) if compact(q) in ambiguous]
+        if not terms:
+            continue
+        asks = tuple((m.group(1), m.group(2).strip()) for m in (_ASK.match(s) for s in subs) if m)
+        out.append(TermNote(terms=tuple(dict.fromkeys(terms)), text="\n".join([head, *subs]), asks=asks))
+    return tuple(out)
 
 
 def _no_duplicates(where: str, kind: str, words: list[str]) -> None:

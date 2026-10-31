@@ -224,6 +224,21 @@ RATE = rate([_CN])
 COST = "费用：涉及费用按费用明细合计大于 0 认定，不看「是否涉及费用」标记；美元、雷亚尔分别合计，不换算"
 DEBIT = "扣款：最新一条处理过程上的扣款费用（美元），单独列出，未计入费用"
 
+#: 按文字找单的回答都附这一句（总述「命中后带回什么与时效」）
+TEXT_TIMELY = "最近约半小时内新建或修改的单可能尚未纳入"
+
+
+def text_search(method: str, words: str, where: str, completeness: str) -> str:
+    """统计口径「文字查找」一项（总述「统计口径说明」）：哪种找法、按哪些词或说法、在哪些文字里找、结果是否完整，
+    附时效一句。"""
+    parts = [method]
+    if words:
+        parts.append(words)
+    if where:
+        parts.append(f"在{where}里找")
+    parts.append(completeness)
+    return "文字查找：" + "，".join(parts) + "；" + TEXT_TIMELY
+
 
 def cost_issues(n: int) -> str:
     return f"涉及费用的单 {n} 张（按费用明细认定）"

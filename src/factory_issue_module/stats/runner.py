@@ -31,9 +31,10 @@ LIB_FILES = (
     "stats/lib/domains.py",
 )
 TASK_FILES = {"list": "stats/tasks/list.py", "aggregate": "stats/tasks/aggregate.py", "detail": "stats/tasks/detail.py",
-              "lookup": "stats/tasks/lookup.py", "verify": "stats/tasks/verify.py"}
-#: 只有某个任务要的公共库（详情的各块只在详情脚本里拼，清单与统计的脚本不带它）
-TASK_LIBS = {"detail": ("stats/lib/detail.py",)}
+              "lookup": "stats/tasks/lookup.py", "verify": "stats/tasks/verify.py",
+              "keyword_match": "stats/tasks/keyword_match.py", "text_merge": "stats/tasks/text_merge.py"}
+#: 只有某个任务要的公共库（详情的各块只在详情脚本里拼，清单与统计的脚本不带它；按词匹配只拼进按词一路）
+TASK_LIBS = {"detail": ("stats/lib/detail.py",), "keyword_match": ("stats/lib/textmatch.py",)}
 _PLACEHOLDER = "PARAMS = {}"
 _INTERNAL = re.compile(r"^(from\s+(__future__|factory_issue_module)\b|import\s+factory_issue_module\b)")
 

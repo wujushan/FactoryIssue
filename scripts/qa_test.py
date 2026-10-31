@@ -88,7 +88,8 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
     每条失败信息都带上**实际值**：CI 日志里只说「断言失败」等于没说。
     `clarify: true` 表示本轮就该追问。`columns_present` / `cell_contains` /
     `forbidden_columns` 看全部表，不锚定第几张、列顺序。`suggestions: true`
-    只检查按钮形状，不检查个数。
+    只检查按钮形状，不检查个数。平台把按钮放在 `suggestions.recommendations`，
+    也认直接给的按钮列表。
     """
     expect = case.get("expect") or {}
     failures: list[str] = []
@@ -183,9 +184,10 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
         failures.append(f"答案仅 {len(answer)} 字，预期至少 {least_len} 字（数据之外要给分析）")
 
     if expect.get("suggestions") is True:
-        items = body.get("suggestions")
+        raw = body.get("suggestions")
+        items = raw.get("recommendations") if isinstance(raw, dict) else raw
         if not isinstance(items, list) or not items:
-            failures.append(f"没有可点的建议按钮（实际：{items!r}）")
+            failures.append(f"没有可点的建议按钮（实际：{raw!r}）")
         else:
             for index, item in enumerate(items):
                 if not isinstance(item, dict):

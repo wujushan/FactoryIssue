@@ -20,7 +20,10 @@
 - 导出（S5，§9.3）：用户明说导出、或某域超过 `export_threshold` 张时，沙箱把该域全部行作为明细帧回传，每域一页
   写成一个文件，链接放在统计口径之后。
 - 答后按钮（S5，§9.5，`present/suggestions.py`）：其他理解在前，放宽与换时间范围其次，模板按钮最后，至多 4 个。
-- 其他技能随各自那一片，在那之前这一段答「暂时还答不了」。
+- 文字查找（S6b，`skills/text_search.py`）：条件照清单对库，执行交 `text_search.run_step`；清单、按号查单的问题描述
+  一列在文字查找表可用的域换成摘要、导出给全文（`present/summaries.py`，§9.2）。递进筛选里照抄上一轮的文字查找时
+  用存下的单 ID（`_use_stored_texts`）。
+- 临时统计随 S7，在那之前这一段答「暂时还答不了」。
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import dataclasses
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
@@ -47,18 +50,22 @@ from factory_issue_module.domains.shared import MasterData
 from factory_issue_module.plan import clarify, names, normalize, schema, timespan
 from factory_issue_module.plan.planner import PlanResult
 from factory_issue_module.plan.timespan import Span
+from factory_issue_module.config.files import Segmentation, TopicTerms
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import charts, columns, export, narrative, suggestions, tables
-from factory_issue_module.skills import aggregate, issue_detail, list_issues, lookup_numbers
+from factory_issue_module.present import charts, columns, export, narrative, suggestions, summaries, tables
+from factory_issue_module.skills import aggregate, issue_detail, list_issues, lookup_numbers, text_search
 from factory_issue_module.stats import runner
+from factory_issue_module.text import terms as text_terms
 from factory_issue_module.turn import errors, greeting, workspace
 from factory_issue_module.turn.gate import DomainAccess
 
 logger = structlog.get_logger(__name__)
 
-EXECUTABLE = ("list_issues", "aggregate", "issue_detail", "lookup_numbers")
-#: 按条件取数的两种（第 6 步对库、`run_step`）
+EXECUTABLE = ("list_issues", "aggregate", "issue_detail", "lookup_numbers", "text_search")
+#: 按条件取数的两种（`run_step`；放宽选项预查张数只跑这两种）
 CONDITIONAL = ("list_issues", "aggregate")
+#: 第 6 步按条件对库的几种（文字查找的条件与清单同一套，S6b）
+RESOLVED = (*CONDITIONAL, "text_search")
 #: 几步详情只问这几项（或没说要看什么）时并成一步按号查单
 STATUS_ASPECTS = ("当前状态", "当前责任人", "概况", "跟进人")
 ADAPTERS: dict[Domain, Any] = {Domain.DOMESTIC: domestic, Domain.BRAZIL: brazil, Domain.OVERSEAS: overseas}
@@ -93,6 +100,9 @@ class Turn:
     previous_turn: Mapping[str, Any] | None = None
     previous_results: Mapping[str, Any] | None = None
     focus: Mapping[str, Any] | None = None
+    #: 文字查找的说法清单与比对范围（模块配置 `topic_terms.md`、`segmentation.toml`，编排每轮读一次）；None 时用内置默认
+    topics: TopicTerms | None = None
+    seg: Segmentation | None = None
 
 
 @dataclass
@@ -112,8 +122,10 @@ class StepRun:
     #: 第 5 条前半：这一步详情并进了前一步的清单（不单独成段）；清单要加「原因与措施」一列
     merged: bool = False
     add_reasons: bool = False
-    #: 递进筛选：这一步按号查单就是上一轮那次，只给后一步提供范围，直接用工作区存下的单 ID（{域: {ids, numbers}}）
+    #: 递进筛选：这一步按号查单（或文字查找）就是上一轮那次，只给后一步提供范围，直接用工作区存下的单 ID
+    #: （{域: {ids, numbers}}）；文字查找另带上一轮用的说法（再往下一轮还能接着用）
     stored: dict[str, Any] | None = None
+    stored_terms: list[str] | None = None
 
 
 def _asked(step: dict) -> list[Domain]:
@@ -147,8 +159,11 @@ def _domain_needs(run: StepRun, d: Domain, got: DomainStep, failed: set[str]) ->
     """
     A = ADAPTERS[d]
     blind = _blind(d, failed)
-    if run.skill == "list_issues":
-        keys, _missing = list_issues.columns_for(run.step)
+    if run.skill in ("list_issues", "text_search"):
+        if run.skill == "text_search":  # 表格的列（问题编号、问题描述，或用户点名的列）
+            keys = [k for k in text_search.table_keys(run.step, False)[0] if not k.startswith("_")]
+        else:
+            keys, _missing = list_issues.columns_for(run.step)
         dkeys, _absent = list_issues.domain_keys(keys, d, A.KEY_ALIAS)
         got.needs |= list_issues.needs(dkeys, run.step, A.COLUMN_NEEDS, A.SORT_NEEDS)
         got.unavailable = got.unavailable or bool(blind & set(dkeys))
@@ -305,6 +320,63 @@ def _use_stored_lookups(runs: Sequence[StepRun], T: Turn) -> None:
             logger.info("factory_issue_within_stored", skill="lookup_numbers")
 
 
+def _scoped(runs: Sequence[StepRun]) -> set[str]:
+    """被后一步 `within` 引用的步骤编号。"""
+    out: set[str] = set()
+    for r in runs:
+        within = schema.unwrap_ref((r.step.get("params") or {}).get("within"))
+        if schema.is_ref(within):
+            out.add(str(within["ref"]).partition(".")[0])
+    return out
+
+
+def _previous_texts(T: Turn) -> dict[str, dict[str, Any]]:
+    """上一轮的文字查找：找的是什么（`text/terms.py::key`）→ {issues: 存下的单 ID, terms: 用的说法}。某域存满
+    `ID_CAP` 张的不算（存下的不全）。"""
+    results = T.previous_results or {}
+    texts = results.get("texts") if isinstance(results.get("texts"), dict) else {}
+    steps = results.get("steps") if isinstance(results.get("steps"), dict) else {}
+    out: dict[str, dict[str, Any]] = {}
+    for sid, info in texts.items():
+        stored = steps.get(str(sid))
+        if not isinstance(info, dict) or not info.get("key") or not isinstance(stored, dict):
+            continue
+        if any(len((v or {}).get("ids") or []) >= workspace.ID_CAP for v in stored.values() if isinstance(v, dict)):
+            continue
+        out[str(info["key"])] = {"issues": stored, "terms": list(info.get("terms") or [])}
+    return out
+
+
+def _use_stored_texts(runs: Sequence[StepRun], T: Turn) -> None:
+    """递进筛选的文字查找一半（§10）：后一步在一步文字查找的结果里筛，那一步找的东西（找法、说法、栏目、条件原话）
+    与上一轮的某一步文字查找相同、域也都在上一轮查过的域里：直接用存下的单 ID，不重找（重跑第三组判断既慢又不
+    确定）、不单独成段。存下的读不到就照常找。"""
+    previous = _previous_texts(T)
+    if not previous:
+        return
+    scoped = _scoped(runs)
+    for r in runs:
+        if r.skill != "text_search" or r.sid not in scoped or r.deferred:
+            continue
+        got = previous.get(text_terms.key(r.step))
+        if got is None or not {d.label for d in r.domains} <= set(got["issues"]):
+            continue
+        r.stored, r.stored_terms, r.merged = got["issues"], got["terms"], True
+        logger.info("factory_issue_within_stored", skill="text_search")
+
+
+def stored_out(run: StepRun) -> StepOut:
+    """递进筛选里直接用存下的单 ID 的那一步：只给后一步提供范围，不取数、不成段。"""
+    stored = run.stored or {}
+    out = StepOut(ok=True)
+    out.refs = {f"{run.sid}.issues": stored}
+    out.found_any = any(isinstance(v, dict) and v.get("ids") for v in stored.values())
+    out.domains = [str(d) for d in stored]
+    if run.skill == "text_search":
+        out.extra = {"text": {"key": text_terms.key(run.step), "terms": list(run.stored_terms or [])}}
+    return out
+
+
 def prepare(plan: dict, spans: Mapping[str, list[Span]], T: Turn) -> list[StepRun] | Ask:
     """第 6 步：每步的域、名字对库、认号；对不上、认不出就追问，本轮不取数。"""
     runs: list[StepRun] = []
@@ -313,7 +385,7 @@ def prepare(plan: dict, spans: Mapping[str, list[Span]], T: Turn) -> list[StepRu
         run = StepRun(step=step, sid=str(step.get("id")), skill=str(step.get("skill")),
                       domains=[d for d in asked if T.access.can(d)], denied=[d for d in asked if not T.access.can(d)],
                       spans=spans.get(str(step.get("id")), []))
-        if run.skill in CONDITIONAL:
+        if run.skill in RESOLVED:
             run.deferred = _uses_refs(step)
             if not run.deferred:
                 ask = _resolve(run, T, {})
@@ -338,6 +410,7 @@ def prepare(plan: dict, spans: Mapping[str, list[Span]], T: Turn) -> list[StepRu
         runs.append(run)
     _fold_reasons(runs)
     _use_stored_lookups(runs, T)
+    _use_stored_texts(runs, T)
     return runs
 
 
@@ -373,6 +446,10 @@ class StepOut:
     #: 清单：表格没列全、已导出（模板按钮「导出全部」看它）
     truncated: bool = False
     exported: bool = False
+    #: 要另记进工作区的（文字查找：{"text": {"key": 找的是什么, "terms": 用的说法, "judged": 有没有模型判断的一组}}）
+    extra: dict[str, Any] = field(default_factory=dict)
+    #: 这一步自己的可点选项（文字查找的最小版按钮），排在模板按钮的位置
+    buttons: list[dict[str, str]] = field(default_factory=list)
 
 
 def _time_text(run: StepRun) -> str | None:
@@ -435,12 +512,20 @@ async def _frames(run: StepRun, T: Turn) -> tuple[dict[str, pd.DataFrame], list[
     return frames, denied, notes, fetched
 
 
-def _sandbox_params(run: StepRun, executed: Sequence[Domain], failed: set[str]) -> dict[str, Any]:
+def desc_placeholder(d: Domain, text_ok: Iterable[Domain]) -> str:
+    """沙箱里问题描述一列先写什么：本域文字查找表可用时留空，呈现前换成摘要（`present/summaries.py`）；不可用时
+    写「暂不可用」（§9.2）。"""
+    return "" if d in set(text_ok) else columns.DESC_UNAVAILABLE
+
+
+def _sandbox_params(run: StepRun, executed: Sequence[Domain], failed: set[str],
+                    text_ok: Iterable[Domain] = frozenset()) -> dict[str, Any]:
+    ok = set(text_ok)
     return {"domains": [d.label for d in executed],
             # 靠没取到的主数据才写得出来的列：清单的分析事实不按它们分（否则会读成「加工厂全部未填」）
             "blind": {d.label: sorted(_blind(d, failed)) for d in executed},
             "enums": {d.label: ADAPTERS[d].enum_params() for d in executed},
-            "desc": {d.label: columns.DESC_UNAVAILABLE for d in executed},
+            "desc": {d.label: desc_placeholder(d, ok) for d in executed},
             "names": {d.label: columns.view_columns(d) for d in executed},
             "traits": {d.label: ADAPTERS[d].TRAITS for d in executed},
             "cols": aggregate.COLS,
@@ -609,7 +694,7 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
             out.events.append(Event.delta("。".join(dict.fromkeys(head)) + "。"))
         out.ok = (bool(label_denied) or bool(excluded)) and not problems
         return out
-    P = _sandbox_params(run, executed, T.master.failed)
+    P = _sandbox_params(run, executed, T.master.failed, T.access.text_search)
     time_text = _time_text(run)
     keys_by: dict[str, list[str]] = {}
     dims_by: dict[str, list[dict[str, Any]]] = {}
@@ -664,24 +749,29 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
                 _add_caliber(C, run, seg, _seg_dims(seg, all_dims) if run.skill != "list_issues" else [],
                              metrics)
         return out
-    if run.add_reasons and run.skill == "list_issues":
-        await _add_reasons(T, segs)
+    if run.skill == "list_issues":
+        text_ok = [d for d in executed if d in T.access.text_search]
+        await summaries.fill_tables(T.ctx, segs, text_ok)
+        if run.add_reasons:
+            await _add_reasons(T, segs)
     if head:
         out.events.append(Event.delta("。".join(dict.fromkeys(head)) + "。\n\n"))
     if run.skill == "list_issues":
         out.events += await _present_lists(run, T, res, segs, time_text, C, keys_by)
-        out.exported = await _export_lists(T, res, getattr(outcome, "frames", None) or {})
+        out.exported = await _export_lists(T, res, getattr(outcome, "frames", None) or {}, text_ok)
     else:
         out.events += await _present_aggs(run, T, segs, time_text, C, all_dims, metrics)
     return out
 
 
-async def _export_lists(T: Turn, res: Mapping[str, Any], frames: Mapping[str, pd.DataFrame]) -> bool:
-    """要导出的清单（沙箱已按阈值或用户明说挑好、全部行经数据帧通道回传）：每域一页写成一个文件。
-    链接那句放进 `T.record.exports`，在统计口径之后发（§4.3）。张数取自沙箱（`exported`）。"""
+async def _export_lists(T: Turn, res: Mapping[str, Any], frames: Mapping[str, pd.DataFrame],
+                       text_ok: Sequence[Domain] = ()) -> bool:
+    """要导出的清单（沙箱已按阈值或用户明说挑好、全部行经数据帧通道回传）：每域一页写成一个文件，问题描述给
+    剥净后的全文（§9.2）。链接那句放进 `T.record.exports`，在统计口径之后发（§4.3）。张数取自沙箱（`exported`）。"""
     counts = res.get("exported") or []
     if not any("export_" + str(d) in frames for d, _n in counts):
         return False
+    await summaries.fill_exports(T.ctx, dict(frames), text_ok)
     text = await export.save_lists(T.ctx, counts, frames, export.LIST_FILENAME)
     T.record.exports.append(text)
     return text != f"{errors.EXPORT_FAILED}。"
@@ -696,19 +786,21 @@ async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Seque
     events: list[Event] = []
     multi = len(segs) > 1
     scope = _scope(time_text)
-    desc = any("desc" in keys for keys in keys_by.values())
+    # 问题描述一列有、而本域文字查找表不可用的域（§9.2）：开头说明一次
+    with_desc = [label for label, keys in keys_by.items() if "desc" in keys]
+    lacking = [label for label in with_desc if _BY_LABEL[label] not in T.access.text_search]
     if multi:
         text = list_issues.cross_opening(res, scope)
-        if desc:
-            text = text[:-1] + f"；问题描述摘要{columns.DESC_UNAVAILABLE}，其他列照常。"
+        if lacking:
+            who = "" if len(lacking) == len(with_desc) else "、".join(lacking) + "的"
+            text = text[:-1] + f"；{who}问题描述摘要{columns.DESC_UNAVAILABLE}，其他列照常。"
         events.append(Event.delta(text + "\n\n"))
     described: list[str] = []
     for i, seg in enumerate(segs):
         dom = _BY_LABEL.get(seg.get("domain", ""), Domain.DOMESTIC)
         if multi and i:
             events.append(Event.delta("\n\n"))
-        got, table_text = _present_list(run, T, seg, dom, time_text, C, "desc" in keys_by.get(dom.label, [])
-                                        and not multi)
+        got, table_text = _present_list(run, T, seg, dom, time_text, C, dom.label in lacking and not multi)
         events += got
         if table_text:
             described.append(table_text)
@@ -978,11 +1070,7 @@ def _focus_of(issues: Mapping[str, Any]) -> dict[str, Any] | None:
 async def _run_lookup(run: StepRun, T: Turn, C: cal.Caliber) -> StepOut:
     out = StepOut()
     if run.stored is not None:  # 递进筛选：上一轮那次按号查单的结果，直接用存下的单 ID
-        out.refs = {f"{run.sid}.issues": run.stored}
-        out.ok = True
-        out.found_any = any(isinstance(v, dict) and v.get("ids") for v in run.stored.values())
-        out.domains = [str(d) for d in run.stored]
-        return out
+        return stored_out(run)
     events, refs, ok, ask = await lookup_numbers.run_step(T, run.step, run.numbers, C)
     if ask is not None:
         out.ask, out.final, out.ok = _with_sid(ask, run.sid), True, True
@@ -1149,7 +1237,7 @@ def carried_notes(plan: dict) -> list[str]:
     kept: list[str] = []
     changed: list[str] = []
     for step in plan.get("steps") or []:
-        if not isinstance(step, dict) or step.get("skill") not in CONDITIONAL:
+        if not isinstance(step, dict) or step.get("skill") not in RESOLVED:
             continue
         for src, text in _said_items(step):
             (kept if src == "previous" else changed).append(text)
@@ -1179,6 +1267,9 @@ def _record(T: Turn, r: StepRun, out: StepOut) -> None:
     issues = out.refs.get(f"{r.sid}.issues")
     if isinstance(issues, dict):
         T.record.results[r.sid] = issues
+    text = out.extra.get("text")
+    if isinstance(text, dict) and text.get("key"):  # 文字查找用的说法（§10 `results`），递进筛选认「就是那次」
+        T.record.texts[r.sid] = {"key": str(text["key"]), "terms": [str(x) for x in text.get("terms") or []]}
     shown = out.refs.get(f"{r.sid}.shown")
     if isinstance(shown, list) and shown:
         by: dict[str, dict[str, list[Any]]] = {}
@@ -1209,6 +1300,8 @@ def _templates(r: StepRun, out: StepOut, refs: Mapping[str, Any]) -> list[dict[s
         return suggestions.detail_templates(issue_detail.aspects_of(r.step), _one_number(r, out))
     if r.skill == "lookup_numbers":
         return suggestions.detail_templates([], _one_number(r, out))
+    if r.skill == "text_search":  # 只给最小版那几个（启动指令「话题查找的可点选项」），不加通用模板按钮
+        return list(out.buttons)
     return []
 
 
@@ -1223,9 +1316,9 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     由编排写 `pending_clarify` 并发 `clarify`。"""
     C = cal.Caliber()
     refs: dict[str, Any] = {}
-    for r in runs:  # 递进筛选：上一轮那次按号查单直接用存下的单 ID，不单独成段
+    for r in runs:  # 递进筛选：上一轮那次按号查单、文字查找直接用存下的单 ID，不单独成段
         if r.stored is not None:
-            stored = await _run_lookup(r, T, C)
+            stored = stored_out(r)
             refs |= stored.refs
             _record(T, r, stored)
     shown = [r for r in runs if (r.skill in EXECUTABLE or r.skill not in ("clarify", "introduce")) and not r.merged]
@@ -1261,6 +1354,8 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             if notes:
                 yield Event.delta("。".join(notes) + "。\n\n")
             out = await _run_lookup(r, T, C)
+        elif r.skill == "text_search":
+            out = await text_search.run_step(r, T, refs, C, notes)
         else:
             out = await run_step(r, T, refs, C, notes)
         if out.final:
@@ -1313,7 +1408,7 @@ def restrict_domains(plan: dict, turn: Mapping[str, Any]) -> dict:
     out = copy.deepcopy(plan)
     steps = (turn or {}).get("steps") or {}
     for step in out.get("steps") or []:
-        if not isinstance(step, dict) or step.get("skill") not in (*CONDITIONAL, "lookup_numbers"):
+        if not isinstance(step, dict) or step.get("skill") not in (*RESOLVED, "lookup_numbers"):
             continue
         done = [str(d) for d in ((steps.get(str(step.get("id"))) or {}).get("domains") or []) if str(d) in _BY_LABEL]
         if done:
@@ -1354,6 +1449,11 @@ async def replay(plan: dict, spans: Mapping[str, list[Span]], T: Turn, previous_
     refs: dict[str, Any] = {}
     outs: dict[str, StepOut] = {}
     for r in prepared:
+        if r.stored is not None:  # 递进筛选那一步：存下的单 ID 照样给后一步，不比对、不成段
+            stored = stored_out(r)
+            refs |= stored.refs
+            _record(T, r, stored)
+            continue
         if r.merged:
             continue
         when = r.step.get("when")
@@ -1364,6 +1464,10 @@ async def replay(plan: dict, spans: Mapping[str, list[Span]], T: Turn, previous_
         elif r.skill == "lookup_numbers":
             out = await _run_lookup(r, T, C)
             out.events = []
+        elif r.skill == "text_search":
+            out = await text_search.run_step(r, T, refs, C, [], present=False, caliber=True)
+            if out.final:  # 重放时说法定不下来（现象描述指着上文）：按追问处理
+                return out.ask if out.ask is not None else Ask(errors.SECTION_FAILED, [])
         elif r.skill in CONDITIONAL:
             out = await run_step(r, T, refs, C, [], present=False, caliber=True)
         else:
@@ -1374,7 +1478,8 @@ async def replay(plan: dict, spans: Mapping[str, list[Span]], T: Turn, previous_
     return Replayed(runs=list(prepared), outs=outs, caliber=C)
 
 
-_TITLES = {"list_issues": "清单", "aggregate": "统计", "issue_detail": "单张单详情", "lookup_numbers": "按号查单"}
+_TITLES = {"list_issues": "清单", "aggregate": "统计", "issue_detail": "单张单详情", "lookup_numbers": "按号查单",
+           "text_search": "按文字找单"}
 
 
 def _title(r: StepRun) -> str:

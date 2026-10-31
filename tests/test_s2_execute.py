@@ -59,9 +59,10 @@ async def test_domestic_list_default_columns_analysis_and_caliber():
     assert table["columns"] == ["问题编号", "机型", "问题类型", "不良率", "不良数量", "问题描述"]
     assert [r[0] for r in table["rows"]] == ["ZC9901001", "ZC9901002", "ZC9901003", "ZC9901004"]  # 建单时间倒序
     assert table["rows"][1][1] == "物料" and table["rows"][2][1] == "A920、A920PRO"
-    assert {r[5] for r in table["rows"]} == {"暂不可用"}
+    # S6b 起问题描述取自本域文字表（§9.2）；这份假数据的文字表里没有这几张单，按新建不久写
+    assert {r[5] for r in table["rows"]} == {"新建不久，稍后可见"}
     text = _text(events)
-    assert "共 4 张" in text and "问题描述摘要暂不可用" in text and narrative in text
+    assert "共 4 张" in text and "问题描述摘要暂不可用" not in text and narrative in text
     assert "统计口径" in text and "按建单时间" in text and "已删除的单未计入" in text
     main_sql = [q for q in data_queries(h) if q.tables[0] == "ZCTracking_ProblemList"]
     assert main_sql and "IsDelete" in main_sql[0].sql and "AddDate" in main_sql[0].sql

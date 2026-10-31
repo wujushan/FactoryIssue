@@ -33,11 +33,20 @@ TURN_FAILED_CODE = "TURN_FAILED"
 TOO_MANY_ROWS = "结果太多，请加上时间或其他条件再查"
 TEXT_SEARCH_UNAVAILABLE = "暂不可用"
 EXPORT_FAILED = "完整清单导出失败，请稍后再试"
+#: 按意思一路用不了（`ctx.retrieval` 为 None、检索或重排服务出错，§14）：类似问题与「可能相关」答暂不可用
+SEMANTIC_UNAVAILABLE = "按意思找暂不可用"
+#: 候选太多、去掉限定检索（`RetrievalRestrictTooLarge`，§14）
+SEMANTIC_PARTIAL = "符合条件的单太多，按意思找的部分不保证完整"
 
 
 def not_counted(labels: Iterable[str]) -> str:
     """「巴西、海外无权限，未计入」。"""
     return f"{'、'.join(labels)}无权限，未计入"
+
+
+def text_unavailable(labels: Iterable[str]) -> str:
+    """主表可查而文字查找表无权的域（`privileges.md`「域闸门」）：不说成「没有找到」。"""
+    return f"{'、'.join(labels)}的文字查找{TEXT_SEARCH_UNAVAILABLE}，未计入"
 
 
 # 按编号查单（总述「按编号查单」对不上时怎么答；国内「按订单号查单」「按 CAR 编号查单」；巴西「投诉单号」）

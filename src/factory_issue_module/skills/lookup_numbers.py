@@ -15,6 +15,7 @@
 - 一次给很多个问题编号（多于表格行数 `table_rows`，总述「按编号查单」超过约 20 个）：按清单呈现，开头给各域张数
   与合计、没找到与无权未查的号，每域一张表（域内按建单时间从新到旧，前 `table_rows` 张），全量导出成文件、
   每域一页，链接在统计口径之后（`present/export.py`）。
+- 问题描述一格：本域文字查找表可用时换成摘要，导出文件给剥净后的全文；不可用时写「暂不可用」（设计 §9.2，S6b）。
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from factory_issue_module.declarations import DOMAINS, Domain
 from factory_issue_module.domains import base, numbers
 from factory_issue_module.domains.numbers import Number
 from factory_issue_module.plan import schema
-from factory_issue_module.present import columns, export, links
+from factory_issue_module.present import columns, export, links, summaries
 from factory_issue_module.skills import issue_detail
 from factory_issue_module.stats import runner
 from factory_issue_module.turn import errors
@@ -111,10 +112,12 @@ async def run_step(T: Any, step: dict, nums: Sequence[Number], C: Any
                     skipped[x["i"]].append(x["domain"])
         todo = [x for x in todo if x["domain"] not in lost]
         if ok and todo:
+            text_ok = [d for d in ok if d in T.access.text_search]
             P = {"domains": [d.label for d in ok], "lookups": todo,
                  "enums": {d.label: issue_detail.ADAPTERS[d].enum_params() for d in ok},
                  "names": {d.label: columns.view_columns(d) for d in ok},
-                 "desc": {d.label: columns.DESC_UNAVAILABLE for d in ok},
+                 # 文字查找表可用的域先留空，下面换成摘要（§9.2）；不可用的写「暂不可用」
+                 "desc": {d.label: "" if d in text_ok else columns.DESC_UNAVAILABLE for d in ok},
                  "labels": columns.DETAIL, "chosen": base.trailing(T.query)}
             if as_list:
                 P["as_list"] = {"table_rows": T.answer.table_rows}
@@ -122,7 +125,12 @@ async def run_step(T: Any, step: dict, nums: Sequence[Number], C: Any
             if not outcome.ok:
                 return [Event.delta(f"{errors.SECTION_FAILED}。")], {}, False, None
             res = outcome.result or res
-            exports = {k: v for k, v in (getattr(outcome, "frames", None) or {}).items() if k.startswith("export_")}
+            got_frames = getattr(outcome, "frames", None) or {}
+            exports = {k: v for k, v in got_frames.items() if k.startswith("export_")}
+            await _fill_desc(T, res, text_ok)
+            if exports:
+                await summaries.fill_exports(T.ctx, {**exports, **{k: v for k, v in got_frames.items()
+                                                                   if k.startswith("ids_")}}, text_ok)
     sections = res.get("sections") or []
     # 只有一个号、只有手填订单号的候选：追问
     if len(nums) == 1 and sections and not any(s["found"] for s in sections):
@@ -142,6 +150,27 @@ async def run_step(T: Any, step: dict, nums: Sequence[Number], C: Any
                   [errors.not_searched(v) for v in dict.fromkeys(tuple(x) for x in skipped.values() if x)])
         C.item(errors.LOOKUP_CALIBER)
     return events, res.get("refs") or {}, True, None
+
+
+async def _fill_desc(T: Any, res: Mapping[str, Any], text_ok: Sequence[Domain]) -> None:
+    """问题描述一格换成摘要（一号一行的合并表、很多个号按清单呈现的表，§9.2）：本域文字查找表可用时才换。"""
+    if not text_ok:
+        return
+    items: list[tuple[list[Any], int, Domain, int | None]] = []
+    at_issue = len(_issue_columns()) - 1
+    for s in res.get("sections") or []:
+        dom = _BY_LABEL.get(str(s.get("domain")))
+        if dom is not None:
+            items += [(row, at_issue, dom, pid) for row, pid in zip(s.get("issue_rows") or [], s.get("ids") or [],
+                                                                    strict=False)]
+    for x in res.get("as_list") or []:
+        dom = _BY_LABEL.get(str(x.get("domain")))
+        cols = list(x.get("columns") or [])
+        if dom is not None and columns.shown("desc", dom) in cols:
+            at = cols.index(columns.shown("desc", dom))
+            items += [(row, at, dom, pid) for row, pid in zip(x.get("rows") or [], x.get("ids_shown") or [],
+                                                              strict=False)]
+    await summaries.fill_rows(T.ctx, items, text_ok)
 
 
 def _issue_only(n: Number) -> bool:

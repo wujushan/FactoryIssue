@@ -316,6 +316,13 @@ DEBIT = BR_VIEW_COLUMNS["debit"]
 REASONS = _derived("原因与措施")
 #: 几个问题编号合成一张表时另加的一列（总述「按编号查单」一次给多个号）
 OWNER_DOMAIN = _derived("所属域")
+#: 按文字找单的表格另加的两列与「分组」一列的说法（总述「表格列名」、「涉及某个话题怎么找」）
+TEXT_GROUP = _derived("分组")
+TEXT_CONTEXT = _derived("命中处")
+TEXT_GROUPS = {"1": _derived("问题本身涉及"), "2": _derived("处理中提到"), "3": _derived("可能相关")}
+#: 点名字段、问做法的第一组；问做法又说了现象时两边都命中的那组。第三组各种找法都叫「可能相关」（开发者 2026-10-31 定）
+TEXT_HIT = _derived("直接提到")
+TEXT_BOTH = _derived("两边都提到")
 #: 质疑上一轮、重查后有变化的单那张表的「变化」一列与它的两种说法（总述「表格列名」）
 VERIFY_CHANGE = _derived("变化")
 VERIFY_ADDED = _derived("这次新查到")
@@ -324,7 +331,7 @@ VERIFY_REMOVED = _derived("这次没查到")
 #: 清单默认 6 列（总述「清单默认列」）
 DEFAULT_LIST = ("number", "machine", "type", "rate", "bad_qty", "desc")
 
-#: 问题描述摘要还不能取时（文字查找表无权，或 S6 之前没声明）写这句（总述「清单默认列」）
+#: 问题描述摘要取不到时（本域文字查找表无权，或读文字表出错）写这句（总述「清单默认列」）
 DESC_UNAVAILABLE = "暂不可用"
 
 

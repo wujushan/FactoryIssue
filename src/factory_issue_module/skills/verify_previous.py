@@ -6,7 +6,8 @@
 事件顺序：`delta`（复核结论：一致，或各域张数怎么变、哪些单多了少了）→ 有变化时 `table`（变化的单）→ 详情照这张单
 现在的样子重新给出 → `delta`（当时按什么理解、按什么口径算）→ `suggestions`（上一轮的其他理解）。
 
-- 比对在沙箱里做（`stats/tasks/verify.py`）：存下的单 ID、张数与重查的逐步逐域比，只比本轮可查的域。
+- 比对在沙箱里做（`stats/tasks/verify.py`）：存下的单 ID、张数与重查的逐步逐域比，只比本轮可查的域。文字查找
+  （S6b）同样比，有模型逐张判断的一组时另说一句：那几张的出入不一定是数据变了。
 - 上一轮查过、本轮已无权的域不重查，写明。上一轮计划读不到时由编排按「接不上上一轮」追问。
 """
 
@@ -25,8 +26,11 @@ from factory_issue_module.stats import runner
 from factory_issue_module.turn import errors, execute, workspace
 
 _BY_LABEL = {d.label: d for d in DOMAINS}
-_COMPARED = ("list_issues", "aggregate", "lookup_numbers")
-_TITLES = {"list_issues": "清单", "aggregate": "统计", "lookup_numbers": "按号查单", "issue_detail": "单张单详情"}
+_COMPARED = ("list_issues", "aggregate", "lookup_numbers", "text_search")
+_TITLES = {"list_issues": "清单", "aggregate": "统计", "lookup_numbers": "按号查单", "issue_detail": "单张单详情",
+           "text_search": "按文字找单"}
+#: 重查的文字查找里有模型逐张判断的一组（「可能相关」）时那句（S6b）
+JUDGED_NOTE = "按文字找单里「可能相关」一类按意思找到的单要逐张判断，每次判断可能略有不同，这几张的出入不一定是数据变了"
 #: 变化的单那张表「变化」一列的说法（总述「表格列名」，`present/columns.py` 导入时核对）
 TEXTS = {"added": columns.VERIFY_ADDED, "removed": columns.VERIFY_REMOVED}
 CHANGE_COLUMN = columns.VERIFY_CHANGE
@@ -108,6 +112,8 @@ async def run(T: execute.Turn, turn: Mapping[str, Any], results: Mapping[str, An
             events.append(Event.delta(f"{errors.SECTION_FAILED}。"))
         else:
             events += _present(T, outcome.result or {}, by_sid, len(compared) > 1)
+            if any((got.outs[sid].extra.get("text") or {}).get("judged") for sid in compared):
+                events.append(Event.delta(f"\n\n{JUDGED_NOTE}。"))
     elif not any(by_sid[sid].skill == "issue_detail" for sid in got.outs):
         events.append(Event.delta(f"{errors.SECTION_FAILED}。"))
     for sid, out in got.outs.items():

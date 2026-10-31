@@ -237,7 +237,8 @@ async def test_cross_list_gives_counts_per_domain_and_one_analysis():
     text = _text(events)
     assert "合计 10 张：国内 4 张、巴西 4 张、海外 2 张" in text
     assert [t["title"].split("：")[0] for t in _tables(events)] == ["国内问题单", "巴西问题单", "海外问题单"]
-    assert len(h.llm.calls) == 2 and text.count("问题描述摘要暂不可用") == 1
+    # S6b 起三域文字查找表都有权时问题描述取自文字表（§9.2），开头不再说「暂不可用」
+    assert len(h.llm.calls) == 2 and "问题描述摘要暂不可用" not in text
     assert "统计范围：国内、巴西、海外" in text
 
 

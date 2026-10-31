@@ -18,12 +18,14 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
 import pytest
 import s3_data
 import s4_data
+import s6_data
 import scopes
 import structlog
 from fakes import MANIFEST, FakeLLM, Harness, make_harness, run
@@ -163,6 +165,61 @@ S5_SCENARIOS: list[tuple[str, dict, object, list[tuple[str | None, list]]]] = [
 ]
 
 
+def _judge_all(messages: list[dict]) -> dict:
+    return {"results": [{"no": c["no"], "related": True} for c in json.loads(messages[-1]["content"])["候选"]]}
+
+
+def _summary_all(messages: list[dict]) -> dict:
+    return {"items": [{"no": x["no"], "summary": "触摸屏偶发失灵"} for x in json.loads(messages[-1]["content"])]}
+
+
+#: 文字查找三种模型调用按 system 认（`fakes.FakeLLM.routes`）
+_S6_ROUTES = {"是否与用户要找的话题有关": _judge_all, "浓缩成一两句话": _summary_all,
+              "定按文字找单时用哪些说法": lambda m: {"terms": ["TP"]}}
+_S6_LONG = {1: {"desc": "客户现场反馈 A920 在批量 300 台中有 12 台开机后触摸屏偶发失灵，点击图标无反应，重启后恢复，影响出货",
+                "reason": "TP 排线压伤"},
+            2: {"desc": "外壳开裂，扣位断裂", "measure": "换料后正常，顺带更换排线"}, 3: {"desc": "电池起火冒烟"},
+            4: {"desc": "", "measure": "NFC天线换料"}}
+_HITS = [[s6_data.hit(2, "desc", "问题描述：外壳开裂，扣位断裂"), s6_data.hit(4, "measure", "改善措施：NFC天线换料")]]
+
+
+def _ts(**params) -> dict:
+    return _plan("text_search", **params)
+
+
+#: S6b 接上的文字查找、摘要与导出（假数据 `tests/s6_data.py`）：（说明, 权限, 问句, 模型回复, 按意思找的命中；None 表示
+#: 没有 `ctx.retrieval`）
+S6_SCENARIOS: list[tuple[str, dict, str, list, list | None]] = [
+    ("话题·两组加可能相关", scopes.account_jia(), "国内近 30 天有没有涉及触摸的问题",
+     [_ts(domains=_CN, time=_T30, mode="话题", topic="触摸")], _HITS),
+    ("安全问题两路", scopes.account_jia(), "近 30 天国内有没有安全问题", [_ts(domains=_CN, time=_T30, mode="话题", topic="安全")],
+     []),
+    ("关键词·点名栏目", scopes.account_jia(), "国内重启方案里写了换电池的单",
+     [_ts(domains=_CN, mode="点名字段", fields=["重启方案"], terms=["换电池"])], []),
+    ("点名字段·可能相关", scopes.account_jia(), "国内改善措施里提到换料的单",
+     [_ts(domains=_CN, mode="点名字段", fields=["改善措施"], topic="换料")], _HITS),
+    ("类似问题·只国内有权", scopes.account_jia(), "以前有没有出现过电池起火冒烟",
+     [_ts(mode="类似问题", phenomenon="电池起火冒烟")], [[s6_data.hit(3, "desc", "问题描述：电池起火冒烟")]]),
+    ("做法加现象·两个按钮", scopes.account_jia(), "国内近 30 天有没有用换料解决过电池起火",
+     [_ts(domains=_CN, time=_T30, mode="话题", topic="电池起火", approach="换料", ask="做法")], []),
+    ("比话题小·按整个话题找", scopes.account_jia(), "国内近 30 天有没有 TP 排线的问题",
+     [_ts(domains=_CN, time=_T30, mode="话题", topic="TP 排线")], []),
+    ("清单外·只看问题本身涉及的", scopes.account_jia(), "国内近 30 天有没有涉及排线的问题",
+     [_ts(domains=_CN, time=_T30, mode="话题", topic="排线")], []),
+    ("文字查找表无权", scopes.privileges([Domain.DOMESTIC], mart=False), "搜一下国内描述里有起火的单",
+     [_ts(domains=_CN, mode="关键词", terms=["起火"])], []),
+    ("按意思找用不了", scopes.account_jia(), "国内以前有没有电池起火冒烟的",
+     [_ts(domains=_CN, mode="类似问题", phenomenon="电池起火冒烟")], None),
+    ("导出·文字查找", scopes.account_jia(), "把国内描述里有触摸或起火的单导出",
+     [_ts(domains=_CN, mode="关键词", terms=["触摸", "起火"], export=True)], []),
+    ("清单·摘要与导出全文", scopes.account_jia(), "把近 30 天国内的问题全部导出",
+     [_plan("list_issues", domains=_CN, time=_T30, export=True), _NARR], []),
+    ("按号查单·摘要", scopes.account_jia(), "ZC9901001、ZC9901003 现在什么状态",
+     [_plan("lookup_numbers", numbers=[{"raw": "ZC9901001", "kind_said": None},
+                                       {"raw": "ZC9901003", "kind_said": None}])], []),
+]
+
+
 def _export_headers(h: Harness) -> list[Event]:
     """导出文件的页名与表头当成一张表查（设计 §15：导出表头同样不露字段名）。"""
     import io
@@ -196,8 +253,19 @@ async def _conversation(privileges: dict, data: object, turns: list[tuple[str | 
     return h, events + _export_headers(h)
 
 
-async def _all_events() -> list[tuple[str, Harness, list[Event]]]:
-    out = []
+_ALL: list[tuple[str, Harness | None, list[Event]]] | None = None
+
+
+async def _all_events() -> list[tuple[str, Harness | None, list[Event]]]:
+    """每条路径跑一遍，几条检查共用这一份（只读事件与模型调用记录；跑一遍要几分钟）。"""
+    global _ALL
+    if _ALL is None:
+        _ALL = await _collect()
+    return _ALL
+
+
+async def _collect() -> list[tuple[str, Harness | None, list[Event]]]:
+    out: list[tuple[str, Harness | None, list[Event]]] = []
     for name, privileges, data, turns in S5_SCENARIOS:
         h, events = await _conversation(privileges, data, turns)
         assert events and not any(e.type is EventType.ERROR for e in events), name
@@ -217,6 +285,17 @@ async def _all_events() -> list[tuple[str, Harness, list[Event]]]:
         events = await run(h, query)
         assert any(e.type is not EventType.ERROR for e in events) and events, name
         out.append((name, h, events))
+    for name, privileges, query, replies, hits in S6_SCENARIOS:
+        h = make_harness(privileges, llm_replies=replies, config_files={"link_sites.toml": _SITES})
+        s6_data.load(h, texts=_S6_LONG, missing=(4,))
+        h.llm.routes.update(_S6_ROUTES)
+        if hits is None:
+            h.ctx.retrieval = None
+        else:
+            h.retrieval.hits = [list(x) for x in hits]
+        events = await run(h, query)
+        assert events and not any(e.type is EventType.ERROR for e in events), name
+        out.append((name, h, events + _export_headers(h)))
     for domains in ([], [Domain.DOMESTIC], list(DOMAINS)):
         access = gate.DomainAccess(
             domains=frozenset(domains), car=False, text_search=frozenset(domains)

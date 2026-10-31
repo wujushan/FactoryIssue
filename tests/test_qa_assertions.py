@@ -89,8 +89,18 @@ def test_suggestions_check_shape_not_count():
         ],
     }
     assert qa.check(case, body) == []
+    wrapped = {
+        **body,
+        "suggestions": {
+            "guide_text": "",
+            "recommendations": body["suggestions"],
+        },
+    }
+    assert qa.check(case, wrapped) == []
     broken = {**body, "suggestions": [{"label": "看该部门跟进的单"}]}
     assert any("缺" in item for item in qa.check(case, broken))
+    empty = {**body, "suggestions": {"guide_text": "", "recommendations": []}}
+    assert any("没有可点的建议按钮" in item for item in qa.check(case, empty))
 
 
 def test_chart_type_needs_one_match():
