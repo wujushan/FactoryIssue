@@ -19,6 +19,7 @@ from factory_issue_module.declarations import TOPIC_TERMS
 from factory_issue_module.module import FactoryIssueModule
 from factory_issue_module.plan import prompt as _plan_prompt
 from factory_issue_module.present import narrative as _narrative
+from factory_issue_module.skills import custom_stats as _custom
 from factory_issue_module.plan.schema import (  # noqa: F401  scoring 从这里取枚举
     BASES, FILTER_FIELDS, GROUP_DIMS, METRICS, OPS, REF_OUTPUTS, SKILLS, SORT_FIELDS, SORT_ORDERS, TEXT_MODES,
 )
@@ -186,43 +187,9 @@ def reflect_user(case: dict) -> str:
 # 临时统计
 # ---------------------------------------------------------------------------
 
-STATS_HELPERS = '''import pandas as pd
-
-
-def 拆多值(df, col, sep="、"):
-    """把一单多值的列（如机型「A920、A920PRO」）拆成一值一行，其余列照抄。"""
-    out = df.copy()
-    out[col] = out[col].fillna("").astype(str).str.split(sep)
-    out = out.explode(col)
-    out[col] = out[col].str.strip()
-    return out[out[col] != ""]
-
-
-def 合计不良率(df, 不良列="不良数量", 分母列="生产数量"):
-    """合计不良数量 ÷ 合计分母 × 100，保留 2 位小数；不良数量为空、分母为 0 或空的单不参与。
-    返回 (不良率或 None, 参与张数, 不参与张数)。"""
-    ok = df[df[不良列].notna() & df[分母列].notna() & (df[分母列] > 0)]
-    if ok.empty:
-        return None, 0, int(len(df))
-    rate = round(float(ok[不良列].sum()) / float(ok[分母列].sum()) * 100, 2)
-    return rate, int(len(ok)), int(len(df) - len(ok))
-'''
-
-STATS_SYSTEM = f"""你为「制程问题查询助手」写一段在沙箱里运行的 Python 统计脚本。
-- 脚本必须定义 def run(data):，data["issues"] 是一个 pandas DataFrame，列见下。
-- 只能 import：pandas、numpy、math、statistics、json、datetime、collections、itertools、functools、re、decimal。不能读写文件，不能联网。
-- 下面这些口径函数已经定义好，直接调用即可，不要重新定义：
-```python
-{STATS_HELPERS}```
-- 返回值必须是 dict，严格按【输出格式】的键和结构，不要多返回别的键。数字用 Python 原生的 int、float 或 None。
-- 只输出代码，放在一个 ```python 代码块里。"""
-
-
-def stats_user(task: dict, columns: list[tuple[str, str, str]], sample: list[dict]) -> str:
-    cols = "\n".join(f"- {name}（{dtype}）：{desc}" for name, dtype, desc in columns)
-    return (
-        f"【数据列】\n{cols}\n"
-        f"【样例行】{json.dumps(sample, ensure_ascii=False, default=str)}\n"
-        f"【要算什么】{task['ask']}\n"
-        f"【输出格式】{task['format']}"
-    )
+# 临时统计的提示 S7 起由 src 持有（`factory_issue_module.skills.custom_stats`，设计 §5.5），这里只转接。
+# 迁移时先逐字搬（system、口径函数与 10 题的 user 与迁移前逐字相同、自检通过），再改成 §5.5 的固定形状：
+# 口径函数改为 `stats/lib/custom.py` 里的真函数（提示里只给签名与说明），列说明改由线上同一个函数从术语表生成。
+STATS_SYSTEM = _custom.stats_system()
+stats_user = _custom.stats_user
+stats_repair = _custom.repair_user

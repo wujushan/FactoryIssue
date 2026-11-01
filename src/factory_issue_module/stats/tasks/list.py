@@ -12,7 +12,7 @@ import pandas as pd
 
 from factory_issue_module.stats.lib.common import fi_blank, fi_rank, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
-from factory_issue_module.stats.lib.views import vw_breakdowns, vw_counts, vw_filter, vw_sorted, vw_time
+from factory_issue_module.stats.lib.views import vw_breakdowns, vw_counts, vw_filter, vw_ids, vw_sorted, vw_time
 
 PARAMS = {}
 
@@ -44,13 +44,6 @@ def ls_facts(v, P, cond_kinds, blind=()):
     if len(rated):
         facts["不良率最高的单"] = [[r["_number"], r["rate"]] for _, r in rated.head(3).iterrows()]
     return fi_with_counts(facts)
-
-
-def ls_ids(v):
-    """后一步引用、工作区要存的结果单（`limit` 之后、按表格的顺序）：单 ID 与问题编号，作为明细帧回传。"""
-    if not len(v):
-        return pd.DataFrame({"_id": pd.Series([], dtype="int64"), "_number": pd.Series([], dtype="object")})
-    return pd.DataFrame({"_id": [int(x) for x in v["_id"].tolist()], "_number": [str(x) for x in v["_number"].tolist()]})
 
 
 def ls_export(v, cols, names):
@@ -106,7 +99,8 @@ def run(data):
                          "limited": int(len(v)) < found, "truncated": int(len(head)) < int(len(v)),
                          "empty": found == 0, "few": found <= 2, "exported": exported,
                          "facts": facts, "caliber": caliber})
-        issues["ids_" + dom] = ls_ids(v)
+        # 后一步引用、工作区要存的结果单（`limit` 之后、按表格的顺序）
+        issues["ids_" + dom] = vw_ids(v)
         found_by[dom] = found
         total_all += int(len(v))
         if len(v):

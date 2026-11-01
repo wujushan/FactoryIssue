@@ -62,7 +62,7 @@ async def run(T: execute.Turn, step: Mapping[str, Any], turn: Mapping[str, Any] 
     if not turn:
         return [Event.delta(f"{NO_CHART}。")], found, None
     skills = _skills(turn)
-    if "aggregate" not in skills:
+    if "aggregate" not in skills and "custom_stats" not in skills:
         return [Event.delta(f"{NO_CHART_DETAIL if 'issue_detail' in skills else NO_CHART}。")], found, None
     plan = turn.get("plan") if isinstance(turn.get("plan"), dict) else {}
     denied = verify_previous.denied_domains(turn, T.access)
@@ -71,8 +71,7 @@ async def run(T: execute.Turn, step: Mapping[str, Any], turn: Mapping[str, Any] 
     if isinstance(got, Ask):
         return [], workspace.OUTCOME_CLARIFY, got
     by_sid = {r.sid: r for r in got.runs}
-    fresh = [x for sid, out in got.outs.items() if by_sid[sid].skill == "aggregate"
-             for x in (execute.seg_chart_item(by_sid[sid], seg) for seg in out.segs) if x is not None]
+    fresh = verify_previous.execute_charts(got, by_sid)  # 临时统计照存下的脚本重算（§5.5）
     T.record.charts = list(fresh)
     events: list[Event] = []
     if denied:

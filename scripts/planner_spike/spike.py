@@ -21,6 +21,7 @@ import statistics
 import sys
 import threading
 import time
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from forge_sandbox import run_script  # noqa: E402
 
 import prompts  # noqa: E402
 from factory_issue_module.present import narrative as _narrative  # noqa: E402
+from factory_issue_module.skills import custom_stats as _custom  # noqa: E402
 import resolve  # noqa: E402
 import scoring  # noqa: E402
 import stats_tasks  # noqa: E402
@@ -338,27 +340,38 @@ _SANDBOX_SLOTS = threading.BoundedSemaphore(2)
 _SANDBOX_CRASH = "沙箱异常退出"
 
 
-def _run_sandbox(script: str):
+def _run_sandbox(script: str, datasets: dict):
     out = None
     for attempt in range(3):
         with _SANDBOX_SLOTS:
-            out = run_script(script, {"issues": _ISSUES}, **SANDBOX)
+            out = run_script(script, datasets, **SANDBOX)
         if out.ok or not out.error.startswith(_SANDBOX_CRASH):
             break
         time.sleep(1 + attempt)
     return out
 
 
-async def _sandbox(code: str):
-    return await asyncio.to_thread(_run_sandbox, prompts.STATS_HELPERS + "\n\n" + code)
+class _Stats:
+    """线上 `ctx.stats.run` 的替身：本机沙箱、线上资源档。"""
+
+    async def run(self, script: str, datasets: dict | None = None, **_kw: Any):
+        return await asyncio.to_thread(_run_sandbox, script, dict(datasets or {}))
+
+
+_CTX = types.SimpleNamespace(stats=_Stats())
+
+
+async def _sandbox(code: str) -> tuple[Any, list[str]]:
+    """与线上同一条路：AST 检查 → 拼进外壳在沙箱里跑 → 形状检查（`custom_stats._try`）。返回 (结果或 None, 问题)。"""
+    return await _custom._try(_CTX, code, _ISSUES)
 
 
 async def reference_result(task: dict) -> Any:
     if task["id"] not in _REF_RESULTS:
-        out = await _sandbox(task["ref"])
-        if not out.ok:
-            raise RuntimeError(f"参考脚本 {task['id']} 跑不通：{out.error[:500]}")
-        _REF_RESULTS[task["id"]] = out.result
+        out, problems = await _sandbox(task["ref"])
+        if out is None:
+            raise RuntimeError(f"参考脚本 {task['id']} 跑不通：{'；'.join(problems)[:500]}")
+        _REF_RESULTS[task["id"]] = out
     return _REF_RESULTS[task["id"]]
 
 
@@ -374,27 +387,29 @@ def prepare_references(tasks: list[dict]) -> list[str]:
 
 
 async def run_stats(caller: Caller, task: dict, group: str) -> dict:
+    """与线上同一套：system、user、修一次的说法、检查都调 src（`skills/custom_stats.py`、`stats/custom.py`）。
+    AST 检查、运行出错、形状检查任一不过都修一次（线上三处合计一次）；结果与参考脚本比 `rows`。"""
     want = await reference_result(task)
-    user = prompts.stats_user(task, stats_tasks.COLUMNS, stats_tasks.sample_rows(_ISSUES))
+    user = prompts.stats_user(task["ask"], None, stats_tasks.columns_text(), stats_tasks.sample_rows(_ISSUES))
     messages = with_policy(prompts.STATS_SYSTEM, [{"role": "user", "content": user}])
     attempts, results = [], []
     rec = await caller.chat(group, messages, part="stats", case=task["id"], json_mode=False)
     attempts.append(rec)
     if rec["error"] is not None:
         return {"attempts": attempts, "first_ok": False, "final_ok": False, "results": results}
-    out = await _sandbox(_extract_code(rec["content"]))
-    first_ok = bool(out.ok and stats_tasks.results_equal(out.result, want))
-    results.append({"ok": out.ok, "error": (out.error or "")[:800], "match": first_ok})
+    out, problems = await _sandbox(_extract_code(rec["content"]))
+    first_ok = bool(out is not None and stats_tasks.results_equal(out, want))
+    results.append({"ok": out is not None, "error": "；".join(problems)[:800], "match": first_ok})
     final_ok = first_ok
-    if not out.ok:
+    if out is None:
         repair = [*messages, {"role": "assistant", "content": rec["content"]},
-                  {"role": "user", "content": f"脚本运行出错：\n{(out.error or '')[:1500]}\n请修正后重新给出完整脚本，只输出代码。"}]
+                  {"role": "user", "content": prompts.stats_repair(problems)}]
         rec2 = await caller.chat(group, repair, part="stats", case=task["id"], json_mode=False)
         attempts.append(rec2)
         if rec2["error"] is None:
-            out2 = await _sandbox(_extract_code(rec2["content"]))
-            final_ok = bool(out2.ok and stats_tasks.results_equal(out2.result, want))
-            results.append({"ok": out2.ok, "error": (out2.error or "")[:800], "match": final_ok})
+            out2, problems2 = await _sandbox(_extract_code(rec2["content"]))
+            final_ok = bool(out2 is not None and stats_tasks.results_equal(out2, want))
+            results.append({"ok": out2 is not None, "error": "；".join(problems2)[:800], "match": final_ok})
     return {"attempts": attempts, "first_ok": first_ok, "final_ok": final_ok, "results": results}
 
 

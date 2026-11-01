@@ -59,6 +59,8 @@ MASTER_USES = {"machine": "products", "_machines": "products", "follow_dept": "d
                "cn_factory": "factories"}
 METRIC_NEEDS = {"结案周期": "steps"}
 SORT_NEEDS = {"结案时间": "steps"}
+#: 临时统计的输入帧要的帧（结案时间看处理步骤，§5.5）
+CUSTOM_NEEDS = frozenset({"steps"})
 
 
 def enum_params() -> dict[str, Any]:

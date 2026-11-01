@@ -23,7 +23,11 @@
 - 文字查找（S6b，`skills/text_search.py`）：条件照清单对库，执行交 `text_search.run_step`；清单、按号查单的问题描述
   一列在文字查找表可用的域换成摘要、导出给全文（`present/summaries.py`，§9.2）。递进筛选里照抄上一轮的文字查找时
   用存下的单 ID（`_use_stored_texts`）。
-- 临时统计随 S7，在那之前这一段答「暂时还答不了」。
+- 临时统计（S7，`skills/custom_stats.py`）：条件照统计对库，执行交 `custom_stats.run_step`；每轮至多一个，第二个那一段
+  只答一句。关掉时、没算出来时答一句并附能力介绍的按钮（`StepOut.handled`：已用业务话说明，整轮没有别的结果时不再
+  发整轮失败）。脚本存进工作区 `turn.steps`，重放（质疑重查、换图）照它算、不调模型。
+- 执行中的信号（设计 §5.4）由代码执行默认动作：引用的上一步为空时停在这一步；结果为空、时间只说「最近」时按固定
+  顺序预查放宽选项的张数（`_relax_buttons`）；第三组候选太多时的那一句在 `skills/text_search.py`。
 """
 
 from __future__ import annotations
@@ -53,7 +57,7 @@ from factory_issue_module.plan.timespan import Span
 from factory_issue_module.config.files import Segmentation, TopicTerms
 from factory_issue_module.present import caliber as cal
 from factory_issue_module.present import charts, columns, export, narrative, suggestions, summaries, tables
-from factory_issue_module.skills import aggregate, issue_detail, list_issues, lookup_numbers, text_search
+from factory_issue_module.skills import aggregate, custom_stats, issue_detail, list_issues, lookup_numbers, text_search
 from factory_issue_module.stats import runner
 from factory_issue_module.text import terms as text_terms
 from factory_issue_module.turn import errors, greeting, workspace
@@ -61,11 +65,11 @@ from factory_issue_module.turn.gate import DomainAccess
 
 logger = structlog.get_logger(__name__)
 
-EXECUTABLE = ("list_issues", "aggregate", "issue_detail", "lookup_numbers", "text_search")
-#: 按条件取数的两种（`run_step`；放宽选项预查张数只跑这两种）
+EXECUTABLE = ("list_issues", "aggregate", "issue_detail", "lookup_numbers", "text_search", "custom_stats")
+#: 按条件取数的两种（`run_step`；放宽选项预查张数跑这两种，临时统计只跑它的沙箱 ①）
 CONDITIONAL = ("list_issues", "aggregate")
-#: 第 6 步按条件对库的几种（文字查找的条件与清单同一套，S6b）
-RESOLVED = (*CONDITIONAL, "text_search")
+#: 第 6 步按条件对库的几种（文字查找的条件与清单同一套，S6b；临时统计与统计同一套，S7）
+RESOLVED = (*CONDITIONAL, "text_search", "custom_stats")
 #: 几步详情只问这几项（或没说要看什么）时并成一步按号查单
 STATUS_ASPECTS = ("当前状态", "当前责任人", "概况", "跟进人")
 ADAPTERS: dict[Domain, Any] = {Domain.DOMESTIC: domestic, Domain.BRAZIL: brazil, Domain.OVERSEAS: overseas}
@@ -103,6 +107,8 @@ class Turn:
     #: 文字查找的说法清单与比对范围（模块配置 `topic_terms.md`、`segmentation.toml`，编排每轮读一次）；None 时用内置默认
     topics: TopicTerms | None = None
     seg: Segmentation | None = None
+    #: 上一轮存下的临时统计脚本（[{describe, script}]，`workspace.stored_scripts`）：要算的一样时照它算，不调模型
+    scripts: Sequence[Mapping[str, str]] = ()
 
 
 @dataclass
@@ -159,6 +165,9 @@ def _domain_needs(run: StepRun, d: Domain, got: DomainStep, failed: set[str]) ->
     """
     A = ADAPTERS[d]
     blind = _blind(d, failed)
+    if run.skill == "custom_stats":  # 输入帧的列都要取（§5.5）；靠没取到的主数据才写得出来的列不进帧，不整段放弃
+        got.needs |= set(A.CUSTOM_NEEDS)
+        return
     if run.skill in ("list_issues", "text_search"):
         if run.skill == "text_search":  # 表格的列（问题编号、问题描述，或用户点名的列）
             keys = [k for k in text_search.table_keys(run.step, False)[0] if not k.startswith("_")]
@@ -448,8 +457,10 @@ class StepOut:
     exported: bool = False
     #: 要另记进工作区的（文字查找：{"text": {"key": 找的是什么, "terms": 用的说法, "judged": 有没有模型判断的一组}}）
     extra: dict[str, Any] = field(default_factory=dict)
-    #: 这一步自己的可点选项（文字查找的最小版按钮），排在模板按钮的位置
+    #: 这一步自己的可点选项（文字查找的最小版按钮；临时统计关掉、没算出来时的能力介绍按钮），排在模板按钮的位置
     buttons: list[dict[str, str]] = field(default_factory=list)
+    #: 这一步没有结果、但已经用业务话说明了（临时统计关掉、没算出来、一轮里的第二个）：整轮都没有结果时不再发整轮失败
+    handled: bool = False
 
 
 def _time_text(run: StepRun) -> str | None:
@@ -933,7 +944,10 @@ def chart_item(seg: dict[str, Any], dims: Sequence[dict[str, Any]], title: str) 
 def chart_events(T: Turn, item: Mapping[str, Any], user_chart: str | None) -> list[Event]:
     """按图型画一段图；改了图型时附一句原因。分组不到 2 组、用户说不要图时不画（总述「什么时候配图」）。"""
     rows = list(item.get("rows") or [])
-    if item.get("compare"):
+    if item.get("custom"):  # 临时统计：模型给的图型只作首选（§5.5）
+        kind, why = charts.choose_custom(str(item.get("prefer") or ""), int(item.get("groups") or len(rows)),
+                                         user_chart=user_chart)
+    elif item.get("compare"):
         kind, why = charts.choose_compare(len(rows), user_chart=user_chart)
     else:
         kind, why = charts.choose(str(item.get("name")), int(item.get("groups") or len(rows)),
@@ -1128,9 +1142,12 @@ async def _relax_buttons(plan: dict, runs: Sequence[StepRun], T: Turn) -> list[d
         found = False
         refs: dict[str, Any] = {}
         for r in prepared:
-            if r.skill not in CONDITIONAL:
+            if r.skill == "custom_stats":  # 只跑沙箱 ① 数张数，不写脚本（§5.4）
+                res = await custom_stats.run_step(r, T, refs, cal.Caliber(), [], mode="count")
+            elif r.skill in CONDITIONAL:
+                res = await run_step(r, T, refs, cal.Caliber(), [], present=False)
+            else:
                 continue
-            res = await run_step(r, T, refs, cal.Caliber(), [], present=False)
             refs |= res.refs
             if res.found_any:
                 count = res.refs.get(f"{r.sid}.count", res.refs.get(f"{r.sid}.total"))
@@ -1264,6 +1281,10 @@ def _record(T: Turn, r: StepRun, out: StepOut) -> None:
         "found": dict(out.refs.get(f"{r.sid}.found") or {}),
         # 看原话才定下的判据（巴西「涉及费用」按标记还是按明细）：沿用与重放照用（S5 评审 M1）
         "decided": {k: v for d in r.dsteps.values() for k, v in d.decided.items()}}
+    custom = out.extra.get("custom")
+    if isinstance(custom, dict) and custom.get("script"):  # 临时统计：要算什么与那份脚本，重放照它算（S7）
+        T.record.steps[r.sid]["custom"] = {"describe": str(custom.get("describe") or ""),
+                                           "script": str(custom["script"])}
     issues = out.refs.get(f"{r.sid}.issues")
     if isinstance(issues, dict):
         T.record.results[r.sid] = issues
@@ -1300,7 +1321,7 @@ def _templates(r: StepRun, out: StepOut, refs: Mapping[str, Any]) -> list[dict[s
         return suggestions.detail_templates(issue_detail.aspects_of(r.step), _one_number(r, out))
     if r.skill == "lookup_numbers":
         return suggestions.detail_templates([], _one_number(r, out))
-    if r.skill == "text_search":  # 只给最小版那几个（启动指令「话题查找的可点选项」），不加通用模板按钮
+    if r.skill in ("text_search", "custom_stats"):  # 只给这一步自己的（文字查找的最小版、临时统计没算出来时的能力介绍）
         return list(out.buttons)
     return []
 
@@ -1325,6 +1346,9 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     multi = len(shown) > 1
     opening = _opening_notes(T) + carried_notes(plan) + _recent_notes(runs, T)
     any_ok, any_empty, any_found = False, False, False
+    #: 没有结果的步骤是不是都已用业务话说明了（临时统计关掉、没算出来）；有没说明的，整轮都没结果时照常发整轮失败
+    unexplained = False
+    custom_used = False
     templates: list[dict[str, str]] = []
     alternatives: list[dict[str, str]] = []
     month_noted = False
@@ -1335,8 +1359,10 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         if schema.is_ref(when) and not refs.get(when["ref"]):
             yield Event.delta("前一步的条件不成立，这一段不列。")
             continue
-        if r.skill not in EXECUTABLE:
-            yield Event.delta(f"{errors.NOT_READY}。")
+        if r.skill not in EXECUTABLE:  # 规整与校验之后不会有；万一有，这一段答查不到
+            logger.warning("factory_issue_step_not_executable", skill=r.skill)
+            yield Event.delta(f"{errors.SECTION_FAILED}。")
+            unexplained = True
             continue
         notes = opening if i == 1 else []
         if r.skill == "list_issues" and list_issues.no_conditions(r.step):
@@ -1356,6 +1382,9 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             out = await _run_lookup(r, T, C)
         elif r.skill == "text_search":
             out = await text_search.run_step(r, T, refs, C, notes)
+        elif r.skill == "custom_stats":
+            out = await custom_stats.run_step(r, T, refs, C, notes, used=custom_used)
+            custom_used = True
         else:
             out = await run_step(r, T, refs, C, notes)
         if out.final:
@@ -1369,6 +1398,7 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         _record(T, r, out)
         templates += _templates(r, out, refs)
         any_ok = any_ok or out.ok
+        unexplained = unexplained or (not out.ok and not out.handled)
         any_empty = any_empty or out.empty
         any_found = any_found or out.found_any
         for ev in out.events:
@@ -1382,7 +1412,12 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     T.record.found = any_found
     if not any_ok:
         T.record.failed = True
-        yield Event.error(errors.TURN_FAILED_CODE, errors.TURN_FAILED, fatal=True)
+        if unexplained:
+            yield Event.error(errors.TURN_FAILED_CODE, errors.TURN_FAILED, fatal=True)
+            return
+        recs = suggestions.merge(templates)  # 已用业务话说明（临时统计关掉、没算出来）：只附能力介绍的按钮
+        if recs:
+            yield Event.suggestions(recs)
         return
     if C.counted:
         yield Event.delta("\n\n" + C.text())
@@ -1470,6 +1505,8 @@ async def replay(plan: dict, spans: Mapping[str, list[Span]], T: Turn, previous_
                 return out.ask if out.ask is not None else Ask(errors.SECTION_FAILED, [])
         elif r.skill in CONDITIONAL:
             out = await run_step(r, T, refs, C, [], present=False, caliber=True)
+        elif r.skill == "custom_stats":  # 照存下的脚本算，不调模型（§5.5）
+            out = await custom_stats.run_step(r, T, refs, C, [], mode="replay")
         else:
             continue
         refs |= out.refs
@@ -1479,7 +1516,7 @@ async def replay(plan: dict, spans: Mapping[str, list[Span]], T: Turn, previous_
 
 
 _TITLES = {"list_issues": "清单", "aggregate": "统计", "issue_detail": "单张单详情", "lookup_numbers": "按号查单",
-           "text_search": "按文字找单"}
+           "text_search": "按文字找单", "custom_stats": "临时统计"}
 
 
 def _title(r: StepRun) -> str:

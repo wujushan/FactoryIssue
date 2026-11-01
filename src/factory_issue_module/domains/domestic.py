@@ -135,6 +135,9 @@ MASTER_USES = {"factory": "factories", "follow_dept": "departments", "resp_dept"
                "_resp_dept_names": "departments", "ven_name": "suppliers"}
 METRIC_NEEDS = {"结案周期": "steps", "停线时长": "steps"}
 SORT_NEEDS = {"结案时间": "steps"}
+#: 临时统计的输入帧要的帧（结案时间、重启日期、停线时长、责任人看处理步骤；当前状态、处理环节、当前责任人看待办
+#: 任务与风险订单流程；物料名称看存货，§5.5）
+CUSTOM_NEEDS = frozenset({"steps", "state", "inventory"})
 
 
 # ---------------------------------------------------------------------------- 第 6 步：条件对库

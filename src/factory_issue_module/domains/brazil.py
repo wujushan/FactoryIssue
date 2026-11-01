@@ -64,6 +64,8 @@ MASTER_USES = {"machine": "products", "series": "products", "_machines": "produc
                "follow_dept": "departments", "_follow_dept_group": "departments", "ven_name": "suppliers"}
 METRIC_NEEDS = {"费用美元": "cost", "费用雷亚尔": "cost"}
 SORT_NEEDS: dict[str, str] = {}
+#: 临时统计的输入帧要的帧（费用、扣款看费用明细；物料名称看存货，§5.5）
+CUSTOM_NEEDS = frozenset({"cost", "inventory"})
 
 
 def enum_params() -> dict[str, Any]:

@@ -9,7 +9,8 @@
     计划）、最近一次查到结果的问句原话。
   - `turn`：只有取过数的轮次覆盖：问句原话、执行计划（`plan` 是规整后、并过之后、直填过的计划，与对照集里
     「上一轮计划」同一形状，交给规划器；`steps` 是每步实际查了哪些域、换算出的起止日期连同原话、各域张数，
-    只给执行层用：质疑重查、换图、沿用上一轮的时间）、时间。
+    只给执行层用：质疑重查、换图、沿用上一轮的时间；临时统计的步骤另记要算什么与模型写的那份脚本（`custom`，
+    S7，版本号随之为 3），质疑、换图时照它重算，不调模型）、时间。
   - `results`：每步每域的结果单 ID 与问题编号（每域至多 `ID_CAP` 个），与 `turn` 一起写；文字查找的步骤另记
     找的是什么与用的说法（`texts`，S6b 加，版本号随之为 2）。
   - `charts`：本轮各段图的数据行（沙箱产出，原样），换图用。
@@ -42,8 +43,9 @@ from factory_issue_module.plan.timespan import Span
 
 logger = structlog.get_logger(__name__)
 
-#: 计划格式（`plan/schema.py`）或下面几个键的结构改了就加一（2：`results` 加 `texts`，S6b）
-VERSION = 2
+#: 计划格式（`plan/schema.py`）或下面几个键的结构改了就加一（2：`results` 加 `texts`，S6b；3：`turn.steps` 的临时
+#: 统计步骤加 `custom`（要算什么与那份脚本），S7）
+VERSION = 3
 
 TURN = "turn"
 LAST = "last"
@@ -245,6 +247,16 @@ def decided(turn: Mapping[str, Any] | None) -> dict[str, str]:
     for info in ((turn or {}).get("steps") or {}).values():
         for k, v in ((info or {}).get("decided") or {}).items():
             out.setdefault(str(k), str(v))
+    return out
+
+
+def stored_scripts(turn: Mapping[str, Any] | None) -> list[dict[str, str]]:
+    """`turn` 里各步临时统计存下的（要算什么、脚本）：质疑重查、换图、「那上个月呢」要算的一样时照它重算（§5.5）。"""
+    out: list[dict[str, str]] = []
+    for info in ((turn or {}).get("steps") or {}).values():
+        custom = (info or {}).get("custom")
+        if isinstance(custom, Mapping) and custom.get("script") and custom.get("describe"):
+            out.append({"describe": str(custom["describe"]), "script": str(custom["script"])})
     return out
 
 

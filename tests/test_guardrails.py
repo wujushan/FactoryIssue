@@ -13,6 +13,8 @@
 
 - 巴西链接用的两项值（§9.1）的片段不进日志、不进事件，出错时日志只有异常类型（S3 起；附件摘要的盐值随 S4）。
   站点地址来自模块配置 `link_sites.toml`，不是凭据。
+- 临时统计（S7）：模型起的列名、图表轴同样过「不露字段名」；英文列名在运行时被形状检查拦下、修一次（`S7_SCENARIOS`）。
+  包装脚本与口径函数在 `stats/` 下，`handle()` 一侧不算数，上面「不直算」那条照查 `skills/custom_stats.py`、`stats/custom.py`。
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from forge_core.events import Event, EventType
 
 from factory_issue_module import landed
 from factory_issue_module.declarations import DOMAINS, ERP, INFO, MART, Domain
+from factory_issue_module.skills import custom_stats
 from factory_issue_module.turn import gate, greeting
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "factory_issue_module"
@@ -162,6 +165,45 @@ S5_SCENARIOS: list[tuple[str, dict, object, list[tuple[str | None, list]]]] = [
      [("国内这个月比上个月多了吗", [_plan("aggregate", domains=_CN, compare="时段", time=[
          {"said": "这个月", "basis": "建单", "from": "user"}, {"said": "上个月", "basis": "建单", "from": "user"}]),
          _NARR])]),
+    # S7：临时统计之后质疑、换图（照存下的脚本重算、重画；脚本按 `_custom_route` 给）
+    ("临时统计·质疑与换图", scopes.GREEN, s3_data,
+     [("近 30 天的问题按星期几分布看看", [_plan("custom_stats", time=_T30, describe="按星期几统计单数"), _NARR]),
+      ("你确定吗", [_plan("verify_previous")]), ("换成饼图", [_plan("rerender", chart="饼图")])]),
+]
+
+# ---------------------------------------------------------------- S7 临时统计
+
+_WEEKDAY = ('```python\ndef run(data):\n    df = data["issues"]\n    names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]\n'
+            '    counts = df["建单时间"].dt.dayofweek.value_counts()\n'
+            '    rows = [[names[i], int(counts.get(i, 0))] for i in range(7)]\n'
+            '    return {"columns": ["星期", "单数"], "rows": rows, "chart": {"type": "bar", "x": "星期", "series": ["单数"]}}\n```')
+#: 模型起了英文列名：形状检查拦下、修一次（护栏「不露字段名」在运行时这一关）
+_ENGLISH = ('```python\ndef run(data):\n    return {"columns": ["weekday", "ProblemType"], "rows": [["Mon", 1], ["Tue", 2]],'
+            ' "chart": {"type": "bar", "x": "weekday", "series": ["ProblemType"]}}\n```')
+_RATES = ('```python\ndef run(data):\n    df = data["issues"]\n    rows = []\n    for dom in ["国内", "巴西"]:\n'
+          '        rate, ok, _ = 合计不良率(df[df["所属域"] == dom])\n        rows.append([dom, rate, ok])\n'
+          '    return {"columns": ["所属域", "合计不良率（%）", "参与张数"], "rows": rows,'
+          ' "chart": {"type": "bar", "x": "所属域", "series": ["合计不良率（%）"]}}\n```')
+_TOO_MANY = ('```python\ndef run(data):\n    return {"columns": ["序号", "单数"], "rows": [[i, 1] for i in range(80)],'
+             ' "chart": {"type": "none"}}\n```')
+_CUSTOM = _plan("custom_stats", time=_T30, describe="按星期几统计单数")
+
+
+def _custom_route(*replies: str):
+    queue = list(replies)
+    return lambda _m: queue.pop(0) if len(queue) > 1 else queue[0]
+
+
+#: （说明, 权限, 问句, 规划与分析的回放, 脚本的回放, 模块配置）
+S7_SCENARIOS: list[tuple[str, dict, str, list, list[str], dict]] = [
+    ("临时统计·三域", scopes.GREEN, "近 30 天的问题按星期几分布看看", [_CUSTOM, _NARR], [_WEEKDAY], {}),
+    ("临时统计·英文列名修一次", scopes.GREEN, "近 30 天的问题按星期几分布看看", [_CUSTOM, _NARR], [_ENGLISH, _WEEKDAY], {}),
+    ("临时统计·海外不良率", scopes.GREEN, "近 30 天各域的合计不良率",
+     [_plan("custom_stats", time=_T30, describe="各域的合计不良率")], [_RATES], {}),
+    ("临时统计·没算出来", scopes.GREEN, "近 30 天每张单编个号", [_CUSTOM], [_TOO_MANY], {}),
+    ("临时统计·关掉", scopes.account_jia(), "近 30 天国内按星期几分布看看",
+     [_plan("custom_stats", domains=_CN, time=_T30, describe="按星期几统计单数")], [],
+     {"answer_params.toml": "custom_stats_enabled = false"}),
 ]
 
 
@@ -238,6 +280,7 @@ async def _conversation(privileges: dict, data: object, turns: list[tuple[str | 
         Harness, list[Event]]:
     h = make_harness(privileges, history=[], config_files={"link_sites.toml": _SITES})
     data.load(h)
+    h.llm.routes[custom_stats.ROUTE_MARKER] = _custom_route(_WEEKDAY)
     events: list[Event] = []
     last: list[Event] = []
     for k, (query, replies) in enumerate(turns):
@@ -296,6 +339,13 @@ async def _collect() -> list[tuple[str, Harness | None, list[Event]]]:
         events = await run(h, query)
         assert events and not any(e.type is EventType.ERROR for e in events), name
         out.append((name, h, events + _export_headers(h)))
+    for name, privileges, query, replies, script_replies, config in S7_SCENARIOS:
+        h = make_harness(privileges, llm_replies=replies, config_files={"link_sites.toml": _SITES, **config})
+        s3_data.load(h)
+        h.llm.routes[custom_stats.ROUTE_MARKER] = _custom_route(*(script_replies or [_WEEKDAY]))
+        events = await run(h, query)
+        assert events and not any(e.type is EventType.ERROR for e in events), name
+        out.append((name, h, events))
     for domains in ([], [Domain.DOMESTIC], list(DOMAINS)):
         access = gate.DomainAccess(
             domains=frozenset(domains), car=False, text_search=frozenset(domains)

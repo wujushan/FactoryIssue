@@ -267,13 +267,15 @@ async def test_unknown_time_clarifies_without_fetching():
     assert data_queries(h) == []
 
 
-async def test_skill_not_yet_wired_answers_not_ready():
-    """临时统计随 S7 接上；在那之前答「暂时还答不了」，不取业务数据（文字查找 S6b 已接上）。"""
+async def test_custom_stats_switched_off_answers_without_fetching():
+    """S7 接上临时统计后，原先「暂时还答不了」的过渡话术去掉；管理员关掉临时统计时照总述「临时统计」答一句、
+    附能力介绍的按钮，不取业务数据、不写脚本（端到端的各种情形见 `tests/test_s7_custom.py`）。"""
     reply = plan_of(step("custom_stats", describe="按星期几统计建单数",
                          time=[{"said": "今年", "basis": "建单", "from": "user"}]))
-    h = make_harness(scopes.account_jia(), llm_replies=[reply])
+    h = make_harness(scopes.account_jia(), llm_replies=[reply],
+                     config_files={"answer_params.toml": "custom_stats_enabled = false"})
     events = await run(h, "今年按星期几统计一下建单数")
-    assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS] and errors.NOT_READY in _text(events)
+    assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS] and errors.CUSTOM_DISABLED in _text(events)
     assert data_queries(h) == []
 
 

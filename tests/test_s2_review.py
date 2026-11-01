@@ -26,7 +26,7 @@ async def test_m1_only_brazil_is_answered_by_the_brazil_adapter():
     h, events = await _go("近 30 天巴西的问题有哪些", [reply], privileges=scopes.GREEN)
     assert EventType.ERROR not in _types(events)
     text = _text(events)
-    assert errors.NOT_READY not in text and "巴西" in text and "没有查到单" in text
+    assert "暂时还答不了" not in text and "巴西" in text and "没有查到单" in text
     assert any(q.tables[0] == "BrazilProblemList" for q in h.queries if q.tables)
 
 

@@ -75,6 +75,26 @@ def choose_compare(groups: int, *, user_chart: str | None) -> tuple[str | None, 
     return "bar", None
 
 
+_MODEL_TYPES = {"bar": "bar", "line": "line", "pie": "pie"}
+
+
+def choose_custom(prefer: str | None, groups: int, *, user_chart: str | None) -> tuple[str | None, str | None]:
+    """临时统计（设计 §5.5）：模型给的图型只作首选，仍照总述「什么时候配图」：2 组及以上才画；时间点少于 3 个
+    用柱状、不用折线；饼图超过 8 组改柱状。用户点名了图型照用户的（同 `choose`，临时统计的表不是一单多值的维度）。"""
+    if user_chart == "不要图" or groups < 2:
+        return None, None
+    if user_chart in _TYPES:
+        return _TYPES[user_chart], None
+    kind = _MODEL_TYPES.get(str(prefer or ""))
+    if kind is None:
+        return None, None
+    if kind == "pie" and groups > PIE_MAX:
+        kind = "bar"
+    if kind == "line" and groups < 3:
+        kind = "bar"
+    return kind, None
+
+
 def style(kind: str, series_count: int, groups: int) -> dict[str, Any]:
     if kind == "pie":
         return _PIE
