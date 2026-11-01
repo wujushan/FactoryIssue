@@ -26,8 +26,9 @@ from factory_issue_module.stats.lib.views import (
     vw_period,
     vw_period_range,
     vw_period_start,
+    vw_merge_missing,
     vw_rate,
-    vw_sorted,
+    vw_rate_list,
     vw_time,
 )
 
@@ -111,13 +112,8 @@ def ag_metric_facts(v, metrics):
 
 
 def ag_rate_list(v, P, dom, C):
-    """海外不良率是单上原文、不汇总：逐单列出原文（建单时间倒序，表格条数同清单）。"""
-    names = P["names"][dom]
-    rows = vw_sorted(v, "_add", True).head(int(P["agg"]["table_rows"])) if len(v) else v
-    return {"columns": [names["number"], names["rate"]],
-            "rows": [[r["number"], r["rate"]] for _, r in rows.iterrows()] if len(rows) else [],
-            "ids": [int(x) for x in rows["_id"].tolist()] if len(rows) else [], "found": int(len(v)),
-            "shown": int(len(rows)), "truncated": int(len(rows)) < int(len(v))}
+    """海外不良率是单上原文、不汇总：逐单列出原文（`views.vw_rate_list`，临时统计也用它）。"""
+    return vw_rate_list(v, P["names"][dom], P["agg"]["table_rows"])
 
 
 def ag_ordered_keys(groups, dim, v_list, period_bounds):
@@ -233,7 +229,7 @@ def ag_compare(parts, A, C):
              "增加的" + title: increased_any, "各组": [[r[0], r[1], r[2], r[3]] for r in rows]}
     if len(parts) > 1:
         facts["计入的域"] = [dom for dom, _v, _d in parts]
-    caliber = {"未计入": ag_merge_missing(missing), "多值归属": any(d.get("multi") for d in dims)}
+    caliber = {"未计入": vw_merge_missing(missing), "多值归属": any(d.get("multi") for d in dims)}
     # 画图用的行：两段各一组柱子，数取自上面的表；合计不画（会把各组压扁），增减量、变化率单位不同也不画
     if dims:
         chart = {"dimension": title, "series": [a["label"], b["label"]],
@@ -242,14 +238,6 @@ def ag_compare(parts, A, C):
         chart = {"dimension": C["period"], "series": [C["count"]],
                  "rows": [{C["period"]: a["label"], C["count"]: na_all}, {C["period"]: b["label"], C["count"]: nb_all}]}
     return {"columns": columns, "rows": rows}, chart, facts, caliber, nb_all > na_all, increased_any
-
-
-def ag_merge_missing(items):
-    """[[日期依据, 张数], …]：同一依据的几项（几个域）相加。"""
-    out = {}
-    for basis, n in items or []:
-        out[basis] = out.get(basis, 0) + int(n)
-    return [[k, n] for k, n in out.items()]
 
 
 def ag_bounds(P, dom, dims, v, found):
@@ -444,7 +432,7 @@ def ag_cross_overview(timed, A, C, P, refs):
             "title": C["domain"], "table": {"columns": columns, "rows": rows},
             "chart": {"dimension": C["domain"], "rows": chart, "series": [C["count"]]},
             "groups": len(timed), "found": n_all, "facts": fi_with_counts(facts),
-            "caliber": {"未计入": ag_merge_missing(missing), "生产角色驳回": totals["rejected"],
+            "caliber": {"未计入": vw_merge_missing(missing), "生产角色驳回": totals["rejected"],
                         "停线中且已完成": totals["stopped_done"], "另列": set_aside, "结案周期分域": close_split,
                         **mcal_all},
             "rate_lists": rate_lists}

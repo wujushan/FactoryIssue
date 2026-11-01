@@ -305,7 +305,7 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
     if got is None:
         out.events.append(Event.delta("。".join([*dict.fromkeys(head), errors.SECTION_FAILED]) + "。"))
         return out
-    res, outcome_frames, counts, sem_notes = got
+    res, outcome_frames, counts, sem_notes, crowded = got
     segs = res.get("segments") or []
     out.ok = True
     out.empty = all((s.get("found") or 0) == 0 for s in segs)
@@ -326,7 +326,7 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
         await summaries.fill_tables(T.ctx, segs, executed)
     if reasons:
         await X._add_reasons(T, segs)
-    out.events += _present(run, T, tp, res, segs, counts, head)
+    out.events += _present(run, T, tp, res, segs, counts, head, crowded_hint(run.step) if crowded else "")
     narr = await _narrative(T, X, tp, res, segs, run)
     if narr is not None:
         out.events.append(narr)
@@ -340,8 +340,9 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
     return out
 
 
-async def _search(run: Any, T: Any, R: Ready) -> tuple[dict[str, Any], dict[str, pd.DataFrame], dict[str, Any], list[str]] | None:
-    """②–⑥：按词匹配、按意思找与判断、收拢。沙箱失败返回 None。"""
+async def _search(run: Any, T: Any, R: Ready) -> tuple[dict[str, Any], dict[str, pd.DataFrame], dict[str, Any], list[str],
+                                                       bool] | None:
+    """②–⑥：按词匹配、按意思找与判断、收拢。沙箱失败返回 None；最后一项是第三组候选是否太多（§5.4）。"""
     from factory_issue_module.turn import execute as X
 
     tp, executed = R.tp, R.executed
@@ -364,7 +365,7 @@ async def _search(run: Any, T: Any, R: Ready) -> tuple[dict[str, Any], dict[str,
         kw_frames = dict(getattr(outcome, "frames", None) or {})
         counts = {"by_domain": (outcome.result or {}).get("counts") or {},
                   "totals": (outcome.result or {}).get("totals") or {}}
-    sem_frames, sem_notes = await _semantic(T, tp, executed, kw_frames, conditioned)
+    sem_frames, sem_notes, crowded = await _semantic(T, tp, executed, kw_frames, conditioned)
     labels, show_group = _labels(tp)
     keys, _reasons = table_keys(run.step, show_group)
     cols = {d.label: _domain_cols(keys, d, X.ADAPTERS[d].KEY_ALIAS) for d in executed}
@@ -377,14 +378,18 @@ async def _search(run: Any, T: Any, R: Ready) -> tuple[dict[str, Any], dict[str,
     outcome2 = await runner.run(T.ctx, "text_merge", datasets, P2, return_frames=True)
     if not outcome2.ok:
         return None
-    return outcome2.result or {}, dict(getattr(outcome2, "frames", None) or {}), counts, sem_notes
+    return outcome2.result or {}, dict(getattr(outcome2, "frames", None) or {}), counts, sem_notes, crowded
 
 
 async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mapping[str, pd.DataFrame],
-                    conditioned: bool) -> tuple[dict[str, pd.DataFrame], list[str]]:
-    """③④⑤：每域检索一次（有带 ＊ 的候选时在候选里再检索一次排好），「可能相关」交模型判断。返回 `sem_<域>` 帧。"""
+                    conditioned: bool) -> tuple[dict[str, pd.DataFrame], list[str], bool]:
+    """③④⑤：每域检索一次（有带 ＊ 的候选时在候选里再检索一次排好），「可能相关」交模型判断。返回 (`sem_<域>` 帧,
+    统计口径要写的几句, 候选是不是多到来不及逐张看完)。
+
+    候选太多（设计 §5.4 第三种信号）：某域按意思找取回的张数到了上限（`top_n`，取回的就是最相近的那一批，后面可能
+    还有），或带 ＊ 的候选并进来后超过判断上限 `judge_max`（多出的没判）。类似问题不逐张判断，不算。"""
     if tp.semantic is None:
-        return {}, []
+        return {}, [], False
     S = tp.semantic
     sim = S["kind"] == "sim"
     judge_max = int(T.answer.judge_max)
@@ -407,10 +412,13 @@ async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mappin
     if any(v is not None and v.partial for v in found.values()):
         notes.append(errors.SEMANTIC_PARTIAL)
     lists: dict[str, list[tuple[int, str, float | None, float | None]]] = {}
+    crowded = False
     for d in executed:
         got = found.get(d)
         if got is None:
             continue
+        # 取回的张数到了上限：比的是张数与上限，不产出给用户的数（话术里不带数）
+        crowded = crowded or (not sim and len(got.hits) >= top_n)
         taken = set(_ids(kw.get("kw_" + d.label), "issue_id"))
         items = [(h.issue_id, h.text, h.rerank, h.score) for h in got.hits if h.issue_id not in taken]
         if not sim:
@@ -425,6 +433,7 @@ async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mappin
                     items = [(h.issue_id, h.text, h.rerank, h.score) for h in again.hits if h.issue_id not in taken]
                     seen = {x[0] for x in items}
                 items += [(i, stars[i], None, None) for i in extra if i not in seen]  # 向量表里没有段的：排在后面
+                crowded = crowded or len(items) > judge_max
         lists[d.label] = items
     flags: dict[str, list[bool | None]] = {}
     if not sim:
@@ -438,11 +447,25 @@ async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mappin
             [[i, k, _clip(t), r, s, bool(related[k]) if k < len(related) else False]
              for k, (i, t, r, s) in enumerate(items)],
             columns=["issue_id", "rank", "context", "rerank", "score", "related"])
-    return frames, notes
+    return frames, notes, crowded
+
+
+#: 候选太多时建议加的条件，按这个顺序点用户还没给的前两个（总述「涉及某个话题怎么找」）
+_NARROWERS = (("时间", None), ("机型", ("机型", "系列")), ("加工厂", ("加工厂",)))
+
+
+def crowded_hint(step: Mapping[str, Any]) -> str:
+    """第三组候选太多、来不及逐张看完（设计 §5.4）：建议加时间、机型等条件再查，只点用户还没给的条件。"""
+    p = step.get("params") or {}
+    fields = {str(f.get("field")) for f in p.get("filters") or [] if isinstance(f, dict)}
+    has_time = any(isinstance(t, dict) and t.get("said") for t in p.get("time") or [])
+    left = [name for name, fs in _NARROWERS if not (has_time if fs is None else fields & set(fs))][:2]
+    tail = f"可以加上{'、'.join(left)}等条件再查" if left else "可以把条件再收窄一些再查"
+    return f"「{columns.TEXT_GROUPS['3']}」一组的候选较多，来不及逐张看完，只看了最相近的一批；{tail}"
 
 
 def _present(run: Any, T: Any, tp: TermPlan, res: Mapping[str, Any], segs: Sequence[dict[str, Any]],
-             counts: Mapping[str, Mapping[str, Any]], head: list[str]) -> list[Event]:
+             counts: Mapping[str, Mapping[str, Any]], head: list[str], hint: str = "") -> list[Event]:
     from factory_issue_module.turn import execute as X
 
     events: list[Event] = []
@@ -462,7 +485,8 @@ def _present(run: Any, T: Any, tp: TermPlan, res: Mapping[str, Any], segs: Seque
             tail = f"合计 {total_third} 张相近的问题"
         lines.append(tail)
     # 用户问的正是说法清单「说明」里点名的那种问法（问「漏电的问题」）：照写那一条怎么判（总述「涉及某个话题怎么找」）
-    extra = [x for x in (used_text(tp), tp.asked_rule, adjust_hint(tp)) if x]
+    # `hint`：第三组候选太多、来不及逐张看完时建议加条件（设计 §5.4）
+    extra = [x for x in (used_text(tp), tp.asked_rule, adjust_hint(tp), hint) if x]
     events.append(Event.delta("；\n".join(lines) + "。" + ("\n" + "。".join(extra) + "。" if extra else "")))
     for seg in segs:
         dom = X._BY_LABEL.get(str(seg.get("domain")), Domain.DOMESTIC)

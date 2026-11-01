@@ -147,7 +147,7 @@ def test_case_turns_defaults_to_one_query():
 def test_golden_files_stay_inside_g3_rules():
     payload = json.loads((ROOT / "docs/testcases/golden/cases.json").read_text(encoding="utf-8"))
     cases = payload["cases"]
-    assert len(cases) == 114
+    assert len(cases) == 115  # 2026-10-31 加临时统计的 XC-040（开发者同意）
     ids = [case["id"] for case in cases]
     assert len(ids) == len(set(ids))
     permission_ids = {"XC-017", "XC-030", "XC-032", "XC-033", "XC-034"}

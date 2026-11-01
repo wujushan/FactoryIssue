@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "114 条。种子 v0.9.5 的 109 条，加 2026-10-28 按落盘补的 XC-035 至 XC-039。",
+    "115 条。种子 v0.9.5 的 109 条，加 2026-10-28 按落盘补的 XC-035 至 XC-039，2026-10-31 加临时统计的 XC-040（开发者同意）。",
     "权限 5 条只在 docs/testcases/manual/其余.md。",
     "断言只锁口径和呈现，不锁表张数、列顺序、调用次数和某天的行数。",
     "2026-10-29：CN-021 的期望列「建单时间」改为「现场发现日期」（决策 2026-10-29「发生时间按现场发现日期」，开发者同意）。",
@@ -4275,6 +4275,52 @@
         }
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-039.sql。上上周是再往前一个自然周，起止日期随运行日变，不写死。本轮不追问日期。这次没有单，不强制出表。有单时清单仍给默认 6 列。"
+    },
+    {
+      "id": "XC-040",
+      "query": "今年的问题按星期几分布看看",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P2",
+      "result_form": "统计",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId",
+          "AddDate",
+          "import",
+          "def run",
+          "这一类查询暂时还答不了"
+        ],
+        "answer_contains": [
+          "以下为临时统计",
+          "统计口径",
+          "按建单时间",
+          "按本次临时编写的统计脚本计算"
+        ],
+        "tables": {
+          "min_rows": 2,
+          "forbidden_columns": [
+            "ID",
+            "IsDelete",
+            "ProblemType",
+            "ProblemId",
+            "AddDate",
+            "Status"
+          ]
+        }
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-040.sql。固定统计没有按星期几分组，走临时统计（总述「回答怎么组织」「临时统计」）。表头由助手起，不锁列名、列顺序与图型；只锁临时统计的开头与统计方法、按建单时间、三域都查。2026-10-31 开发者同意加这一条（S7）。"
     }
   ]
 }

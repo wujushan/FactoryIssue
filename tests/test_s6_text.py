@@ -536,7 +536,7 @@ async def test_text_round_records_terms_and_next_round_filters_within_stored_ids
     first = plan(step("text_search", domains=CN, time=T30, mode="关键词", terms=["换"]))
     await c.ask("国内近 30 天描述里有「换」的单", first)
     results = c.ws(workspace.RESULTS)
-    assert results["v"] == workspace.VERSION == 2
+    assert results["v"] == workspace.VERSION >= 2  # S6b 加 `texts` 时为 2，S7 加临时统计的脚本后为 3
     assert results["texts"]["s1"]["terms"] == ["换"] and results["steps"]["s1"]["国内"]["numbers"] == [
         "ZC9901001", "ZC9901002", "ZC9901004"]
     seg = Domain.DOMESTIC.seg_table
@@ -569,7 +569,7 @@ async def test_verify_previous_text_search_compares_and_notes_judging():
     assert not _tables(events)
 
 
-@pytest.mark.parametrize("version", [1])
+@pytest.mark.parametrize("version", [1, 2])  # 2：S7 之前的值（`turn.steps` 里还没有临时统计的脚本）
 async def test_old_workspace_version_is_treated_as_no_context(version):
     from test_s5_multiturn import Conversation
 

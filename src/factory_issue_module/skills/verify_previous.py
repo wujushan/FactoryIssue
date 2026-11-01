@@ -26,9 +26,9 @@ from factory_issue_module.stats import runner
 from factory_issue_module.turn import errors, execute, workspace
 
 _BY_LABEL = {d.label: d for d in DOMAINS}
-_COMPARED = ("list_issues", "aggregate", "lookup_numbers", "text_search")
+_COMPARED = ("list_issues", "aggregate", "lookup_numbers", "text_search", "custom_stats")
 _TITLES = {"list_issues": "清单", "aggregate": "统计", "lookup_numbers": "按号查单", "issue_detail": "单张单详情",
-           "text_search": "按文字找单"}
+           "text_search": "按文字找单", "custom_stats": "临时统计"}
 #: 重查的文字查找里有模型逐张判断的一组（「可能相关」）时那句（S6b）
 JUDGED_NOTE = "按文字找单里「可能相关」一类按意思找到的单要逐张判断，每次判断可能略有不同，这几张的出入不一定是数据变了"
 #: 变化的单那张表「变化」一列的说法（总述「表格列名」，`present/columns.py` 导入时核对）
@@ -76,6 +76,18 @@ def _line(item: Mapping[str, Any]) -> str:
     return text + tail
 
 
+def execute_charts(got: Any, by_sid: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """重放算出的图数据：统计各段的，临时统计照存下的脚本重算出的那一张（`StepOut.extra["chart"]`）。"""
+    out: list[dict[str, Any]] = []
+    for sid, step_out in got.outs.items():
+        skill = by_sid[sid].skill
+        if skill == "aggregate":
+            out += [x for x in (execute.seg_chart_item(by_sid[sid], seg) for seg in step_out.segs) if x is not None]
+        elif skill == "custom_stats" and isinstance(step_out.extra.get("chart"), dict):
+            out.append(dict(step_out.extra["chart"]))
+    return out
+
+
 def denied_domains(turn: Mapping[str, Any], access: Any) -> list[str]:
     """上一轮查过、本轮已经没有权限的域。"""
     done = [str(d) for info in (turn.get("steps") or {}).values() for d in (info or {}).get("domains") or []]
@@ -97,9 +109,8 @@ async def run(T: execute.Turn, turn: Mapping[str, Any], results: Mapping[str, An
         head.append(f"{'、'.join(denied)}现在没有查看权限，这次没有重查")
     events: list[Event] = [Event.delta("。".join(head) + "。\n\n")]
     by_sid = {r.sid: r for r in got.runs}
-    # 重查算出的图数据照样存下（下一轮换图用），本轮不画
-    T.record.charts = [x for sid, out in got.outs.items() if by_sid[sid].skill == "aggregate"
-                       for x in (execute.seg_chart_item(by_sid[sid], seg) for seg in out.segs) if x is not None]
+    # 重查算出的图数据照样存下（下一轮换图用），本轮不画；临时统计照存下的脚本重算的图同样存下
+    T.record.charts = execute_charts(got, by_sid)
     compared = [sid for sid, out in got.outs.items() if by_sid[sid].skill in _COMPARED and out.domains]
     found = any(out.found_any for out in got.outs.values())
     if compared:

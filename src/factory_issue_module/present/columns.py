@@ -323,6 +323,12 @@ TEXT_GROUPS = {"1": _derived("问题本身涉及"), "2": _derived("处理中提�
 #: 点名字段、问做法的第一组；问做法又说了现象时两边都命中的那组。第三组各种找法都叫「可能相关」（开发者 2026-10-31 定）
 TEXT_HIT = _derived("直接提到")
 TEXT_BOTH = _derived("两边都提到")
+#: 临时统计输入帧里几列派生的是否、天数（术语表「结案」「停线」的别称与总述「按哪个日期筛」、巴西「费用」的说法；
+#: 设计 §5.5）
+CLOSED = _derived("已结案")
+STOPPED_EVER = _derived("曾经停线")
+STOP_DAYS = _derived("停线时长")
+HAS_COST = _derived("涉及费用")
 #: 质疑上一轮、重查后有变化的单那张表的「变化」一列与它的两种说法（总述「表格列名」）
 VERIFY_CHANGE = _derived("变化")
 VERIFY_ADDED = _derived("这次新查到")

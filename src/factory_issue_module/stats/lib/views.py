@@ -257,3 +257,30 @@ def vw_bins(sub):
 
 def vw_top(pairs, top):
     return fi_rank(pairs, top)
+
+
+def vw_merge_missing(items):
+    """[[日期依据, 张数], …]：同一依据的几项（几个域）相加。统计口径「时间范围」那一项按这个形状写（`caliber.time_range`）；
+    统计的跨域各段与临时统计共用。"""
+    out = {}
+    for basis, n in items or []:
+        out[basis] = out.get(basis, 0) + int(n)
+    return [[k, n] for k, n in out.items()]
+
+
+def vw_ids(v):
+    """后一步引用、工作区要存的结果单（按视图的顺序）：单 ID 与问题编号，作为明细帧（`ids_<域>`）回传。"""
+    if not len(v):
+        return pd.DataFrame({"_id": pd.Series([], dtype="int64"), "_number": pd.Series([], dtype="object")})
+    return pd.DataFrame({"_id": [int(x) for x in v["_id"].tolist()], "_number": [str(x) for x in v["_number"].tolist()]})
+
+
+def vw_rate_list(v, names, table_rows):
+    """海外不良率是单上原文、不汇总：逐单列出原文（建单时间倒序，表格条数同清单；总述「汇总不良率」）。
+
+    `names` 是本域视图列的显示名（`present/columns.py`）。统计与临时统计共用。"""
+    rows = vw_sorted(v, "_add", True).head(int(table_rows)) if len(v) else v
+    return {"columns": [names["number"], names["rate"]],
+            "rows": [[r["number"], r["rate"]] for _, r in rows.iterrows()] if len(rows) else [],
+            "ids": [int(x) for x in rows["_id"].tolist()] if len(rows) else [], "found": int(len(v)),
+            "shown": int(len(rows)), "truncated": int(len(rows)) < int(len(v))}

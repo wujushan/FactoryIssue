@@ -7,6 +7,7 @@ spike 只给计划打分、不执行；这里接着往下走一步：用 `tests/
 - 只看与库里取值无关的追问：类型、取值、状态、等级对不上。这几类出现一条就退出码 1。
 - 名字对不上（机型、工厂、人员、供应商、部门、系列）受假数据影响，只列出、不判。
 - 期望本来就是追问的、带上文的多轮条跳过。
+- 写成临时统计的计划（S7 起执行层接上）：模型写脚本那一次用一份固定脚本顶上（`FIXED_SCRIPT`），只看执行层认不认得。
 
 用法（仓库根目录）：
 
@@ -32,9 +33,20 @@ import scopes  # noqa: E402
 from fakes import make_harness, run  # noqa: E402
 from forge_core.events import EventType  # noqa: E402
 
+from factory_issue_module.skills import custom_stats  # noqa: E402
+
 #: 与库里取值无关的追问原因（`domains/*.py` 里 `Ask(reason=…)`）：出现即执行层没认出对照集判对的写法
 VALUE_REASONS = ("类型对不上", "取值对不上", "状态对不上", "等级对不上")
 NARRATIVE = "共 1 张。"
+#: 写成临时统计的计划（V-32 等）在执行层要模型写脚本：这里给一份固定的（按所属域计数），只看执行层认不认得计划，
+#: 不看脚本写得对不对（那是 spike 临时统计一项量的）
+FIXED_SCRIPT = '''```python
+def run(data):
+    df = data["issues"]
+    counts = df["所属域"].value_counts()
+    rows = [[k, int(v)] for k, v in counts.items()]
+    return {"columns": ["所属域", "单数"], "rows": rows, "chart": {"type": "bar", "x": "所属域", "series": ["单数"]}}
+```'''
 
 
 def _latest_raw() -> Path | None:
@@ -60,6 +72,7 @@ def _skip(case: dict) -> bool:
 async def _one(query: str, plan: dict) -> tuple[str, str] | None:
     h = make_harness(scopes.GREEN, llm_replies=[plan] + [NARRATIVE] * 12)
     s3_data.load(h)
+    h.llm.routes[custom_stats.ROUTE_MARKER] = lambda _m: FIXED_SCRIPT
     try:
         events = await run(h, query)
     except Exception as exc:  # noqa: BLE001 —— 执行层抛异常本身就是要报的
