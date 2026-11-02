@@ -867,3 +867,71 @@ async def test_duplicate_name_button_fills_department_and_person():
     assert EventType.CLARIFY not in _types(events)
     main = next(q for q in data_queries(c.h) if q.tables[0] == "ZCTracking_ProblemList")
     assert "13" in [str(v) for v in main.params.values()]
+
+
+# ---------------------------------------------------------------------------- 「另外两个工厂」（G43，手动 badcase 2026-11-02）
+
+_H1 = [{"said": "今年上半年", "basis": "建单", "from": "user"}]
+_H1_PREV = [{"said": "今年上半年", "basis": "建单", "from": "previous"}]
+_REGION_ASK = "今年上半年国内惠州的三个工厂一共出了多少问题？"
+
+
+def _factory_codes(h) -> set:
+    """最近一次国内主表取数里加工厂条件的工厂码（假连接器不执行 WHERE，看发出的参数）。"""
+    main = [q for q in data_queries(h) if q.tables[0] == "ZCTracking_ProblemList"][-1]
+    return {v for v in main.params.values() if v in {"04", "05", "06", "09"}}
+
+
+async def _pick_one_of_the_region(c: Conversation) -> None:
+    reply = plan(step("aggregate", domains=CN, time=_H1,
+                      filters=[{"field": "加工厂", "op": "属于", "value": "惠州的三个工厂", "from": "user"}]))
+    events = await c.ask(_REGION_ASK, reply)
+    assert _types(events) == [EventType.CLARIFY]
+    rec = next(r for r in _buttons(events) if r["label"] == "惠州百富")
+    events = await c.ask(rec["query"], NARR)  # 点了按钮：直填，不调规划
+    c.h.llm.replies.clear()
+    assert EventType.CLARIFY not in _types(events) and _factory_codes(c.h) == {"09"}
+    scopes = c.ws(workspace.TURN)["steps"]["s1"]["scopes"]
+    assert scopes == [{"field": "加工厂", "said": "惠州的三个工厂", "candidates": ["柯洱斯", "亮亮", "惠州百富"],
+                       "chosen": ["惠州百富"]}]
+
+
+@pytest.mark.parametrize("rest_filter", [
+    # 规划器实际的写法（手动 badcase）：照抄用户说法
+    {"field": "加工厂", "op": "属于", "value": "惠州另外两个工厂", "from": "user"},
+    # 规划提示 G43 那条的写法：不属于上一轮点过的
+    {"field": "加工厂", "op": "不属于", "value": "惠州百富", "from": "user"},
+])
+async def test_other_factories_of_the_region_after_picking_one(rest_filter):
+    """选了惠州三家里的惠州百富之后问「那另外两个工厂呢」：按柯洱斯、亮亮查，开头写明；质疑重查照样认得。"""
+    c = Conversation(scopes.account_jia())
+    await _pick_one_of_the_region(c)
+    reply = plan(step("aggregate", domains=CN_PREV, time=_H1_PREV, filters=[rest_filter]))
+    events = await c.ask("那另外两个工厂呢", reply, NARR)
+    c.h.llm.replies.clear()
+    assert EventType.CLARIFY not in _types(events)
+    assert _factory_codes(c.h) == {"04", "05", "06"}  # 柯洱斯两个同名码加亮亮，没有惠州百富
+    assert "按柯洱斯、亮亮统计（上一轮「惠州的三个工厂」里除惠州百富以外的工厂）" in _text(events)
+    assert c.ws(workspace.TURN)["steps"]["s1"]["scopes"][0]["chosen"] == ["惠州百富"]
+    # 质疑重查按本轮存下的执行计划重放，候选仍认得，不改问名称
+    events = await c.ask("你确定吗", plan(step("verify_previous")))
+    c.h.llm.replies.clear()
+    assert EventType.CLARIFY not in _types(events) and _factory_codes(c.h) == {"04", "05", "06"}
+
+
+async def test_other_factories_without_a_recorded_region_behaves_as_before():
+    """上一轮没有按地区追问过：「惠州另外两个工厂」照旧对库（对不上就请用户核对），「不属于 惠州百富」照旧排除。"""
+    c = Conversation(scopes.account_jia())
+    await c.ask("今年上半年国内惠州百富出了多少问题", plan(step("aggregate", domains=CN, time=_H1, filters=[
+        {"field": "加工厂", "op": "是", "value": "惠州百富", "from": "user"}])), NARR)
+    c.h.llm.replies.clear()
+    assert "scopes" not in c.ws(workspace.TURN)["steps"]["s1"]
+    events = await c.ask("那惠州另外两个工厂呢", plan(step("aggregate", domains=CN_PREV, time=_H1_PREV, filters=[
+        {"field": "加工厂", "op": "属于", "value": "惠州另外两个工厂", "from": "user"}])))
+    c.h.llm.replies.clear()
+    assert _types(events) == [EventType.CLARIFY]
+    events = await c.ask("那另外的呢", plan(step("aggregate", domains=CN_PREV, time=_H1_PREV, filters=[
+        {"field": "加工厂", "op": "不属于", "value": "惠州百富", "from": "user"}])), NARR)
+    c.h.llm.replies.clear()
+    main = [q for q in data_queries(c.h) if q.tables[0] == "ZCTracking_ProblemList"][-1]
+    assert "NOT IN" in main.sql.upper() and _factory_codes(c.h) == {"09"}

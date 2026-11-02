@@ -4321,6 +4321,49 @@
         }
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-040.sql。固定统计没有按星期几分组，走临时统计（总述「回答怎么组织」「临时统计」）。表头由助手起，不锁列名、列顺序与图型；只锁临时统计的开头与统计方法、按建单时间、三域都查。2026-10-31 开发者同意加这一条（S7）。"
+    },
+    {
+      "id": "XC-041",
+      "query": "那另外两个工厂呢？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "visible_contains": [
+          "柯洱斯",
+          "亮亮"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-041.sql。第 2 轮是点追问按钮「惠州百富」时发出的消息（按钮只发选项本身，靠会话工作区直填）；第 3 轮按「惠州的三个工厂」减去惠州百富查。",
+      "turns": [
+        {
+          "query": "今年上半年国内惠州的三个工厂一共出了多少问题？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "惠州百富",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "那另外两个工厂呢？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
     }
   ]
 }

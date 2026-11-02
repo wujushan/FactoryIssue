@@ -109,6 +109,9 @@ class Turn:
     seg: Segmentation | None = None
     #: 上一轮存下的临时统计脚本（[{describe, script}]，`workspace.stored_scripts`）：要算的一样时照它算，不调模型
     scripts: Sequence[Mapping[str, str]] = ()
+    #: 本轮由追问选项直填、按地区说法选了其中几家的（`workspace.Filled.scopes`）：与 `resolver.used` 一起写进
+    #: `turn.steps`，下一轮「另外的」照它查（G43）
+    scopes: Sequence[Mapping[str, Any]] = ()
 
 
 @dataclass
@@ -1269,6 +1272,17 @@ def _time_items(step: dict) -> list[dict[str, Any]]:
     return [t for t in schema.as_list((step.get("params") or {}).get("time")) if isinstance(t, dict) and t.get("said")]
 
 
+def _scopes_of(T: Turn) -> list[dict[str, Any]]:
+    """本轮直填记下的与按上一轮候选查了的，按（条件名, 原话）去重（各域、重放会各追加一次）。"""
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for s in [*T.scopes, *T.resolver.used]:
+        out.setdefault((str(s.get("field")), str(s.get("said"))), {
+            "field": str(s.get("field")), "said": str(s.get("said") or ""),
+            "candidates": [str(c) for c in s.get("candidates") or []],
+            "chosen": [str(c) for c in s.get("chosen") or []]})
+    return list(out.values())
+
+
 def _record(T: Turn, r: StepRun, out: StepOut) -> None:
     """记下这一步实际执行了什么（§10 `turn`、`results`）：查了哪些域、换算后的时间连同原话、各域张数与结果单 ID。"""
     if not out.domains:
@@ -1281,6 +1295,9 @@ def _record(T: Turn, r: StepRun, out: StepOut) -> None:
         "found": dict(out.refs.get(f"{r.sid}.found") or {}),
         # 看原话才定下的判据（巴西「涉及费用」按标记还是按明细）：沿用与重放照用（S5 评审 M1）
         "decided": {k: v for d in r.dsteps.values() for k, v in d.decided.items()}}
+    scopes = _scopes_of(T)
+    if scopes:  # 地区候选与选定的几家：下一轮「另外的」、重放本轮都照它（G43）
+        T.record.steps[r.sid]["scopes"] = scopes
     custom = out.extra.get("custom")
     if isinstance(custom, dict) and custom.get("script"):  # 临时统计：要算什么与那份脚本，重放照它算（S7）
         T.record.steps[r.sid]["custom"] = {"describe": str(custom.get("describe") or ""),

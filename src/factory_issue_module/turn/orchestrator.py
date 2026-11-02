@@ -186,14 +186,19 @@ async def run_turn(
     focus = await workspace.read(ctx, workspace.FOCUS) if (previous.plan or previous.turn) else None
 
     carried = workspace.decided(previous.turn)
+    # 上一轮按地区说法选了其中几家：本轮「另外的」照候选减去选定的查（G43）；本轮直填记下的随本轮写进 `turn`
+    rest = workspace.rest_scopes(previous.turn)
+    filled_scopes = list(filled.scopes) if filled is not None else []
 
     def make_turn(result: PlanResult) -> execute.Turn:
         return execute.Turn(ctx=ctx, manifest=manifest, access=access, master=master, answer=answer,
                             resolver=base.Resolver(master=master, dept_aliases=dept_aliases, regions=regions,
-                                                   entities=entities, today=today, query=asked, carried=carried),
+                                                   entities=entities, today=today, query=asked, carried=carried,
+                                                   rest=rest),
                             query=asked, today=today, result=result, entities=entities, sites=sites,
                             previous_turn=previous.turn, previous_results=results, focus=focus,
-                            topics=topics, seg=seg, scripts=workspace.stored_scripts(previous.turn))
+                            topics=topics, seg=seg, scripts=workspace.stored_scripts(previous.turn),
+                            scopes=filled_scopes)
 
     if first.get("skill") in REPLAY_SKILLS:
         async for event in _replay(ctx, query, result, first, previous, make_turn(result), results):

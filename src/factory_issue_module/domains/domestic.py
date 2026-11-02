@@ -195,14 +195,22 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg})
             out.echo.append(("系列", base.join(got_series)))
         elif fld == "加工厂":
+            rest = base.rest_of(fld, values, neg, R)
+            if rest is not None:  # 上一轮选了地区里的几家、本轮问另外的（G43）
+                left, note = rest
+                out.notes.append(note)
+                out.sql.append(cond("m.Factory", "IN", m.factory_codes(left)))
+                out.echo.append(("加工厂", base.join(left)))
+                continue
             hit = []
             for v in values:
                 got = list(names.factories(v, m.factory_names(), R.regions))
                 if not got:
                     return base.not_found("加工厂", v, R.entities, None)
                 if len(got) > 1:
+                    scope = {"field": fld, "candidates": got} if names.region_items(v, R.regions) else None
                     return Ask(f"「{v}」对上了这几家工厂：{base.join(got)}。按哪几家查？", [base.join(got), *got][:4],
-                               reason="多工厂", said=v)
+                               reason="多工厂", said=v, scope=scope)
                 hit += [x for x in got if x not in hit]
             codes = m.factory_codes(hit)
             out.sql.append(cond("m.Factory", "NOT_IN" if neg else "IN", codes))

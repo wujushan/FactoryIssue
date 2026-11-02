@@ -23,7 +23,7 @@
     - G3：检索评测集已落 `docs/testcases/检索评测集.md`（决策 2026-10-28）。分段的 `whole` / `field` / `field_split` 对比还没跑，默认仍是 `field_split`。
     - G4a / G4b：manifest 按决策「结论」写 `data_sources`（mart 别名的 `tables` 列 9 张）、`vectorize` 3 条（`metadata_columns` 不得后改）、`config_files`；mart 别名不填 `field_mappings`；查询流程按决策「查询期怎么用」「叙述原文的取数」细化；平台没把 `info` 默认库设为 `CoreINFO` 前，经 `info` 发出的 SQL 不用 `TRY_CONVERT` / `STRING_SPLIT`。
     - 上线：首轮跑数先全量重建，再 3 个向量化任务，再重启平台；统计行发回业务仓做决策「上线首轮核对」。
-- [x] **G3 测试案例集**：2026-10-28 完成（开发者确认按现稿收口，案例集冻为 v1.0；2026-10-31 加临时统计的 XC-040）。115 条 golden 在 `docs/testcases/golden/cases.json` 与 `golden/sql/`，人工手册在 `manual/首批.md`（33 条）和 `manual/其余.md`（82 条 + 权限 5 条）。权限 5 条不进 golden。检索评测集在 `docs/testcases/检索评测集.md`。验收写业务行为，不写调用次数和事件顺序。
+- [x] **G3 测试案例集**：2026-10-28 完成（开发者确认按现稿收口，案例集冻为 v1.0；2026-10-31 加临时统计的 XC-040，2026-11-02 加三轮的 XC-041）。116 条 golden 在 `docs/testcases/golden/cases.json` 与 `golden/sql/`，人工手册在 `manual/首批.md`（33 条）和 `manual/其余.md`（83 条 + 权限 5 条）。权限 5 条不进 golden。检索评测集在 `docs/testcases/检索评测集.md`。验收写业务行为，不写调用次数和事件顺序。
   - **带入后续阶段**：
     - G5：`uv run python scripts/qa_test.py docs/testcases/golden/cases.json` 接真实测试数据；四类权限账号人工验收；分段 `whole` / `field` / `field_split` 的对比在平台测试环境跑，默认仍是 `field_split`。
     - 参考 SQL 里能下推到数据库的语句，评审或对拍时在 `info` 上抽查即可，不要求 114 份都先跑通。澄清和不取数的文件没有可执行查询。
