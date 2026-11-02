@@ -11,7 +11,8 @@
 
 主数据按需取（决策 2026-11-01「寒暄不取主数据与追问用例的取数断言」）：给了 `enrich` 时，`inputs` 里先没有
 主数据，只在用得到时调 `enrich` 补上。号码直通先不带机型清单判断（机型清单只会多拒几种直通），会直通时才补上
-主数据再判断一遍；模型第一次写的计划只有 `introduce` 时不补，其余计划都先补再规整、校验、修一次。
+主数据再判断一遍；模型第一次写的计划只有不带条件的 `introduce` 时不补（`introduce_only`），其余计划都先补再
+规整、校验、修一次。第一次格式不合格的也在修一次之前补，修后才写成介绍的照样取过主数据。
 """
 
 from __future__ import annotations
@@ -99,11 +100,25 @@ class _Normalized:
 Enrich = Callable[["PlanInputs"], Awaitable["PlanInputs"]]
 
 
+#: 规整时会读主数据的参数：第 7 条按 `classes` 给 `filters` 归类；第 4 条把对象写法的 `compare` 改成 `filters`
+_MASTER_READ_PARAMS = ("filters", "compare")
+
+
 def introduce_only(plan: dict | None) -> bool:
-    """计划的每一步都是 `introduce`（寒暄、问能力、只读之外的请求、管不着的事）。"""
+    """计划的每一步都是 `introduce`（寒暄、问能力、只读之外的请求、管不着的事），而且都不带条件。
+
+    只有这种计划不取主数据就规整：不带条件时规整出来与带主数据时一样。带了 `filters`、`compare` 的介绍
+    （格式校验允许任何技能带）按普通计划先取主数据（评审 2026-11-01 A2）。
+
+    判据与编排不同：编排看第一步是 `introduce` 就按介绍答（`turn/orchestrator.py::run_turn`），这里要每一步都是。
+    `[introduce, list_issues]` 这种计划因此会先取主数据、最后照样只答介绍，只是多发几条主数据 SQL。不改成按第一步
+    判：后面那步带条件时，规整第 7 条有主数据时可能把整份改成追问，没有时照答介绍，两种结果不同（评审 A4）。
+    """
     steps = (plan or {}).get("steps")
     return bool(steps) and isinstance(steps, list) and all(
-        isinstance(s, dict) and s.get("skill") == "introduce" for s in steps)
+        isinstance(s, dict) and s.get("skill") == "introduce"
+        and not any((s.get("params") or {}).get(k) for k in _MASTER_READ_PARAMS)
+        for s in steps)
 
 
 def with_master(inputs: PlanInputs, *, classes: Mapping[str, Sequence[str]],
@@ -166,8 +181,8 @@ class Planner:
         result.calls = 1
 
         plan, errors = _parse(first)
-        # 只有介绍时不取主数据：规整第 7 条只看 filters、校验遇到 introduce 在第 13 条之后就返回，带不带主数据
-        # 规整出来一样。其余计划先补主数据
+        # 只有不带条件的介绍时不取主数据：规整第 7 条只看 filters、校验遇到 introduce 在第 13 条之后就返回，
+        # 不带条件时带不带主数据规整出来一样。其余计划先补主数据（`introduce_only`）
         light = enrich is not None and not errors and introduce_only(plan)
         if enrich is not None and not light:
             inputs, enrich = await enrich(inputs), None
@@ -177,7 +192,8 @@ class Planner:
             first_done = self._normalize(plan, inputs)
             checks = self._checks(first_done.plan, inputs)
             if enrich is not None and (checks or not introduce_only(first_done.plan)):
-                # 规整后不再只是介绍、或被打回（照上面的理由不会发生）：补上主数据按原来的路走
+                # 规整后不再只是介绍（如第 18 条把沿用上一轮的介绍改成追问）、或被打回（如第 13 条）：补上主数据
+                # 按原来的路走
                 inputs, enrich = await enrich(inputs), None
                 first_done = self._normalize(plan, inputs)
                 checks = self._checks(first_done.plan, inputs)

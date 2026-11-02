@@ -265,13 +265,14 @@ async def test_business_question_still_loads_master_data_before_normalizing():
 
 
 class _Enrich:
-    def __init__(self, machines: set[str] | None = None) -> None:
+    def __init__(self, machines: set[str] | None = None, classes: dict | None = None) -> None:
         self.calls = 0
         self.machines = machines
+        self.classes = classes or {}
 
     async def __call__(self, inputs: PlanInputs) -> PlanInputs:
         self.calls += 1
-        return with_master(inputs, classes={}, entities={}, machines=self.machines)
+        return with_master(inputs, classes=self.classes, entities={}, machines=self.machines)
 
 
 async def test_enrich_skipped_for_introduce_only():
@@ -279,6 +280,27 @@ async def test_enrich_skipped_for_introduce_only():
     result = await Planner(MANIFEST, TOPICS).plan(_LLM(plan_of(step("introduce", kind="寒暄"))),
                                                   PlanInputs(query="你好"), enrich=enrich)
     assert result.plan["steps"][0]["skill"] == "introduce" and enrich.calls == 0
+
+
+async def test_introduce_with_filters_loads_master_data_and_normalizes_as_before():
+    """评审 A2：带条件的介绍按普通计划先取主数据。「亮亮」在库里既是加工厂又是供应商，第 7 条改成追问，
+    与不按需取主数据时相同（只看技能就不取的话，这里会答介绍）。"""
+    enrich = _Enrich(classes={"工厂": ["亮亮"], "供应商": ["亮亮"]})
+    reply = plan_of(step("introduce", kind="能力", filters=[{"field": "加工厂", "op": "是", "value": "亮亮"}]))
+    result = await Planner(MANIFEST, TOPICS).plan(_LLM(reply), PlanInputs(query="亮亮今年多少单"), enrich=enrich)
+    assert enrich.calls == 1 and result.plan["steps"][0]["skill"] == "clarify"
+
+
+async def test_introduce_rewritten_by_normalizing_then_loads_master_data():
+    """防御分支：先按不带条件的介绍没取主数据，规整后不再只是介绍（第 18 条：上一轮查出 0 张、本轮「其中」又沿用
+    上一轮）时补上主数据再规整一遍，结果仍是第 18 条的追问。"""
+    enrich = _Enrich()
+    reply = plan_of(step("introduce", kind="能力", domains={"value": ["国内"], "from": "previous"}))
+    inputs = PlanInputs(query="其中按状态统计一下", previous_outcome=workspace.OUTCOME_EMPTY)
+    result = await Planner(MANIFEST, TOPICS).plan(_LLM(reply), inputs, enrich=enrich)
+    assert enrich.calls == 1
+    assert result.plan["steps"][0]["skill"] == "clarify"
+    assert result.plan["steps"][0]["params"]["reason"] == normalize.NO_RESULT_REASON
 
 
 async def test_enrich_called_once_for_other_plans_and_before_repair():
