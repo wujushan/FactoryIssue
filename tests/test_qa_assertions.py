@@ -157,7 +157,8 @@ def test_golden_files_stay_inside_g3_rules():
     for case_id in permission_ids:
         assert case_id in manual
     multi = [case for case in cases if case.get("turns")]
-    assert len(multi) == 12
+    # 2026-11-02：XC-015 改为两轮（开发者要求）
+    assert len(multi) == 13
     #: 多轮用例都是两轮，只有 XC-041 是三轮（追问 → 点一个选项 → 问另外的，2026-11-02 开发者同意）
     three_turns = {"XC-041"}
     for case in cases:
