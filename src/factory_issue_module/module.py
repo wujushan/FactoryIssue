@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
 
-from forge_core.events import Event
+from forge_core.events import Event, EventType
 from forge_core.jobs import JobBinding
 from forge_core.module import ForgeModule, ModuleContext, ModuleManifest, ModuleRequest
 
@@ -30,6 +30,7 @@ from factory_issue_module.declarations import (
     VECTORIZE,
 )
 from factory_issue_module.jobs import text_sync
+from factory_issue_module.present import pacing
 from factory_issue_module.turn import orchestrator
 
 __all__ = ["MODULE_CODE", "MODULE_VERSION", "FactoryIssueModule"]
@@ -62,9 +63,19 @@ class FactoryIssueModule(ForgeModule):
         glossary=landed.glossary(),
     )
 
+    #: 面向前端的呈现：正文分小段陆续发出（打字机效果）、发进度事件（`present/pacing.py`）。单测关掉，看的是
+    #: 编排产出的完整事件；分段与进度另有单测
+    live: bool = True
+
     async def handle(self, request: ModuleRequest, ctx: ModuleContext) -> AsyncIterator[Event]:
-        async for event in orchestrator.run_turn(self.manifest, request, ctx):
-            yield event
+        events = orchestrator.run_turn(self.manifest, request, ctx)
+        if self.live:
+            async for event in pacing.paced(events):
+                yield event
+            return
+        async for event in events:
+            if event.type is not EventType.PROGRESS:
+                yield event
 
     def validate_config(self, name: str, text: str) -> None:
         config_files.validate(name, text)

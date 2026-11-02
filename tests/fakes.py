@@ -36,6 +36,13 @@ from factory_issue_module.module import FactoryIssueModule
 
 MANIFEST = FactoryIssueModule.manifest
 
+
+def _quiet_module() -> FactoryIssueModule:
+    """单测看编排产出的完整事件：正文不分段、不发进度（`module.live`；分段与进度另有单测）。"""
+    module = FactoryIssueModule()
+    module.live = False
+    return module
+
 _IDENT = r'(?:\[[^\]]+\]|"[^"]+"|[A-Za-z_][\w]*)'
 _TABLE_REF = re.compile(rf"\b(?:FROM|JOIN)\s+({_IDENT}(?:\.{_IDENT})*)", re.IGNORECASE)
 
@@ -234,7 +241,7 @@ class Harness:
     config: FakeConfig
     files: FakeFiles
     retrieval: FakeRetrieval
-    module: FactoryIssueModule = field(default_factory=FactoryIssueModule)
+    module: FactoryIssueModule = field(default_factory=lambda: _quiet_module())
 
     def tables_queried(self) -> set[str]:
         return {t for q in self.queries for t in q.tables}

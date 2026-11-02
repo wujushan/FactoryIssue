@@ -486,6 +486,22 @@ async def test_export_over_threshold_and_table_keeps_the_first_rows():
     assert len(_sheets(c.h)["国内"]) == 5
 
 
+async def test_export_over_threshold_puts_every_listed_domain_in_the_file():
+    """手动测试 2026-11-02：只按超过阈值的域导出时海外没进文件。现在某域列出的超过阈值，列出的每个域都各占一页
+    （s3 假数据：国内 4 张、巴西 4 张、海外 2 张，阈值 3：海外没超过也导出）。"""
+    c = Conversation(data=s3_data, config={"answer_params.toml": "export_threshold = 3"})
+    events = await c.ask("近 30 天的问题有哪些", plan(step("list_issues", time=T30)), NARR)
+    assert "完整清单见附件（每域一页：国内 4 张、巴西 4 张、海外 2 张）" in _text(events)
+    assert list(_sheets(c.h)) == ["国内", "巴西", "海外"]
+
+
+async def test_latest_n_is_judged_by_the_listed_count_not_the_domain_total():
+    """「最新的 1 张」：各域一共的张数（4、4、2）都超过阈值 1，列出的只有 1 张，不导出（原先按截取之前的张数比）。"""
+    c = Conversation(data=s3_data, config={"answer_params.toml": "export_threshold = 1"})
+    events = await c.ask("帮我查下最新的 1 个问题", plan(step("list_issues", limit=1)), NARR)
+    assert "附件" not in _text(events) and not c.h.files.saved
+
+
 async def test_export_failure_keeps_the_table():
     c = Conversation(scopes.account_jia())
 

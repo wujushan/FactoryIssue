@@ -59,6 +59,9 @@ HISTORY_TURNS = 3
 #: 质疑、换图却读不到上一轮时的追问（总述「接着上一轮问」：没有上文时追问，不猜）
 NO_PREVIOUS = {"reason": "接不上上一轮", "question": "没有找到上一轮的结果，请把要查的条件说完整一些。", "options": []}
 REPLAY_SKILLS = ("verify_previous", "rerender")
+#: 进度事件的阶段（`Event.progress`，docs/dev/03）：理解问题、取数与整理；只在要调模型或取数时发
+PROGRESS_PLAN = "plan"
+PROGRESS_QUERY = "query"
 
 
 class _LazyMaster:
@@ -160,6 +163,7 @@ async def run_turn(
         result = PlanResult(plan=filled.plan, source="filled", inferred=list(filled.inferred),
                             check_errors=list(filled.check_errors))
     else:
+        yield Event.progress(PROGRESS_PLAN, "正在理解问题")
         result = await planner.plan(llm, inputs, enrich=lazy.enrich)
     if result.plan is None:
         for event in greeting.not_understood(access):
@@ -244,6 +248,7 @@ async def run_turn(
     if isinstance(prepared, Ask):
         yield await _clarify_with_pending(ctx, query, result.plan, prepared, result, button_query=asked)
         return
+    yield Event.progress(PROGRESS_QUERY, "正在查询并整理结果")
     async for event in execute.run(result.plan, prepared, turn):
         yield event
     ask_event = await _write_after(ctx, query, execute.merge_details(result.plan), turn, result)

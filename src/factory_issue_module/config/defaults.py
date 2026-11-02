@@ -50,7 +50,7 @@ SEGMENTATION: dict[str, Any] = {
 
 ANSWER_PARAMS: dict[str, Any] = {
     "top_n": 10,
-    "export_threshold": 100,
+    "export_threshold": 20,
     "table_rows": 20,
     "judge_max": 30,
     "rerank_max": 100,

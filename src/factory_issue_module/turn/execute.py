@@ -643,6 +643,15 @@ def _add_caliber(C: cal.Caliber, run: StepRun, seg: dict[str, Any], dims: Sequen
         C.item(cal.small_sample(str(d), int(n)))
 
 
+def conclusion_first(events: list[Event], said: Event, at: int) -> None:
+    """先给结论、再给表格与图表（总述「回答怎么组织」，开发者 2026-11-02 定）：分析段插在开头那句之后（`at`），
+    后面接表格；分析段为空（没写出来、退回空模板）时不插。"""
+    text = str(said.data.get("text") or "")
+    if not text.strip():
+        return
+    events.insert(min(max(at, 0), len(events)), Event.delta(text.rstrip() + "\n\n"))
+
+
 async def _narrate(T: Turn, table_text: str | None, note: str | None, facts: dict[str, Any], fallback: str,
                    time_text: str | None) -> Event:
     facts = {"时间范围": time_text or "不限建单时间", **facts}
@@ -810,6 +819,7 @@ async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Seque
             text = text[:-1] + f"；{who}问题描述摘要{columns.DESC_UNAVAILABLE}，其他列照常。"
         events.append(Event.delta(text + "\n\n"))
     described: list[str] = []
+    narrate: tuple[str, dict[str, Any]] | None = None
     for i, seg in enumerate(segs):
         dom = _BY_LABEL.get(seg.get("domain", ""), Domain.DOMESTIC)
         if multi and i:
@@ -819,12 +829,13 @@ async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Seque
         if table_text:
             described.append(table_text)
             if not multi and not seg.get("few"):
-                events.append(await _narrate(T, table_text, None, seg.get("facts") or {},
-                                             list_issues.fallback(seg.get("facts") or {}), time_text))
-    if multi and not res.get("few_total"):
-        facts = {"合计张数": res.get("found_total", 0), "各域张数": res.get("by_domain") or [],
-                 **{s["domain"]: s.get("facts") or {} for s in segs if not s.get("empty")}}
-        events.append(await _narrate(T, "；".join(described), None, facts, list_issues.fallback(facts), time_text))
+                narrate = (table_text, seg.get("facts") or {})
+    if multi and not res.get("few_total") and described:
+        narrate = ("；".join(described), {"合计张数": res.get("found_total", 0), "各域张数": res.get("by_domain") or [],
+                                         **{s["domain"]: s.get("facts") or {} for s in segs if not s.get("empty")}})
+    if narrate is not None:
+        said = await _narrate(T, narrate[0], None, narrate[1], list_issues.fallback(narrate[1]), time_text)
+        conclusion_first(events, said, 1)  # 开头（各域张数）之后、表格之前
     return events
 
 
@@ -861,6 +872,7 @@ async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], t
     for key, members in groups.items():
         described: list[str] = []
         facts: dict[str, Any] = {}
+        start = len(events)
         for i, seg in enumerate(members):
             if events and i:
                 events.append(Event.delta("\n\n"))
@@ -871,8 +883,7 @@ async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], t
                 facts = narr[1] if len(members) == 1 else {**facts, seg.get("domain", ""): narr[1]}
         if described:
             said = await _narrate(T, "；".join(described), None, facts, "", time_text)
-            if said.data.get("text", "").strip():
-                events.append(said)
+            conclusion_first(events, said, start + 1)  # 这一段开头那句之后、表格与图之前
         if key != list(groups)[-1]:
             events.append(Event.delta("\n\n"))
     return events

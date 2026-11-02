@@ -103,7 +103,7 @@ def test_segmentation_default_matches_g2_and_comparison_scope():
 def test_answer_params_default():
     p = files.default(ANSWER_PARAMS)
     assert (p.top_n, p.export_threshold, p.table_rows, p.judge_max, p.rerank_max) == (
-        10, 100, 20, 30, 100,
+        10, 20, 20, 30, 100,
     )
     assert p.rerank_score_threshold is None and p.custom_stats_enabled is True
 

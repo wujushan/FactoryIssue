@@ -480,6 +480,5 @@ async def _present(run: Any, T: Any, result: Mapping[str, Any], res: Mapping[str
         facts = {"总单数": res.get("total", 0), "各域单数": [[d, (res.get("found") or {}).get(d, 0)] for d in ds],
                  "临时统计的结果": {"列": table["columns"], "行": table["rows"]}}
         said = await X._narrate(T, tables.describe(title, table, None), None, facts, "", time_text)
-        if said.data.get("text", "").strip():
-            events.append(said)
+        X.conclusion_first(events, said, 2 if head else 1)  # 开头之后、表格与图之前
     return events
