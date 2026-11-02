@@ -6,7 +6,7 @@
   第 5 条前半「详情并进前一步」在执行层（S4 随详情接上）。
 - 改口径、判据可证明：第 7 条名字归类；第 8 条写成时间的状态改回条件；第 9 条「X 各款」；第 10 条栏目要点名；
   第 11 条安全问题两路；第 17 条汇总缺时间改为追问；第 18 条上一轮没有结果时「其中」改为追问。
-- 校验、打回重写：第 12 条格式在 `plan/schema.py`；第 7 条的校验一半、第 13、14、15 条在 `tagged_checks`
+- 校验、打回重写：第 12 条格式在 `plan/schema.py`；第 7 条的校验一半、第 13、14、15、19 条在 `tagged_checks`
   （第 14 条在对照集期望计划上误拒为 0，已启用）；第 16 条 `values_not_in_query` 只记日志。
 
 名字归类要的「库里的取值」由调用方给（`classes`：类 → 名字）：线上是可查的域的主数据，spike 是它的示意名单。
@@ -861,17 +861,55 @@ def basis_mismatches(plan: dict, query: str) -> list[tuple[str, str, str, str]]:
     return out
 
 
-def tagged_checks(
-    plan: dict, query: str, entities: Mapping[str, Sequence[str]], today: date | None = None
-) -> list[tuple[int, str]]:
-    """第 7 条的校验一半、第 13、14、15 条：[(规则编号, 打回时交给模型的错误说明)]。`plan` 用规整后的。
+#: 第 19 条：问句里指一张单的说法（「这张物料单」「这单」「该单」「它」）；「这些单」「这几张单」指一批，不算
+_THIS_ISSUE = re.compile(r"(?:这|该|此|那)(?:一)?(?:张|个|条|份)?[^\s，,。？?！!、；;：:些几]{0,4}?单|(?<!其)它")
 
-    `entities` 是预匹配用的「名字 → 它在库里属于哪几类」（可查的域的主数据）。
+
+def previous_issue(previous_plan: Mapping[str, Any] | None, last_user: str | None = None) -> str | None:
+    """第 19 条：上一轮单独说到的那张问题单（恰好一个问题编号），没有时为 None。
+
+    有上一轮计划时只看计划的步骤；读不到计划（工作区过期、没有会话号）时看上一轮的用户问句。
+    """
+    if previous_plan:
+        text = json.dumps(previous_plan.get("steps"), ensure_ascii=False)
+    else:
+        text = last_user or ""
+    found = {norm(raw): raw for raw, kind, _ in find_numbers(text) if kind == ISSUE_NUMBER}
+    return next(iter(found.values())) if len(found) == 1 else None
+
+
+def _out_of_scope_on_previous_issue(steps: list[dict], query: str, issue: str | None) -> str | None:
+    """第 19 条：问句指上一轮那张单，计划却写成「超出范围」的介绍（CN-053「这张物料单为什么机型显示『物料』」）。"""
+    if issue is None or not any(
+        s.get("skill") == "introduce" and norm((s.get("params") or {}).get("kind")) == norm("超出范围")
+        for s in steps
+    ):
+        return None
+    hit = _THIS_ISSUE.search(query)
+    if hit is None:
+        return None
+    return (f"问句里的「{hit.group(0)}」指上一轮说到的问题单 {issue}，问的是这张单上的内容（某一栏为什么这样显示、"
+            f"为什么没有某一项），不是本助手管不着的事：用 issue_detail，issue 写 "
+            f'{{"value": "{issue}", "from": "previous"}}，aspects 写要看的内容，都对不上时写「其他:要看的内容」。'
+            "问的是本助手没有的数据项，或要做只读之外的事时，仍写 introduce")
+
+
+def tagged_checks(
+    plan: dict, query: str, entities: Mapping[str, Sequence[str]], today: date | None = None,
+    previous_issue: str | None = None,
+) -> list[tuple[int, str]]:
+    """第 7 条的校验一半、第 13、14、15、19 条：[(规则编号, 打回时交给模型的错误说明)]。`plan` 用规整后的。
+
+    `entities` 是预匹配用的「名字 → 它在库里属于哪几类」（可查的域的主数据）。`previous_issue` 是上一轮单独
+    说到的那张单（`previous_issue()`），第 19 条用。
     """
     errors: list[tuple[int, str]] = []
     steps = [s for s in plan.get("steps") or [] if isinstance(s, dict)]
     for sid, said, _basis, hit in basis_mismatches(plan, query):
         errors.append((13, f"问句里「{said}」后面是「{hit}」这件事，{sid} 这项时间的日期依据应为{hit}"))
+    scope = _out_of_scope_on_previous_issue(steps, query, previous_issue)
+    if scope is not None:
+        errors.append((19, scope))
     if any(s.get("skill") in ("introduce", "clarify") for s in steps):
         return errors
     errors += [(7, e) for e in _class_checks(steps, query)]
@@ -888,10 +926,11 @@ def tagged_checks(
 
 
 def query_checks(
-    plan: dict, query: str, entities: Mapping[str, Sequence[str]], today: date | None = None
+    plan: dict, query: str, entities: Mapping[str, Sequence[str]], today: date | None = None,
+    previous_issue: str | None = None,
 ) -> list[str]:
     """`tagged_checks` 只留错误说明；空表示通过。"""
-    return [msg for _, msg in tagged_checks(plan, query, entities, today)]
+    return [msg for _, msg in tagged_checks(plan, query, entities, today, previous_issue)]
 
 
 #: 第 16 条只看这几类：照抄用户原话的名字

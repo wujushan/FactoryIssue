@@ -149,7 +149,10 @@ class Planner:
         return done
 
     def _checks(self, plan: dict, inputs: PlanInputs) -> list[tuple[int, str]]:
-        return normalize.tagged_checks(plan, inputs.query, inputs.entities, inputs.today)
+        last_user = next((str(m.get("content") or "") for m in reversed(inputs.history) if m.get("role") == "user"),
+                         None)
+        return normalize.tagged_checks(plan, inputs.query, inputs.entities, inputs.today,
+                                       normalize.previous_issue(inputs.previous_plan, last_user))
 
     def messages(self, inputs: PlanInputs) -> list[dict[str, str]]:
         system = prompt.planner_system(self.manifest, self.topics)

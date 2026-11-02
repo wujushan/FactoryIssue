@@ -50,6 +50,13 @@ def apply(plan: dict | None, query: str | None = None, previous: dict | None = N
         query=query, previous=previous, previous_outcome=previous_outcome, classes=CATALOG, topics=prompts.TOPICS))
 
 
-def query_checks(plan: dict, query: str) -> list[str]:
-    """第 7 条的校验一半、第 13、15 条；空表示通过。plan 用规整后的。"""
-    return normalize.query_checks(plan, query, mockdata.CATALOG)
+def query_checks(plan: dict, query: str, case: dict | None = None) -> list[str]:
+    """第 7 条的校验一半、第 13、14、15、19 条；空表示通过。plan 用规整后的。
+
+    `case` 是对照集的一条：第 19 条从它的 `previous_plan`、`history` 最后一轮的用户问句找上一轮那张单，同线上。
+    """
+    case = case or {}
+    history = case.get("history") or []
+    last_user = history[-1].get("user") if history else None
+    return normalize.query_checks(plan, query, mockdata.CATALOG,
+                                  previous_issue=normalize.previous_issue(case.get("previous_plan"), last_user))

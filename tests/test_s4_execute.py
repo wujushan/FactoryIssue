@@ -239,6 +239,25 @@ async def test_material_unit_explains_machine_and_impact():
     assert "机型一栏显示「物料」" in text and "不展示产品在制属性与影响数量" in text
 
 
+async def test_material_unit_follow_up_written_as_out_of_scope_is_bounced():
+    """CN-053（golden 实测）：上一轮打开了「物料」单，本轮「这张物料单为什么…」模型写成超出范围时，第 19 条打回，
+    修后的详情照常取数作答。这里工作区里没有上一轮计划，从上一轮的用户问句认出那张单。"""
+    query = "这张物料单为什么机型显示「物料」？它的影响数量怎么没有？"
+    out_of_scope = plan(step("introduce", kind="超出范围"))
+    h = make_harness(scopes.GREEN, llm_replies=[out_of_scope, plan(detail("ZC9901002", "机型", "其他:影响数量为何为空",
+                                                                        frm="previous"))],
+                     config_files={"link_sites.toml": SITES},
+                     history=[("ZC9901002 这张单是什么情况？", "（单张单详情）")])
+    s4_data.load(h)
+    events = await run(h, query)
+    text = _text(events)
+    assert errors.OUT_OF_SCOPE not in text
+    assert "ZC9901002" in text and "机型一栏显示「物料」" in text and "不展示产品在制属性与影响数量" in text
+    assert data_queries(h)
+    repair = h.llm.calls[1][-1]["content"]
+    assert "这张物料单" in repair and "ZC9901002" in repair
+
+
 async def test_detail_ref_to_max_defect_rate_issue():
     """XC-022 第三步：详情引用前一步不良率最高的那张，给原因。"""
     reply = plan(step("list_issues", domains={"value": ["国内"], "from": "user"},
