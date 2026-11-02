@@ -3328,7 +3328,7 @@
         "module": "FACTORY_ISSUE",
         "no_error": true,
         "clarify": true,
-        "max_queries": 0,
+        "no_tables": true,
         "answer_not_contains": [
           "dbo.",
           "ZCTracking_",
@@ -3421,7 +3421,7 @@
       "expect": {
         "module": "FACTORY_ISSUE",
         "no_error": true,
-        "max_queries": 0,
+        "no_tables": true,
         "answer_not_contains": [
           "dbo.",
           "ZCTracking_",
@@ -3451,7 +3451,7 @@
       "expect": {
         "module": "FACTORY_ISSUE",
         "no_error": true,
-        "max_queries": 0,
+        "no_tables": true,
         "answer_not_contains": [
           "dbo.",
           "ZCTracking_",
@@ -4223,7 +4223,7 @@
           "ProblemId"
         ],
         "clarify": true,
-        "max_queries": 0,
+        "no_tables": true,
         "visible_contains": [
           "近 30 天",
           "今年"

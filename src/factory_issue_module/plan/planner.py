@@ -8,12 +8,17 @@
    只是校验仍不过，按修后的计划执行，`check_errors` 带回去（第 13 条：开头写明按什么理解）。
 4. 每次改写、打回各打一条 `factory_issue_plan_rule`（规则编号、技能、改前改后的条件名，不含问句与取值）；
    第 16 条只记日志。模型调用出错或超时同样是规划失败。
+
+主数据按需取（决策 2026-11-01「寒暄不取主数据与追问用例的取数断言」）：给了 `enrich` 时，`inputs` 里先没有
+主数据，只在用得到时调 `enrich` 补上。号码直通先不带机型清单判断（机型清单只会多拒几种直通），会直通时才补上
+主数据再判断一遍；模型第一次写的计划只有 `introduce` 时不补，其余计划都先补再规整、校验、修一次。
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -90,6 +95,22 @@ class _Normalized:
     inferred: list[Inferred] = field(default_factory=list)
 
 
+#: 给 `inputs` 补上主数据（`classes`、`entities`、`machines`）
+Enrich = Callable[["PlanInputs"], Awaitable["PlanInputs"]]
+
+
+def introduce_only(plan: dict | None) -> bool:
+    """计划的每一步都是 `introduce`（寒暄、问能力、只读之外的请求、管不着的事）。"""
+    steps = (plan or {}).get("steps")
+    return bool(steps) and isinstance(steps, list) and all(
+        isinstance(s, dict) and s.get("skill") == "introduce" for s in steps)
+
+
+def with_master(inputs: PlanInputs, *, classes: Mapping[str, Sequence[str]],
+                entities: Mapping[str, Sequence[str]], machines: Collection[str] | None) -> PlanInputs:
+    return dataclasses.replace(inputs, classes=classes, entities=entities, machines=machines)
+
+
 def _log_bounce(rules: Sequence[int], plan: dict | None) -> None:
     skill = "+".join(str(s.get("skill")) for s in (plan or {}).get("steps") or [] if isinstance(s, dict))
     for rule in sorted(set(rules)):
@@ -120,8 +141,13 @@ class Planner:
         user = prompt.planner_user(inputs.query, inputs.history, inputs.previous_plan, inputs.previous_outcome)
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
-    async def plan(self, llm: Any, inputs: PlanInputs) -> PlanResult:
+    async def plan(self, llm: Any, inputs: PlanInputs, enrich: Enrich | None = None) -> PlanResult:
+        """`enrich` 为 None 时 `inputs` 已带主数据；给了时按需补（见文件头末段）。"""
         shortcut = prematch.number_shortcut(inputs.query, inputs.machines)
+        if shortcut is not None and enrich is not None:
+            # 不带机型清单时会直通：补上机型清单再判断一遍（对得上机型的串不直通）
+            inputs, enrich = await enrich(inputs), None
+            shortcut = prematch.number_shortcut(inputs.query, inputs.machines)
         if shortcut is not None:
             logger.info("factory_issue_plan_shortcut", skill=shortcut["steps"][0]["skill"])
             return PlanResult(plan=shortcut, source="shortcut")
@@ -140,11 +166,21 @@ class Planner:
         result.calls = 1
 
         plan, errors = _parse(first)
+        # 只有介绍时不取主数据：规整第 7 条只看 filters、校验遇到 introduce 在第 13 条之后就返回，带不带主数据
+        # 规整出来一样。其余计划先补主数据
+        light = enrich is not None and not errors and introduce_only(plan)
+        if enrich is not None and not light:
+            inputs, enrich = await enrich(inputs), None
         first_done: _Normalized | None = None
         checks: list[tuple[int, str]] = []
         if plan is not None and not errors:
             first_done = self._normalize(plan, inputs)
             checks = self._checks(first_done.plan, inputs)
+            if enrich is not None and (checks or not introduce_only(first_done.plan)):
+                # 规整后不再只是介绍、或被打回（照上面的理由不会发生）：补上主数据按原来的路走
+                inputs, enrich = await enrich(inputs), None
+                first_done = self._normalize(plan, inputs)
+                checks = self._checks(first_done.plan, inputs)
             if not checks:
                 return self._done(result, first_done, inputs)
         _log_bounce([12] if errors else [r for r, _ in checks], plan)

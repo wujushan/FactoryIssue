@@ -11,8 +11,9 @@ S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含�
    选项的 `query` 完全相同时，把选项直接填进上一轮的计划，跳过第 4、5 步（§4.4）；填好的计划照常过第 6 步。
    这种轮次按钮只写了选项（「惠州百富」），本轮按存下的问句全文（原话加这一项）理解。
 4–5. 号码直通、规划、规整与校验（`plan/planner.py`）；规划失败按 §14「没能理解这个问题」答。
-4 之前：按可查的域取一次主数据（`domains/shared.py`），交规划器作第 7 条的 `classes`、第 15 条的 `entities` 与
-   号码直通的机型清单。
+   主数据（`domains/shared.py`）按可查的域按需取、一轮至多一次（`_LazyMaster`），交规划器作第 7 条的 `classes`、
+   第 15 条的 `entities` 与号码直通的机型清单。规划器写成 `introduce` 的轮次不取（寒暄不取数，决策 2026-11-01
+   「寒暄不取主数据与追问用例的取数断言」）。
 6. 对库与换算：时间换算（沿用上一轮的时间按上一轮换算出的日期），换算不了的说法产生追问；名字对库（§6.5），
    对不上、对上多个、重名时追问。
 7. 追问：计划本身是追问，或第 6 步产生了追问 → 发 `Event.clarify`，本轮结束（§4.4）；代码追问先写
@@ -47,7 +48,7 @@ from factory_issue_module.declarations import (
 from factory_issue_module.domains import base, shared
 from factory_issue_module.domains.base import Ask
 from factory_issue_module.plan import clarify, timespan
-from factory_issue_module.plan.planner import PlanInputs, Planner, PlanResult
+from factory_issue_module.plan.planner import PlanInputs, Planner, PlanResult, with_master
 from factory_issue_module.skills import introduce, rerender, verify_previous
 from factory_issue_module.turn import errors, execute, gate, greeting, workspace
 
@@ -58,6 +59,27 @@ HISTORY_TURNS = 3
 #: 质疑、换图却读不到上一轮时的追问（总述「接着上一轮问」：没有上文时追问，不猜）
 NO_PREVIOUS = {"reason": "接不上上一轮", "question": "没有找到上一轮的结果，请把要查的条件说完整一些。", "options": []}
 REPLAY_SKILLS = ("verify_previous", "rerender")
+
+
+class _LazyMaster:
+    """主数据按需取、一轮至多取一次（决策 2026-11-01「寒暄不取主数据与追问用例的取数断言」）：规划器写成
+    `introduce` 的轮次不取，其余轮次在号码直通确认、规整或执行之前取。"""
+
+    def __init__(self, ctx: Any, access: gate.DomainAccess, query: str, dept_aliases: Any, regions: Any) -> None:
+        self._ctx, self._access, self._query = ctx, access, query
+        self._dept_aliases, self._regions = dept_aliases, regions
+        self._got: tuple[shared.MasterData, Any] | None = None
+
+    async def get(self) -> tuple[shared.MasterData, Any]:
+        if self._got is None:
+            master = await shared.load(self._ctx, self._access.allowed(), self._query)
+            self._got = (master, master.entities(self._dept_aliases, self._regions))
+        return self._got
+
+    async def enrich(self, inputs: PlanInputs) -> PlanInputs:
+        master, entities = await self.get()
+        return with_master(inputs, classes=master.classes(self._dept_aliases, self._regions), entities=entities,
+                           machines=master.machines or None)
 
 
 async def _history(ctx: Any, request: ModuleRequest) -> list[dict[str, str]]:
@@ -128,19 +150,17 @@ async def run_turn(
     topics = await config_files.load(ctx, TOPIC_TERMS)
     dept_aliases = await config_files.load(ctx, DEPT_ALIASES)
     regions = await config_files.load(ctx, FACTORY_REGIONS)
-    master = await shared.load(ctx, access.allowed(), asked)
-    entities = master.entities(dept_aliases, regions)
+    lazy = _LazyMaster(ctx, access, asked, dept_aliases, regions)
     planner = Planner(manifest, topics)
     inputs = PlanInputs(
         query=asked, history=history, previous_plan=previous.plan, previous_outcome=previous.outcome,
-        earlier_query=previous.earlier_query, today=today, classes=master.classes(dept_aliases, regions),
-        entities=entities, machines=master.machines or None)
+        earlier_query=previous.earlier_query, today=today)
     llm = getattr(ctx, "llm", None)
     if filled is not None:
         result = PlanResult(plan=filled.plan, source="filled", inferred=list(filled.inferred),
                             check_errors=list(filled.check_errors))
     else:
-        result = await planner.plan(llm, inputs)
+        result = await planner.plan(llm, inputs, enrich=lazy.enrich)
     if result.plan is None:
         for event in greeting.not_understood(access):
             yield event
@@ -157,6 +177,8 @@ async def run_turn(
             yield event
         return
 
+    # 规划时没补过主数据的（追问选项直填）在这里取；规划时取过的不再取
+    master, entities = await lazy.get()
     answer = await config_files.load(ctx, ANSWER_PARAMS)
     sites = await config_files.load(ctx, LINK_SITES)
     seg = await config_files.load(ctx, SEGMENTATION)
@@ -201,7 +223,7 @@ async def run_turn(
     if isinstance(prepared, Ask) and filled is not None and prepared.question == filled.question:
         # 填进去的值没起作用（同一句追问又来了）：不再循环，按问句全文规划一次（`asked` 带着选定的那一项）
         logger.info("factory_issue_fill_no_effect", reason=prepared.reason)
-        result = await planner.plan(llm, inputs)
+        result = await planner.plan(llm, inputs, enrich=lazy.enrich)
         if result.plan is None:
             for event in greeting.not_understood(access):
                 yield event
