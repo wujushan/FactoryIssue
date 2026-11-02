@@ -2,7 +2,7 @@
 
 只用 `re`、`json` 与内建函数：沙箱禁止 import `html`、`unicodedata`（设计 §1.4，实测），这份源码原样拼进沙箱脚本。
 - `rich_display`：单张详情展示前的剥图（S4，§13；`dirty_data.md`「富文本」）：剔除内嵌 base64 图片，段落与换行
-  标记改成换行，外链图片留成链接，其余标签去掉、实体换回字符；剥净后单个字段超过 2 万字时截断并标记。
+  标记改成换行，外链图片写成 Markdown 图片 `![图片](地址)`，其余标签去掉、实体换回字符；剥净后单个字段超过 2 万字时截断并标记。
 - `strip_rich`：按文字找单用的剥净（S6，§12 第 5 步）：同上，但外链图片也去掉、不截断。治理任务写进 mart 的文字都是它。
 - `phen_parts` / `phen_text`：巴西、海外问题现象 JSON 的展平（各域主表「问题现象」「JSON 列结构」）。详情展示与治理任务
   共用；治理任务另要知道哪几段是手填的（只有手填的参与按意思找）。
@@ -38,7 +38,7 @@ def _tn_entity(m: re.Match) -> str:
 
 
 def _tn_clean(value: object, links: bool) -> str:
-    """富文本 → 文字。`links` 为真时外链图片留成「[图片](地址)」，否则去掉。空值与 NaN 按空。"""
+    """富文本 → 文字。`links` 为真时外链图片写成 Markdown 图片 `![图片](地址)`，否则去掉。空值与 NaN 按空。"""
     if value is None or (isinstance(value, float) and value != value):  # 空值与 NaN
         return ""
     text = str(value)
@@ -47,7 +47,7 @@ def _tn_clean(value: object, links: bool) -> str:
     text = _TN_IMG_DATA.sub("", text)
     text = _TN_DATA_URI.sub("", text)
     if links:
-        text = _TN_IMG_URL.sub(lambda m: f" [图片]({m.group(1)}) ", text)
+        text = _TN_IMG_URL.sub(lambda m: f" ![图片]({m.group(1)}) ", text)
     else:
         text = _TN_IMG_ANY.sub(" ", text)
     text = _TN_BREAK.sub("\n", text)
