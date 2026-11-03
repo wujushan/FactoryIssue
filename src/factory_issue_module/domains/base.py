@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -102,8 +102,11 @@ class DomainStep:
     times: list[dict[str, Any]] = field(default_factory=list)
     #: 比较两个时段：[{label, times}, {label, times}]，按时间先后
     compare: list[dict[str, Any]] | None = None
-    #: 统计口径「筛选条件」的回显：(条件名, 用户原话与对上的取值)
+    #: 统计口径「筛选条件」的回显：(条件名, 用户原话与对上的取值)。否定的条件（不是 / 不属于 / 不包含）由
+    #: `each_filter` 统一补上比较方式，各条件分支照肯定的写法追加即可
     echo: list[tuple[str, str]] = field(default_factory=list)
+    #: `echo` 里已按实际生效的条件写好、不再补否定的那几项（下标）：换成了其余取值、是 / 否翻转过、数值条件带了比较方式
+    echo_as_is: set[int] = field(default_factory=set)
     #: 开头要写的话（「按以下几个部门统计：…」）
     notes: list[str] = field(default_factory=list)
     #: 本域没有对应的列、因而不计入的条件（「国内无『其他』类型，未计入」）
@@ -255,6 +258,48 @@ def join(items: Iterable[Any]) -> str:
     return "、".join(str(x) for x in items)
 
 
+#: 否定的比较方式（`schema.OP_KINDS` 的类别）
+NEG_KINDS = ("ne", "nhas")
+
+
+def echo_as_is(out: DomainStep, name: str, value: str) -> None:
+    """追加一项已按实际生效的条件写好的回显，`each_filter` 不再给它补否定。"""
+    out.echo_as_is.add(len(out.echo))
+    out.echo.append((name, value))
+
+
+def negated_echo(name: str, value: str, op_said: str) -> tuple[str, str]:
+    """否定条件的回显：「加工厂：不属于 惠州百富」；条件名本身写着「包含」的写成「物料名称不包含：X」。"""
+    if name.endswith("不包含"):
+        return name, value
+    if name.endswith("包含"):
+        return name[: -len("包含")] + "不包含", value
+    return name, f"{op_said} {value}"
+
+
+def each_filter(p: Mapping[str, Any], out: DomainStep) -> Iterator[dict[str, Any]]:
+    """一步的各条条件（第 6 步三域共用的循环）。
+
+    每条处理完，把它新加进 `out.echo` 的回显按比较方式补上否定（「不属于 惠州百富」）：各条件分支只管对库、照肯定
+    的写法回显，否定在这里统一写，不靠每个分支各自记得写（「那另外两个工厂呢」规划成「加工厂不属于惠州百富」，
+    统计口径却写成「加工厂：惠州百富」）。已按实际生效的条件写好的（`echo_as_is`）不动。分支里 `continue` 照样
+    走到这里；分支返回追问时不再回来，那一步本来就不出回显。
+    """
+    from factory_issue_module.plan import schema
+
+    for f in schema.as_list(p.get("filters")):
+        if not isinstance(f, dict):
+            continue
+        start = len(out.echo)
+        yield f
+        op_said = str(f.get("op") or "是")
+        if schema.OP_KINDS.get(op_said, "eq") not in NEG_KINDS:
+            continue
+        for i in range(start, len(out.echo)):
+            if i not in out.echo_as_is:
+                out.echo[i] = negated_echo(*out.echo[i], op_said)
+
+
 def not_found(kind: str, said: str, entities: Mapping[str, Sequence[str]], skip: str | None) -> Ask:
     from factory_issue_module.plan import names
 
@@ -330,7 +375,7 @@ def numeric_sql(column: str, kind: str, values: Sequence[str], out: DomainStep, 
     else:
         out.notes.append(f"「{field_name}{join(values)}」没能换成数值条件，未按它筛")
         return False
-    out.echo.append((field_name, f"{op_said} {join(values)}"))
+    echo_as_is(out, field_name, f"{op_said} {join(values)}")
     return True
 
 
@@ -341,7 +386,7 @@ def numeric_cond(col: str, kind: str, values: Sequence[str], out: DomainStep, fi
         out.notes.append(f"「{field_name}{join(values)}」没能换成数值条件，未按它筛")
         return False
     out.conds.append({"kind": "num", "col": col, "op": kind, "values": nums[:2]})
-    out.echo.append((field_name, f"{op_said} {join(values)}"))
+    echo_as_is(out, field_name, f"{op_said} {join(values)}")
     return True
 
 
