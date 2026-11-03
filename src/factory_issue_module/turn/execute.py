@@ -28,8 +28,10 @@
 - 临时统计（S7，`skills/custom_stats.py`）：条件照统计对库，执行交 `custom_stats.run_step`；每轮至多一个，第二个那一段
   只答一句。关掉时、没算出来时答一句并附能力介绍的按钮（`StepOut.handled`：已用业务话说明，整轮没有别的结果时不再
   发整轮失败）。脚本存进工作区 `turn.steps`，重放（质疑重查、换图）照它算、不调模型。
-- 执行中的信号（设计 §5.4）由代码执行默认动作：引用的上一步为空时停在这一步；结果为空、时间只说「最近」时按固定
-  顺序预查放宽选项的张数（`_relax_buttons`）；第三组候选太多时的那一句在 `skills/text_search.py`。
+- 执行中的信号（设计 §5.4）由代码执行默认动作：引用的上一步为空时停在这一步；清单、统计、临时统计的一步结果为空
+  时只放宽一个条件、并行预查张数，「没有查到单」之后说一句卡在哪个条件上，不为 0 的交答后建议做成按钮
+  （`_relax_neighbors`、`relax_note`，决策 2026-11-03「结果为空时放宽一个条件」）；第三组候选太多时的那一句在
+  `skills/text_search.py`。
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import dataclasses
+import time
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -58,7 +61,18 @@ from factory_issue_module.plan.planner import PlanResult
 from factory_issue_module.plan.timespan import Span
 from factory_issue_module.config.files import Segmentation, TopicTerms
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import charts, columns, export, moves, narrative, suggest, suggestions, summaries, tables
+from factory_issue_module.present import (
+    charts,
+    columns,
+    export,
+    links,
+    moves,
+    narrative,
+    suggest,
+    suggestions,
+    summaries,
+    tables,
+)
 from factory_issue_module.skills import aggregate, custom_stats, issue_detail, list_issues, lookup_numbers, text_search
 from factory_issue_module.stats import runner
 from factory_issue_module.text import terms as text_terms
@@ -76,10 +90,12 @@ RESOLVED = (*CONDITIONAL, "text_search", "custom_stats")
 STATUS_ASPECTS = ("当前状态", "当前责任人", "概况", "跟进人")
 ADAPTERS: dict[Domain, Any] = {Domain.DOMESTIC: domestic, Domain.BRAZIL: brazil, Domain.OVERSEAS: overseas}
 _BY_LABEL = {d.label: d for d in DOMAINS}
-#: 结果为空、时间是默认读法（只说「最近」）时可放宽到的说法（总述「结果为空时」「时间说法怎么换算」）
+#: 有结果、只说「最近」时另给的两个时间范围（总述「时间说法怎么换算」）
 RECENT_WORDS = ("最近", "近期", "近来", "最近一段时间")
 RELAX_OPTIONS = ("近 90 天", "今年")
-RELAX_MAX = 2
+#: 结果为空时只放宽一个条件，至多试几种；哪几种问法试（总述「结果为空时」，决策 2026-11-03）
+RELAX_MAX = 4
+RELAX_SKILLS = ("list_issues", "aggregate", "custom_stats")
 #: 本域算不了的指标在说明里怎么说
 _METRIC_ABSENT = {"费用美元": "费用", "费用雷亚尔": "费用", "扣款": "扣款费用", "停线时长": "停线重启时间"}
 
@@ -1158,40 +1174,86 @@ def _alternative_buttons(T: Turn) -> list[dict[str, str]]:
     return [suggestions.basis_switch(alt) for alt in dict.fromkeys(alts)][:clarify.MAX_OPTIONS]
 
 
-async def _relax_buttons(plan: dict, runs: Sequence[StepRun], T: Turn) -> list[dict[str, str]]:
-    """结果为空、时间是默认读法（只说「最近」）时：代码列出放宽的说法，每个预先查好张数，张数为 0 的不列。"""
-    said = next((str(t["said"]) for r in runs for t in schema.as_list((r.step.get("params") or {}).get("time"))
-                 if isinstance(t, dict) and str(t.get("said") or "").strip() in RECENT_WORDS), None)
-    if said is None or said not in T.query:
-        return []
-    out: list[dict[str, str]] = []
-    for option in RELAX_OPTIONS:
-        trial = _swap_time(plan, said, option)
-        spans, unknown = timespan.plan_spans(trial, T.today)
+def can_relax(r: StepRun, out: StepOut) -> bool:
+    """这一步结果为空、值得试着只放宽一个条件（总述「结果为空时」）：清单、统计、临时统计；不引用前一步的结果；
+    时间段没有整段还没到。"""
+    return (out.empty and r.skill in RELAX_SKILLS and not r.deferred and not _uses_refs(r.step)
+            and not any(s.future for s in r.spans))
+
+
+async def _relax_one(r: StepRun, opt: moves.Relax, T: Turn) -> dict[str, Any] | None:
+    """预查一种放宽的张数：只跑到沙箱为止（临时统计只跑沙箱 ①，不写脚本）。查不成（追问、出错）返回 None。"""
+    if opt.keep_spans:  # 没改时间：用本轮换算好的起止日期（沿用的滚动窗口不因隔天差一天）
+        spans: Mapping[str, list[Span]] = {"s1": list(r.spans)}
+    else:
+        spans, unknown = timespan.plan_spans(opt.plan, T.today)
         if unknown is not None:
+            return None
+    prepared = prepare(opt.plan, spans, T)
+    if isinstance(prepared, Ask) or len(prepared) != 1:
+        return None
+    one = prepared[0]
+    try:
+        if one.skill == "custom_stats":
+            res = await custom_stats.run_step(one, T, {}, cal.Caliber(), [], mode="count")
+        else:
+            res = await run_step(one, T, {}, cal.Caliber(), [], present=False)
+    except Exception as exc:  # noqa: BLE001 —— 预查出错：这一种不写、不给按钮，本轮照常回答
+        logger.warning("factory_issue_relax_failed", kind=opt.kind, error=type(exc).__name__)
+        return None
+    if not res.ok:
+        return None
+    count = res.refs.get(f"{one.sid}.count", res.refs.get(f"{one.sid}.total"))
+    if not isinstance(count, int) or isinstance(count, bool):
+        return None
+    got: dict[str, Any] = {"kind": opt.kind, "what": opt.what, "value": opt.value, "count": count,
+                           "plan": opt.plan, "key": opt.key}
+    sort = (one.step.get("params") or {}).get("sort")
+    by_add = not isinstance(sort, dict) or (sort.get("by") in (None, "建单时间") and sort.get("order") != "升序")
+    if opt.kind == "unlimited" and one.skill == "list_issues" and count and by_add:
+        # 最近建单的一张：清单的结果单按表格的顺序（建单时间从新到旧）回传；只有一个域有单时才写
+        hits = [(d, v) for d, v in (res.refs.get(f"{one.sid}.issues") or {}).items()
+                if isinstance(v, dict) and v.get("numbers")]
+        if len(hits) == 1:
+            dom, item = hits[0]
+            got["latest"] = {"domain": dom, "number": str(item["numbers"][0]), "id": int(item["ids"][0])}
+    return got
+
+
+async def _relax_neighbors(r: StepRun, T: Turn) -> list[dict[str, Any]]:
+    """结果为空：只放宽一个条件的几种（`moves.relax_options`，本会话执行过、推荐过的不查），至多 `RELAX_MAX` 种，
+    并行预查张数。返回查成了的（张数可为 0），顺序同 `relax_options`。"""
+    seen = {str(x) for x in (T.suggest_state or {}).get("seen") or []}
+    options = moves.relax_options(r.step, r.spans, T.today, seen)[:RELAX_MAX]
+    if not options:
+        return []
+    started = time.monotonic()
+    got = await asyncio.gather(*(_relax_one(r, opt, T) for opt in options))
+    tried = [x for x in got if x is not None]
+    logger.info("factory_issue_relax", step=r.skill, tried=[f"{x['kind']}:{x['what']}" for x in tried],
+                counts=[x["count"] for x in tried], failed=len(options) - len(tried),
+                ms=int((time.monotonic() - started) * 1000))
+    return tried
+
+
+def relax_note(tried: Sequence[Mapping[str, Any]], T: Turn) -> str:
+    """「没有查到单」之后那句：只放宽一个条件时各有几张（为 0 的不写），列清单时不限时间那一项另写最近建单的一张；
+    都为 0 时写明试过哪几种（总述「结果为空时」）。张数、单号都取自沙箱。"""
+    if not tried:
+        return ""
+    parts = []
+    for x in tried:
+        if not x["count"]:
             continue
-        prepared = prepare(trial, spans, T)
-        if isinstance(prepared, Ask):
-            continue
-        found = False
-        refs: dict[str, Any] = {}
-        for r in prepared:
-            if r.skill == "custom_stats":  # 只跑沙箱 ① 数张数，不写脚本（§5.4）
-                res = await custom_stats.run_step(r, T, refs, cal.Caliber(), [], mode="count")
-            elif r.skill in CONDITIONAL:
-                res = await run_step(r, T, refs, cal.Caliber(), [], present=False)
-            else:
-                continue
-            refs |= res.refs
-            if res.found_any:
-                count = res.refs.get(f"{r.sid}.count", res.refs.get(f"{r.sid}.total"))
-                out.append({"id": str(len(out) + 1), "name": "放宽时间", "query": T.query.replace(said, option, 1),
-                            "label": f"看{option}（{count} 张）" if count is not None else f"看{option}"})
-                found = True
-                break
-        if found and len(out) >= RELAX_MAX:
-            break
-    return out[:RELAX_MAX]
+        text = f"{moves.relax_text(x['kind'], x['what'])}有 {x['count']} 张"
+        latest = x.get("latest")
+        if latest and latest.get("domain") in _BY_LABEL:
+            link = links.issue(T.sites, _BY_LABEL[latest["domain"]], latest["number"], latest["id"])
+            text += f"，最近建单的一张是 {link}"
+        parts.append(text)
+    if parts:
+        return "只放宽一个条件时：" + "；".join(parts) + "。"
+    return "只放宽一个条件也都没有单（试过：" + "、".join(moves.relax_text(x["kind"], x["what"]) for x in tried) + "）。"
 
 
 def _recent_said(runs: Sequence[StepRun], T: Turn) -> str | None:
@@ -1225,15 +1287,6 @@ def _breakdown_text(seg: dict[str, Any]) -> str:
     for _title, pairs in seg.get("breakdowns") or []:
         parts.append("、".join(f"{name} {n} 张" for name, n in pairs))
     return "".join(f"；按以下几个部门统计：{p}" for p in parts)
-
-
-def _swap_time(plan: dict, said: str, option: str) -> dict:
-    trial = copy.deepcopy(plan)
-    for s in trial.get("steps") or []:
-        for t in schema.as_list((s.get("params") or {}).get("time")):
-            if isinstance(t, dict) and str(t.get("said") or "").strip() == said:
-                t["said"] = option
-    return trial
 
 
 def _month_to_date(run: StepRun, T: Turn) -> tuple[str, dict[str, str] | None] | None:
@@ -1359,7 +1412,8 @@ def _done(r: StepRun, out: StepOut) -> moves.Done:
                       truncated=out.truncated, exported=out.exported, segs=list(out.digest.get("segs") or []),
                       refs={k[len(prefix):]: v for k, v in out.refs.items() if k.startswith(prefix)},
                       tickets=list(out.digest.get("tickets") or []), shown=dict(out.digest.get("shown") or {}),
-                      spans=list(r.spans), deferred=r.deferred or _uses_refs(r.step))
+                      spans=list(r.spans), deferred=r.deferred or _uses_refs(r.step),
+                      relax=list(out.digest.get("relax") or []))
 
 
 def _dims_ok(dim: str, labels: Sequence[str], basis: str) -> bool:
@@ -1473,6 +1527,8 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     said: list[str] = []
     no_conditions = any(r.skill == "list_issues" and list_issues.no_conditions(r.step) for r in shown)
     suggesting: _Suggesting | None = None
+    #: 结果为空时的放宽一轮只对第一个为空的步骤做（§5.4）
+    relaxed = False
     for i, r in enumerate(shown, start=1):
         if multi:
             title = f"{'' if i == 1 else chr(10) * 2}**{i}. {_title(r)}**\n\n"
@@ -1517,6 +1573,13 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             for ev in out.events:
                 yield ev
             return
+        if not relaxed and can_relax(r, out):  # 结果为空：只放宽一个条件、预查张数，说一句卡在哪（§5.4）
+            relaxed = True
+            tried = await _relax_neighbors(r, T)
+            note = relax_note(tried, T)
+            if note:
+                out.events.append(Event.delta("\n\n" + note))
+            out.digest["relax"] = [x for x in tried if x["count"]]
         refs |= out.refs
         _record(T, r, out)
         done.append(_done(r, out))
@@ -1556,11 +1619,8 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         yield Event.delta("\n\n" + C.text())
     for text in T.record.exports:
         yield Event.delta("\n\n" + text)
-    widened: list[dict[str, str]] = []
-    if any_empty:
-        widened = await _relax_buttons(plan, runs, T)
-    elif any_found:
-        widened = _recent_buttons(runs, T)
+    # 有结果、只说「最近」：另给两个时间范围；结果为空时的放宽走接着问（上面的 `_relax_neighbors`）
+    widened = _recent_buttons(runs, T) if any_found and not any_empty else []
     if no_conditions:  # 不带任何条件的清单：不给接着问，给能力介绍的 3 个按钮（§9.4）
         T.record.seen += [k for d in done for k in moves.asked_keys(d)] + [moves.question_key(T.query)]
         step_buttons = greeting.buttons(T.access)
@@ -1570,7 +1630,7 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     chosen: list[suggest.Chosen] = []
     if suggesting is not None:
         chosen = await suggesting.result(min(suggestions.MODEL_MAX, suggestions.MAX_BUTTONS - len(fixed)))
-    recs = suggestions.merge(fixed, [suggestions.follow_up(c.query) for c in chosen])
+    recs = suggestions.merge(fixed, [suggestions.follow_up(c.query, c.label) for c in chosen])
     if recs:
         yield Event.suggestions(recs)
     _offer(T, recs, chosen, done, suggesting.pool if suggesting is not None else None)

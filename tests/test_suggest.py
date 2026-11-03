@@ -11,10 +11,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import cn_data
 import fakes
+import pandas as pd
 import pytest
 import s4_data
 import scopes
@@ -23,6 +24,7 @@ from forge_core.events import EventType
 
 from factory_issue_module.config import files as config_files
 from factory_issue_module.config.files import ConfigFormatError
+from factory_issue_module.plan import timespan
 from factory_issue_module.present import moves, suggest, suggestions
 from factory_issue_module.turn import workspace
 
@@ -290,6 +292,114 @@ def test_answer_params_suggest_keys(text, ok):
             config_files.parse_answer_params(text)
     got = config_files.parse_answer_params("")
     assert got.suggest_model is True and got.suggest_seconds == 5
+
+
+# ---------------------------------------------------------------------------- 结果为空时放宽一个条件（决策 2026-11-03）
+
+A920 = {"field": "机型", "op": "是", "value": "A920", "from": "user"}
+KES = {"field": "加工厂", "op": "是", "value": "柯洱斯", "from": "user"}
+
+
+def _main_empty_for(cutoff_days: int = 40, factory: str | None = "04"):
+    """假主表：近 `cutoff_days` 天以内、又按 `factory` 这家工厂筛时一张都没有（`factory=None` 时只看时间）。
+    假连接器不执行 WHERE，机型在沙箱里筛，加工厂与建单时间是 SQL 参数。"""
+    cutoff = datetime.combine(date.today() - timedelta(days=cutoff_days), datetime.min.time())
+
+    def main(_sql: str, params: dict) -> pd.DataFrame:
+        starts = [v for v in params.values() if isinstance(v, datetime)]
+        recent = bool(starts) and min(starts) > cutoff
+        if recent and (factory is None or factory in params.values()):
+            return pd.DataFrame()
+        return pd.DataFrame(cn_data.main_rows())
+    return main
+
+
+async def test_reported_empty_turn_says_where_it_is_stuck_and_offers_relaxed_buttons():
+    """开发者实测：上一轮查国内 A920、柯洱斯，「那近 30 天呢」查出 0 张，原先一个选项都没有。"""
+    c = Conversation(scopes.account_jia())
+    cn_data.load(c.h, main=_main_empty_for())
+    c.h.llm.suggest_reply = {"suggestions": []}
+    await c.ask("近 90 天国内 A920 柯洱斯的问题", plan(step("list_issues", domains=CN, filters=[A920, KES],
+                                                           time=[{"said": "近 90 天", "basis": "建单", "from": "user"}])),
+                NARR)
+    c.h.llm.suggest_reply = fakes.pick_first_two
+    prev = {**CN, "from": "previous"}
+    carried = [{**A920, "from": "previous"}, {**KES, "from": "previous"}]
+    events = await c.ask("那近 30 天呢", plan(step("list_issues", domains=prev, filters=carried, time=T30)))
+    text = _text(events)
+    assert "没有查到单" in text
+    # 近 90 天上一轮查过，不再试，改试近半年；不限机型是 0 张，不写；不限时间另写最近建单的一张
+    assert "只放宽一个条件时：时间放到近半年有 2 张；不限加工厂有 2 张；不限时间有 2 张，最近建单的一张是 [ZC9901001]" in text
+    assert "近 90 天" not in text.split("没有查到单")[1] and "不限机型" not in text
+    recs = _buttons(events)
+    assert [r["query"] for r in recs] == ["那近半年呢", "不限加工厂呢"]
+    assert [r["label"] for r in recs] == ["看近半年（2 张）", "不限加工厂（2 张）"]  # 张数写在按钮上（前端显示 label）
+    # 点了：不调规划，按放宽后的计划查，开头写明沿用了哪些
+    planned = _planner_calls(c.h)
+    events = await c.ask("不限加工厂呢", NARR)
+    assert _planner_calls(c.h) == planned
+    text = _text(events)
+    assert "沿用上一轮的条件：国内、时间「近 30 天」、机型 A920" in text and "共 2 张" in text
+    assert "柯洱斯" not in text.split("统计口径")[1]
+
+
+async def test_all_relaxed_empty_says_what_was_tried_and_gives_no_buttons():
+    c = Conversation(scopes.account_jia())
+    cn_data.load(c.h, main=lambda _sql, _p: pd.DataFrame())
+    events = await c.ask("近 30 天国内 A920 的问题", plan(step("list_issues", domains=CN, time=T30, filters=[A920])))
+    assert "只放宽一个条件也都没有单（试过：时间放到近 90 天、不限机型、不限时间）。" in _text(events)
+    assert EventType.SUGGESTIONS not in [e.type for e in events] and c.h.llm.suggest_calls == []
+    assert c.ws(workspace.SUGGEST)["offered"] == []
+
+
+async def test_relaxed_label_from_the_model_must_carry_the_count():
+    c = Conversation(scopes.account_jia())
+    cn_data.load(c.h, main=_main_empty_for(factory=None))
+
+    def reply(m):
+        ids = {q: cid for cid, q in fakes.candidates_in(m)}
+        return {"suggestions": [{"ids": [ids["那近 90 天呢"]], "query": "放到近 90 天看看", "label": "近 90 天看看"},
+                                {"ids": [ids["不限时间呢"]], "query": "不限时间再查", "label": "不限时间有 4 张"}]}
+    c.h.llm.suggest_reply = reply
+    events = await c.ask("近 30 天国内的问题有哪些", plan(step("list_issues", domains=CN, time=T30)))
+    recs = _buttons(events)
+    assert [r["query"] for r in recs] == ["放到近 90 天看看", "不限时间再查"]
+    # 没写张数的换成默认按钮文字；写了的照用
+    assert [r["label"] for r in recs] == ["看近 90 天（4 张）", "不限时间有 4 张"]
+
+
+async def test_future_period_is_not_relaxed():
+    c = Conversation(scopes.account_jia())
+    cn_data.load(c.h, main=lambda _sql, _p: pd.DataFrame())
+    future = [{"said": "2099 年 1 月", "basis": "建单", "from": "user"}]
+    events = await c.ask("2099 年 1 月国内的问题", plan(step("list_issues", domains=CN, time=future)))
+    text = _text(events)
+    assert "这段时间还没到" in text and "只放宽一个条件" not in text
+    assert len(c.h.stats.calls) == 1  # 只有本轮那一次沙箱，没有预查
+
+
+def test_relax_options_shapes():
+    today = date.today()
+    spans = [timespan.convert("近 30 天", today)]
+    base = step("list_issues", domains=CN, time=T30, filters=[A920, KES])
+    got = moves.relax_options(base, spans, today, set())
+    assert [(x.kind, x.what) for x in got] == [("time", "近 90 天"), ("drop", "机型"), ("drop", "加工厂"),
+                                              ("unlimited", "不限时间")]
+    drop = got[1].plan["steps"][0]["params"]
+    assert drop["filters"] == [{**KES, "from": "previous"}] and drop["time"][0]["from"] == "previous"
+    assert got[0].plan["steps"][0]["params"]["time"] == [{"said": "近 90 天", "basis": "建单", "from": "user"}]
+    assert [x.keep_spans for x in got] == [False, True, True, False]
+    # 按结案日期筛：不限时间会丢掉「结案了」这层意思，不试
+    closed = step("aggregate", domains=CN, time=[{"said": "近 30 天", "basis": "结案", "from": "user"}])
+    assert [x.kind for x in moves.relax_options(closed, spans, today, set())] == ["time"]
+    # 比较两个时段：不动时间
+    two = [{"said": "今年", "basis": "建单", "from": "user"}, {"said": "去年", "basis": "建单", "from": "user"}]
+    cmp_step = step("aggregate", domains=CN, time=two, compare="时段", filters=[A920])
+    spans2 = [timespan.convert("今年", today), timespan.convert("去年", today)]
+    assert [x.kind for x in moves.relax_options(cmp_step, spans2, today, set())] == ["drop"]
+    # 本会话执行过的不试
+    seen = {got[1].key}
+    assert "机型" not in [x.what for x in moves.relax_options(base, spans, today, seen)]
 
 
 # ---------------------------------------------------------------------------- 几种动作

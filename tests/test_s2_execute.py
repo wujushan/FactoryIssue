@@ -288,10 +288,13 @@ async def test_empty_result_offers_relaxed_time_with_counts():
 
     reply = plan(step("list_issues", domains=CN, time=[{"said": "最近", "basis": "建单", "from": "user"}]))
     h, events = await _go("国内最近的问题", [reply], main=main)  # 预先查张数只到沙箱，不写分析（S2 评审 A3）
-    assert "没有查到单" in _text(events)
+    text = _text(events)
+    assert "没有查到单" in text
+    # 2026-11-03 起：只放宽一个条件、预查张数，正文说一句卡在哪（总述「结果为空时」）
+    assert "只放宽一个条件时：时间放到近 90 天有 4 张；不限时间有 4 张，最近建单的一张是 ZC9901001。" in text
     recs = next(e for e in events if e.type is EventType.SUGGESTIONS).data["recommendations"]
-    assert [r["label"] for r in recs] == ["看近 90 天（4 张）", "看今年（4 张）"]
-    assert recs[0]["query"] == "国内近 90 天的问题"
+    assert [r["label"] for r in recs] == ["看近 90 天（4 张）", "不限时间（4 张）"]
+    assert [r["query"] for r in recs] == ["那近 90 天呢", "不限时间呢"]
 
 
 async def test_list_without_conditions_says_so_and_offers_greeting_buttons():

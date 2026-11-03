@@ -109,7 +109,8 @@ async def test_a3_relax_counts_do_not_call_the_model_again():
     h, events = await _go("国内最近的问题", [reply], main=main)
     assert len(h.llm.calls) == 1
     labels = [r["label"] for r in next(e for e in events if e.type is EventType.SUGGESTIONS).data["recommendations"]]
-    assert labels == ["看近 90 天（4 张）", "看今年（4 张）"]
+    # 2026-11-03 起：只放宽一个条件（时间放长一档、不限时间），按钮带预先查好的张数（总述「结果为空时」）
+    assert labels == ["看近 90 天（4 张）", "不限时间（4 张）"]
 
 
 async def test_a4_supplier_partial_name_matching_several_clarifies():

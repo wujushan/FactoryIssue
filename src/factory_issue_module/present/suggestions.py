@@ -8,7 +8,7 @@ INFO 网页前端把按钮的 `query` 当按钮文字显示、点了照发（设
   （`same_period`）、结果为空时的放宽与「最近」的另两个时间范围（`turn/execute.py`）、文字查找那几个、临时统计
   关掉或没算出来时的能力介绍按钮。点了照常规划。
 - 接着问：代码列候选（`present/moves.py`）、模型挑（`present/suggest.py`），至多 `MODEL_MAX` 个，点了直接执行存下
-  的计划（`turn/workspace.py::picked`）。
+  的计划（`turn/workspace.py::picked`）。结果为空时的放宽也在这一类（2026-11-03 起，按钮文字带预先查好的张数）。
 - 按钮总数不超过 4 个，同一个问句只留一个；每项是 `{id, name, label, query}` 对象，`label` 不超过 15 个字。
 """
 
@@ -25,9 +25,9 @@ TEMPLATE_NAME = "接着问"
 SAME_PERIOD = "按上月同期比"
 
 
-def follow_up(query: str) -> dict[str, str]:
-    """一个接着问按钮：`label` 是问句截到 15 个字。"""
-    return {"id": "", "name": TEMPLATE_NAME, "label": clarify.button_label(query), "query": query}
+def follow_up(query: str, label: str = "") -> dict[str, str]:
+    """一个接着问按钮：`label` 是模型写的按钮文字（核过的，`present/suggest.py`），没有时把问句截到 15 个字。"""
+    return {"id": "", "name": TEMPLATE_NAME, "label": label or clarify.button_label(query), "query": query}
 
 
 def basis_switch(alternative: str) -> dict[str, str]:

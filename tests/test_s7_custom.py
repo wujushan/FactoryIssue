@@ -432,7 +432,9 @@ async def test_empty_recent_offers_relaxed_time_counted_without_a_script():
     events = await run(h, "国内最近的问题按星期几分布看看")
     assert "没有查到单" in _text(events) and script_calls(h) == []
     labels = [r["label"] for r in next(e for e in events if e.type is EventType.SUGGESTIONS).data["recommendations"]]
-    assert labels == ["看近 90 天（4 张）", "看今年（4 张）"]
+    # 2026-11-03 起：只放宽一个条件（总述「结果为空时」）；临时统计不写「最近建单的一张」
+    assert labels == ["看近 90 天（4 张）", "不限时间（4 张）"]
+    assert "只放宽一个条件时：时间放到近 90 天有 4 张；不限时间有 4 张。" in _text(events)
 
 
 async def test_second_custom_stats_in_one_turn_is_asked_again():
