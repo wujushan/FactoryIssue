@@ -3,7 +3,8 @@
 - `ctx.data` 用真的 `ScopedDataAccess`，配一个只记 SQL 的假连接器：按 SQL 里 `FROM` 的表名返回构造好的
   数据帧，并记下每条 SQL。权限用 `AgentNode(privileges=…)` 注入，走平台真实的 `describe()`、
   `TableDenied` 与 WHERE 编译。假连接器不执行 WHERE。
-- `ctx.stats` 用平台的 `StatsRunner`（同一个沙箱库，本机子进程跑）。
+- `ctx.stats` 用常驻沙箱（`warm_sandbox`，与平台 harness 同一套限制，进程只起一次）。
+  `to_chart` 仍用平台的 `StatsRunner`。
 - `ctx.llm` 按调用顺序回放写好的回复；没给回放就调用时报错，用来断言「不调模型」。每次调用都检查
   只有一条 system 且在最前。
 - `ctx.workspace`、`ctx.config`、`ctx.files`、`ctx.retrieval` 用字典实现；给了 `history` 时 `ctx.session`
@@ -13,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import tempfile
@@ -29,8 +31,14 @@ from forge_core.permissions.agentnode import AgentNode
 from forge_data import DataSourceRegistry, ScopedDataAccess
 from forge_data.datasources.base import ParamStyle
 from forge_data.scopefilter import Dialect
-from forge_platform.stats import StatsRunner
+from forge_platform.stats import (
+    STATS_MAX_FRAME_BYTES,
+    STATS_MAX_OUTPUT_CHARS,
+    STATS_TIMEOUT_SECONDS,
+    StatsRunner,
+)
 
+import warm_sandbox
 from factory_issue_module.declarations import ERP, INFO, MART, MODULE_CODE
 from factory_issue_module.module import FactoryIssueModule
 from factory_issue_module.present.suggest import MARKER as SUGGEST_MARKER
@@ -155,7 +163,10 @@ class FakeLLM:
 
 
 class RecordingStats:
-    """平台的 StatsRunner 外面包一层，记下每次调用的脚本与数据集名。"""
+    """常驻沙箱外面包一层，记下每次调用的脚本与数据集名。
+
+    执行走 `warm_sandbox`（进程只起一次）。`to_chart` 仍用平台 `StatsRunner`，只搬数字。
+    """
 
     def __init__(self) -> None:
         self._runner = StatsRunner()
@@ -163,7 +174,18 @@ class RecordingStats:
 
     async def run(self, script: str, datasets: dict[str, Any] | None = None, **kw: Any) -> Any:
         self.calls.append((script, tuple(sorted(datasets or {}))))
-        return await self._runner.run(script, datasets, **kw)
+        timeout = kw.get("timeout")
+        limit = (STATS_TIMEOUT_SECONDS if timeout is None
+                 else max(1, min(timeout, STATS_TIMEOUT_SECONDS)))
+        return await asyncio.to_thread(
+            warm_sandbox.run,
+            script,
+            datasets or {},
+            timeout=limit,
+            max_output_chars=STATS_MAX_OUTPUT_CHARS,
+            return_frames=bool(kw.get("return_frames", False)),
+            max_frame_bytes=STATS_MAX_FRAME_BYTES,
+        )
 
     def to_chart(self, outcome: Any, **kw: Any) -> dict[str, Any]:
         return self._runner.to_chart(outcome, **kw)
