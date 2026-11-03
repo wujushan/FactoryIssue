@@ -9,7 +9,8 @@ S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含�
    - 三域都无权：代码规则判断是不是寒暄或问能力，是就做能力介绍，不是就只答请先申请。
 3. 读最近几轮对话与工作区（`turn/workspace.py`）：上一轮的计划与结局交给规划器。本轮问句与上一轮代码追问的某个
    选项的 `query` 完全相同时，把选项直接填进上一轮的计划，跳过第 4、5 步（§4.4）；填好的计划照常过第 6 步。
-   这种轮次按钮只写了选项（「惠州百富」），本轮按存下的问句全文（原话加这一项）理解。
+   这种轮次按钮只写了选项（「惠州百富」），本轮按存下的问句全文（原话加这一项）理解。本轮问句与上一轮某个接着问
+   按钮的 `query` 完全相同时，同样跳过第 4、5 步，直接用那个按钮存下的计划（§9.5，`workspace.picked`）。
 4–5. 号码直通、规划、规整与校验（`plan/planner.py`）；规划失败按 §14「没能理解这个问题」答。
    主数据（`domains/shared.py`）按可查的域按需取、一轮至多一次（`_LazyMaster`），交规划器作第 7 条的 `classes`、
    第 15 条的 `entities` 与号码直通的机型清单。规划器写成 `introduce` 的轮次不取（寒暄不取数，决策 2026-11-01
@@ -22,7 +23,7 @@ S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含�
    （`skills/verify_previous.py`）、换图（`skills/rerender.py`）按工作区里上一轮的执行计划重放，临时统计照存下的
    脚本重算、不调模型。
 10. 写工作区（§10）：`last` 每轮写（寒暄、能力介绍、没看懂的轮次除外）；只有取过数的轮次覆盖 `turn`、`results`、
-    `charts`。
+    `charts`；走到执行、又不是执行时追问的轮次写 `suggest`（答后建议的去重与点了要执行的计划）。
 """
 
 from __future__ import annotations
@@ -147,6 +148,9 @@ async def run_turn(
     if pending is not None:
         await workspace.drop(ctx, workspace.PENDING)
     filled = workspace.fill(pending, query)
+    # 点了上一轮的接着问按钮：直接用那个按钮存下的计划，不调规划（§9.5）
+    suggest_state = await workspace.read(ctx, workspace.SUGGEST)
+    picked = workspace.picked(suggest_state, query) if filled is None else None
     # 本轮按什么问句理解：点了代码追问的按钮时按钮只写了选项，取存下的问句全文（原话加这一项，§4.4）；
     # 取人、对库、写分析、答后按钮、填不进去时重新规划都按它。`last.query` 仍记用户发来的原话
     asked = (filled.asked or query) if filled is not None else query
@@ -162,6 +166,9 @@ async def run_turn(
     if filled is not None:
         result = PlanResult(plan=filled.plan, source="filled", inferred=list(filled.inferred),
                             check_errors=list(filled.check_errors))
+    elif picked is not None:
+        logger.info("factory_issue_suggest_clicked", move=picked[1])
+        result = PlanResult(plan=picked[0], source="suggested")
     else:
         yield Event.progress(PROGRESS_PLAN, "正在理解问题")
         result = await planner.plan(llm, inputs, enrich=lazy.enrich)
@@ -202,7 +209,7 @@ async def run_turn(
                             query=asked, today=today, result=result, entities=entities, sites=sites,
                             previous_turn=previous.turn, previous_results=results, focus=focus,
                             topics=topics, seg=seg, scripts=workspace.stored_scripts(previous.turn),
-                            scopes=filled_scopes)
+                            scopes=filled_scopes, history=history, suggest_state=suggest_state)
 
     if first.get("skill") in REPLAY_SKILLS:
         async for event in _replay(ctx, query, result, first, previous, make_turn(result), results):
@@ -269,6 +276,7 @@ async def _write_after(ctx: Any, query: str, plan: dict, turn: execute.Turn, res
         if record.fetched:
             await workspace.write_turn(ctx, turn.query, plan, record)
     await workspace.write_last(ctx, query, outcome, plan, asked=turn.query)
+    await workspace.write_suggest(ctx, turn.suggest_state, record)
     return None
 
 

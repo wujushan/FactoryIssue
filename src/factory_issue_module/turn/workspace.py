@@ -15,6 +15,9 @@
     找的是什么与用的说法（`texts`，S6b 加，版本号随之为 2）。
   - `charts`：本轮各段图的数据行（沙箱产出，原样），换图用。
   - `focus`：最近一张被单独说到的单（域、问题编号、单 ID），「这单」「它」用；本轮没有就留着上一张。
+  - `suggest`（§9.5）：本会话执行过、推荐过的意图键与问句（`seen`，答后建议去重）；本轮的接着问按钮与各自的计划
+    （`offered`，下一轮问句与其中一个完全相同时直接执行，`picked`）；上一份清单里没点开的单（`carry`）。
+    走到执行这一步、又不是执行时追问的轮次都写（`write_suggest`）。
   - `pending_clarify`：代码追问时的计划、问话与每个选项怎么填回计划；下一轮问句与某个选项的 `query` 完全相同
     时直接填、不重新规划（`fill`），填好的计划照常过 §4.2 第 6 步。写进去了按钮的 `query` 就是选项本身，问句
     全文（原话加这一项）存在选项的 `full` 里，本轮按它理解；写不进去时按钮发问句全文（`plan/clarify.py`）。
@@ -53,6 +56,11 @@ RESULTS = "results"
 CHARTS = "charts"
 FOCUS = "focus"
 PENDING = "pending_clarify"
+#: 答后建议（§9.5、§10）：本会话执行过、推荐过的意图键与问句（`seen`），本轮的接着问按钮与计划（`offered`），
+#: 上一份清单里没点开的单（`carry`）。新加的键，不改其余键的形状，`VERSION` 不加
+SUGGEST = "suggest"
+SEEN_CAP = 300
+CARRY_MAX = 5
 #: 每步每域存的单 ID 上限（§10）
 ID_CAP = 5000
 
@@ -189,6 +197,11 @@ class TurnRecord:
     #: 本轮的结局：有没有查到结果、是不是整轮都失败（`last.outcome`）
     found: bool = False
     failed: bool = False
+    #: 答后建议（§9.5、§10 `suggest`）：本轮要记进 `seen` 的意图键与问句；本轮发出的接着问按钮
+    #: （{query, key, move, plan}）；新的 `carry`（None：留着上一份）
+    seen: list[str] = field(default_factory=list)
+    offered: list[dict[str, Any]] = field(default_factory=list)
+    carry: list[dict[str, Any]] | None = None
 
 
 def _capped(results: Mapping[str, Any]) -> dict[str, Any]:
@@ -210,6 +223,32 @@ async def write_turn(ctx: Any, query: str, plan: dict, record: TurnRecord) -> No
     await write(ctx, CHARTS, {"items": record.charts})
     if record.focus:
         await write(ctx, FOCUS, record.focus)
+
+
+# ---------------------------------------------------------------------------- 答后建议（§9.5）
+
+
+async def write_suggest(ctx: Any, before: Mapping[str, Any] | None, record: TurnRecord) -> None:
+    """`seen` 加上本轮的（最近 `SEEN_CAP` 条）；`offered` 换成本轮的；`carry` 有新的就换，去掉已在 `seen` 里的。"""
+    seen = [str(x) for x in (before or {}).get("seen") or []]
+    have = set(seen)
+    for key in record.seen:
+        if key and key not in have:
+            seen.append(key)
+            have.add(key)
+    seen = seen[-SEEN_CAP:]
+    carry = record.carry if record.carry is not None else list((before or {}).get("carry") or [])
+    carry = [c for c in carry if isinstance(c, Mapping) and c.get("key") not in have][:CARRY_MAX]
+    await write(ctx, SUGGEST, {"seen": seen, "offered": list(record.offered), "carry": carry})
+
+
+def picked(state: Mapping[str, Any] | None, query: str) -> tuple[dict, str] | None:
+    """本轮问句与上一轮某个接着问按钮的 `query` 完全相同：(那个按钮存下的计划, 动作)；否则 None。"""
+    said = (query or "").strip()
+    for item in (state or {}).get("offered") or []:
+        if isinstance(item, Mapping) and str(item.get("query") or "").strip() == said and isinstance(item.get("plan"), dict):
+            return copy.deepcopy(item["plan"]), str(item.get("move") or "")
+    return None
 
 
 # ---------------------------------------------------------------------------- 换算后的时间

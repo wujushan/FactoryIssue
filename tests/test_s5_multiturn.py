@@ -11,6 +11,7 @@ import io
 from datetime import date, timedelta
 
 import cn_data
+import fakes
 import pandas as pd
 import pytest
 import s3_data
@@ -23,7 +24,7 @@ from openpyxl import load_workbook
 from factory_issue_module.domains import base
 from factory_issue_module.plan import timespan
 from factory_issue_module.plan.normalize import Inferred
-from factory_issue_module.present import export, suggestions
+from factory_issue_module.present import export, moves, suggestions
 from factory_issue_module.turn import orchestrator, workspace
 
 CN = {"value": ["国内"], "from": "user"}
@@ -474,8 +475,8 @@ async def test_export_when_asked_one_sheet_per_domain_with_display_headers():
     assert len(sheets["国内"]) == 5 and sheets["国内"][1][0] == "ZC9901001"  # 编号给文字，不带链接
     caliber_at = text.index("统计口径")
     assert text.index("附件") > caliber_at  # 链接在统计口径之后
-    labels = [r["label"] for r in _buttons(events)]
-    assert suggestions.EXPORT_ALL not in labels
+    # 已经导出了：候选里没有「把这些单全部导出」（§9.5 导出一行）
+    assert "把这些单全部导出" not in str(c.h.llm.suggest_calls[-1][-1]["content"])
 
 
 async def test_export_over_threshold_and_table_keeps_the_first_rows():
@@ -547,45 +548,50 @@ def test_workbook_cells_are_plain_values():
 # ---------------------------------------------------------------------------- 答后按钮（§9.5）
 
 
-async def test_alternatives_first_then_templates_at_most_four():
+async def test_alternatives_first_then_follow_ups_at_most_four():
     c = Conversation(scopes.account_jia())
     events = await c.ask("近 30 天国内 A920 的问题", plan(step("list_issues", domains=CN, time=T30),
                                                      alternatives=["A920 系列", "A920 各款"]), NARR)
     recs = _buttons(events)
-    assert [r["label"] for r in recs] == ["A920 系列", "A920 各款", suggestions.STAT_BY_TYPE]
-    # 不再拼本轮原话（INFO 网页前端把 `query` 当按钮文字显示，§19）：短的、动作在前
-    assert [r["query"] for r in recs] == ["换个理解：A920 系列", "换个理解：A920 各款", "按问题类型统计这些单"]
-    assert [r["id"] for r in recs] == ["1", "2", "3"] and all(len(r["label"]) <= 15 for r in recs)
+    # 纠偏类在前，接着问在后（§9.5）；不拼本轮原话（INFO 网页前端把 `query` 当按钮文字显示，§19）
+    assert [r["query"] for r in recs][:2] == ["换个理解：A920 系列", "换个理解：A920 各款"]
+    assert len(recs) == 4 and [r["name"] for r in recs][2:] == [suggestions.TEMPLATE_NAME] * 2
+    assert [r["id"] for r in recs] == ["1", "2", "3", "4"] and all(len(r["label"]) <= 15 for r in recs)
 
 
-async def test_export_all_template_when_the_table_is_cut():
+async def test_export_all_follow_up_when_the_table_is_cut():
     c = Conversation(scopes.account_jia(), config={"answer_params.toml": "table_rows = 2"})
+    c.h.llm.suggest_reply = lambda m: {"suggestions": [
+        {"ids": [cid], "query": q} for cid, q in fakes.candidates_in(m) if q == "把这些单全部导出"]}
     events = await c.ask("近 30 天国内的问题有哪些", plan(step("list_issues", domains=CN, time=T30)), NARR)
-    rec = next(r for r in _buttons(events) if r["label"] == suggestions.EXPORT_ALL)
-    assert rec["query"] == "把这些单全部导出"
+    assert [r["query"] for r in _buttons(events)] == ["把这些单全部导出"]
+    # 点了直接执行存下的计划（不调规划）：同样的条件、导出
+    planned = _planner_calls(c.h)
+    events = await c.ask("把这些单全部导出")
+    assert _planner_calls(c.h) == planned and "完整 4 张见附件" in _text(events)
 
 
-async def test_detail_templates_and_focus_for_this_issue():
+async def test_detail_follow_ups_and_focus_for_this_issue():
     c = Conversation(data=s4_data)
     events = await c.ask("ZC9901001")
-    by_label = {r["label"]: r["query"] for r in _buttons(events)}
-    assert by_label[suggestions.FULL_PROCESS] == "ZC9901001 的完整处理过程"
-    assert by_label[suggestions.REASONS] == "ZC9901001 的原因与措施"
+    queries = [r["query"] for r in _buttons(events)]
+    # 整张详情给了各环节的原因、措施：不再推「原因与措施」（决策 2026-11-02 第 3 条）；处理过程详情里没有，照推
+    assert "ZC9901001 的完整处理过程" in queries and "ZC9901001 的原因与措施" not in queries
     assert c.ws(workspace.FOCUS)["number"] == "ZC9901001"
     events = await c.ask("这单的原因是什么", plan(step("issue_detail", issue={"value": "这单", "from": "previous"},
                                                        aspects=["原因"])))
     assert "ZC9901001" in _text(events) and EventType.CLARIFY not in _types(events)
-    # 看过原因：只剩「看完整处理过程」
-    labels = [r["label"] for r in _buttons(events)]
-    assert suggestions.FULL_PROCESS in labels and suggestions.REASONS not in labels
+    # 上一轮推荐过、没点的「完整处理过程」也不再推（§9.5 去重）
+    assert not any(r["query"].endswith(("的完整处理过程", "的原因与措施")) for r in _buttons(events))
 
 
-async def test_detail_templates_only_for_a_single_issue():
-    """几张单的详情、按号查单找到几张：说不清是哪一张，不给「看完整处理过程」「看原因与措施」。"""
+async def test_detail_follow_ups_only_for_a_single_issue():
+    """按号查单找到几张：不推某一张的「完整处理过程」「原因与措施」，推点开其中一张的详情。"""
     c = Conversation(data=s4_data)
     events = await c.ask("ZC9901001、ZC9901002")
-    labels = [r["label"] for r in _buttons(events)]
-    assert suggestions.FULL_PROCESS not in labels and suggestions.REASONS not in labels
+    queries = [r["query"] for r in _buttons(events)]
+    assert not any(q.endswith(("的完整处理过程", "的原因与措施")) for q in queries)
+    assert queries == ["ZC9901001 的详情", "ZC9901002 的详情"]
 
 
 async def test_aggregate_template_lists_the_first():
@@ -596,17 +602,25 @@ async def test_aggregate_template_lists_the_first():
     assert rec["label"] == rec["query"] == "列出柯洱斯的单"
 
 
-@pytest.mark.parametrize(("group_by", "top1", "want"), [
-    (["加工厂"], ["柯洱斯", "亮亮"], "列出柯洱斯、亮亮的单"),
-    (["问题等级"], ["A"], "列出 A 级的单"),
-    (["月"], ["2026-10"], None),  # 按时间分组不给
-    (["加工厂", "问题类型"], ["柯洱斯", "硬件问题"], None),  # 两个维度说不清
-    (["问题类型"], ["未填"], None),
-    (["加工厂"], ["a", "b", "c", "d"], None),  # 并列第一太多
+@pytest.mark.parametrize(("group_by", "pairs", "want"), [
+    (["加工厂"], [["柯洱斯", 3], ["亮亮", 1]], ["列出柯洱斯的单", "列出亮亮的单"]),
+    (["问题等级"], [["A", 2], ["B", 1]], ["列出 A 级的单", "列出 B 级的单"]),
+    (["月"], [["2026-10", 3]], []),  # 按时间分组不给
+    (["加工厂", "问题类型"], [["柯洱斯", 3]], []),  # 两个维度说不清
+    (["问题类型"], [["未填", 3], ["硬件问题", 1]], ["列出硬件问题的单"]),  # 「未填」不是能拿来筛的说法
 ])
-def test_aggregate_template_shapes(group_by, top1, want):
-    got = suggestions.aggregate_templates(step("aggregate", group_by=group_by), top1=top1)
-    assert [r["query"] for r in got] == ([want] if want else [])
+def test_aggregate_drill_shapes(group_by, pairs, want):
+    title = group_by[0]
+    done = moves.Done(sid="s1", skill="aggregate", step=step("aggregate", domains=CN, time=T30, group_by=group_by),
+                      domains=["国内"], found=True,
+                      segs=[{"domain": "国内", "kind": "group", "title": title, "found": 4, "facts": {"按" + title: pairs}}])
+    pool = moves.collect([done], moves.Context(today=date.today(), access=["国内"], text_access=[], seen=set()))
+    assert [c.query for c in pool.items if c.move == moves.DRILL] == want
+    for c in pool.items:
+        if c.move == moves.DRILL:  # 点了执行的是清单：沿用的条件标 previous，加的那个条件标 user
+            p = c.plan["steps"][0]["params"]
+            assert c.plan["steps"][0]["skill"] == "list_issues" and p["time"][0]["from"] == "previous"
+            assert p["filters"][-1]["from"] == "user" and "group_by" not in p
 
 
 def _fix_today(monkeypatch, day: date) -> None:
