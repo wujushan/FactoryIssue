@@ -346,9 +346,15 @@ def numeric_cond(col: str, kind: str, values: Sequence[str], out: DomainStep, fi
 
 
 def people(said: str, R: Resolver, person_kind: str) -> list[int] | Ask:
-    """姓名 → 员工 ID。重名时追问「是哪个部门的这位」；「生产工程部的张三」按部门挑。"""
+    """姓名 → 员工 ID。重名时追问「是哪个部门的这位」；「生产工程部的张三」按部门挑。「我」是当前用户（按工号取，
+    `execute.add_people`），认不出时请用户给出姓名（总述「必要澄清项」）。"""
     from factory_issue_module.plan import names
 
+    if names.is_self(said):
+        me = R.master.me
+        if me is None:
+            return Ask(ME_UNKNOWN, [], reason=ME_UNKNOWN_REASON, said=said, fill=FILL_NONE)
+        return [me.id]
     staff = R.master.people
     want = names.key(said)
     dept_hint = None
@@ -367,6 +373,18 @@ def people(said: str, R: Resolver, person_kind: str) -> list[int] | Ask:
         options = names.person_options([(p.name, p.dept) for p in hits])
         return Ask(f"「{said}」有几位同名的，是哪个部门的这位？", options, reason="重名", said=said)
     return [p.id for p in hits]
+
+
+ME_UNKNOWN_REASON = "认不出当前用户"
+ME_UNKNOWN = "没能认出您是哪位员工，暂时不能按「我」来查。请告诉我您的姓名，如「张三跟进的单」。"
+
+
+def person_shown(values: Sequence[str], R: Resolver) -> str:
+    """人员条件回显：「我」写成当前用户的姓名。"""
+    from factory_issue_module.plan import names
+
+    me = R.master.me
+    return join([me.name if (me is not None and names.is_self(v)) else str(v) for v in values])
 
 
 def departments(values: Sequence[str], R: Resolver) -> list[str] | Ask:

@@ -125,7 +125,7 @@ async def test_rule_hits_are_returned():
 def test_system_has_no_date_and_is_cached():
     system = prompt.planner_system(MANIFEST, TOPICS)
     assert system is prompt.planner_system(MANIFEST, TOPICS)
-    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.2"
+    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.3"
     assert "一部今年有哪些问题" in system
 
 

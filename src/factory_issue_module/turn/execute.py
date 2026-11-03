@@ -217,7 +217,7 @@ def _resolve(run: StepRun, T: Turn, refs: Mapping[str, Any]) -> Ask | None:
             if not hard:
                 return asks[0][1]
             d0, a0 = hard[0]
-            if len(run.domains) == 1:
+            if len(run.domains) == 1 or a0.reason == base.ME_UNKNOWN_REASON:  # 认不出当前用户与哪个域无关
                 return a0
             soft = [f"{d.label}{a.missing}" for d, a in asks if a.missing is not None]
             head = "，".join(soft) + "。" if soft else ""
@@ -1134,8 +1134,13 @@ async def _run_lookup(run: StepRun, T: Turn, C: cal.Caliber) -> StepOut:
 
 
 def _opening_notes(T: Turn) -> list[str]:
-    """「按 X 理解」：第 7 条按库里的取值定的类；第 13 条修一次仍不一致时按什么日期理解。"""
+    """「按 X 理解」：人员条件写了「我」时按哪位员工；第 7 条按库里的取值定的类；第 13 条修一次仍不一致时按什么日期
+    理解。"""
     out = []
+    me = T.master.me
+    if me is not None and T.result.plan is not None and any(names.is_self(n) for n in person_names(T.result.plan)):
+        dept = f"（{me.dept}）" if me.dept and me.dept != "未填" else ""
+        out.append(f"「我」按当前用户{me.name}{dept}理解")
     for inf in T.result.inferred:
         out.append(f"「{'、'.join(inf.values)}」按{inf.field}理解")
     if T.result.check_errors and T.result.plan is not None:
@@ -1597,11 +1602,16 @@ class Replayed:
 
 
 async def add_people(plan: dict, T: Turn) -> None:
-    """第 6 步：计划里按人员筛、问句里没有的姓名按姓名补取（规划前只按本轮问句的片段取过）。"""
+    """第 6 步：计划里按人员筛、问句里没有的姓名按姓名补取（规划前只按本轮问句的片段取过）；写了「我」时按工号
+    取当前用户，一轮至多一次（决策 2026-11-03「『我』按当前用户查」）。"""
+    said = person_names(plan)
     have = {p.name for p in T.master.people}
-    missing = [n for n in person_names(plan) if n not in have]
+    missing = [n for n in said if n not in have and not names.is_self(n)]
     if missing:
         T.master.people += await shared.people_by_name(T.ctx, missing, dict(T.master.departments), T.master.failed)
+    if not T.master.me_loaded and any(names.is_self(n) for n in said):
+        T.master.me = await shared.current_user(T.ctx, dict(T.master.departments), T.master.failed)
+        T.master.me_loaded = True
 
 
 async def replay(plan: dict, spans: Mapping[str, list[Span]], T: Turn, previous_query: str) -> Replayed | Ask:

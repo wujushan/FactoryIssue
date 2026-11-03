@@ -286,6 +286,7 @@ def make_harness(
     manifest: ModuleManifest = MANIFEST,
     field_mappings: dict[str, Any] | None = None,
     history: list[tuple[str, str]] | None = None,
+    user: UserContext | None = None,
 ) -> Harness:
     """`privileges=None` 表示授权树里没带权限；`resolved=False` 表示平台没按需解析（旁路授权树）。"""
     queries: list[Query] = []
@@ -315,7 +316,7 @@ def make_harness(
     files = FakeFiles()
     retrieval = FakeRetrieval()
     ctx = ModuleContext(
-        user=UserContext(user_id="u-test", name="测试甲", department="测试部"),
+        user=user or UserContext(user_id="u-test", name="测试甲", department="测试部"),
         agent_node=node,
         conversation_id="c-test" if workspace else None,
         llm=llm,

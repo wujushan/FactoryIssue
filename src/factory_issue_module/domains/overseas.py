@@ -235,6 +235,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 if isinstance(got_p, Ask):
                     return got_p
                 ids_all += got_p
+            shown = base.person_shown(values, R)
             if fld == "跟进人":
                 out.conds.append({"kind": "any_of", "col": "_follower_ids", "values": ids_all, "neg": neg})
                 out.echo.append(("问题跟进人", shown))
