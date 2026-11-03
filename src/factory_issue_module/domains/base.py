@@ -56,6 +56,37 @@ class Ask:
     said: str | None = None
     fill: str = FILL_VALUE
     sid: str | None = None
+    #: 按地区说法对上多家工厂时的候选（`{"field": 条件名, "candidates": [工厂…]}`）：直填时连同选定的几家记进
+    #: `turn.steps`，下一轮「另外两个工厂」「其余的工厂」按候选减去选定的查（总述「『其他』『剩下的』指什么」，G43）
+    scope: dict[str, Any] | None = None
+
+
+#: 「另外几家」「其余的」「剩下的」：指同一维里上文没点到的取值（G43）
+REST_WORDS = re.compile(r"另外|其余|其它|其他|剩下|剩余")
+
+
+def rest_of(fld: str, values: Sequence[Any], neg: bool, R: Resolver) -> tuple[list[str], str] | None:
+    """上一轮按地区说法追问、用户选了其中几家之后，本轮问「另外的」时：返回（候选减去选定的，开头那句）。
+
+    两种写法都认：取值本身带「另外 / 其余 / 剩下 / 其他」（「惠州另外两个工厂」）；或照规划提示写成「不属于 上一轮
+    选定的那几家」、问句里有这类说法。都只在上一轮记下了候选（`R.rest`）时成立，否则返回 None，照常对库。
+    """
+    scope = R.rest.get(fld)
+    if not scope:
+        return None
+    candidates = [str(c) for c in scope.get("candidates") or []]
+    chosen = [str(c) for c in scope.get("chosen") or []]
+    left = [c for c in candidates if c not in chosen]
+    if not left or not chosen:
+        return None
+    texts = [str(v).strip() for v in values if str(v).strip()]
+    said_rest = not neg and any(REST_WORDS.search(t) for t in texts)
+    neg_rest = neg and bool(REST_WORDS.search(R.query or "")) and bool(texts) and set(texts) <= set(chosen)
+    if not (said_rest or neg_rest):
+        return None
+    R.used.append({"field": fld, "said": str(scope.get("said") or ""), "candidates": candidates, "chosen": chosen})
+    note = f"按{join(left)}统计（上一轮「{scope.get('said')}」里除{join(chosen)}以外的工厂）"
+    return left, note
 
 
 @dataclass
@@ -109,6 +140,10 @@ class Resolver:
     carried: Mapping[str, str] = field(default_factory=dict)
     #: 重放上一轮的执行计划（质疑重查、换图重跑）：计划里的条件都当沿用的，判据照 `carried`
     replay: bool = False
+    #: 上一轮记下的地区候选与选定的几家（条件名 → {said, candidates, chosen}，`workspace.rest_scopes`）
+    rest: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: 本轮按 `rest` 查了的（`rest_of` 追加）：写进本轮 `turn.steps`，下一轮质疑、换图重放时还认得
+    used: list[dict[str, Any]] = field(default_factory=list)
 
 
 def cond(field: str, operator: str, value: Any = None, *, include_nulls: bool = False) -> dict[str, Any]:

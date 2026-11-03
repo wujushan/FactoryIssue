@@ -9,10 +9,12 @@ S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含�
    - 三域都无权：代码规则判断是不是寒暄或问能力，是就做能力介绍，不是就只答请先申请。
 3. 读最近几轮对话与工作区（`turn/workspace.py`）：上一轮的计划与结局交给规划器。本轮问句与上一轮代码追问的某个
    选项的 `query` 完全相同时，把选项直接填进上一轮的计划，跳过第 4、5 步（§4.4）；填好的计划照常过第 6 步。
-   这种轮次按钮只写了选项（「惠州百富」），本轮按存下的问句全文（原话加这一项）理解。
+   这种轮次按钮只写了选项（「惠州百富」），本轮按存下的问句全文（原话加这一项）理解。本轮问句与上一轮某个接着问
+   按钮的 `query` 完全相同时，同样跳过第 4、5 步，直接用那个按钮存下的计划（§9.5，`workspace.picked`）。
 4–5. 号码直通、规划、规整与校验（`plan/planner.py`）；规划失败按 §14「没能理解这个问题」答。
-4 之前：按可查的域取一次主数据（`domains/shared.py`），交规划器作第 7 条的 `classes`、第 15 条的 `entities` 与
-   号码直通的机型清单。
+   主数据（`domains/shared.py`）按可查的域按需取、一轮至多一次（`_LazyMaster`），交规划器作第 7 条的 `classes`、
+   第 15 条的 `entities` 与号码直通的机型清单。规划器写成 `introduce` 的轮次不取（寒暄不取数，决策 2026-11-01
+   「寒暄不取主数据与追问用例的取数断言」）。
 6. 对库与换算：时间换算（沿用上一轮的时间按上一轮换算出的日期），换算不了的说法产生追问；名字对库（§6.5），
    对不上、对上多个、重名时追问。
 7. 追问：计划本身是追问，或第 6 步产生了追问 → 发 `Event.clarify`，本轮结束（§4.4）；代码追问先写
@@ -21,7 +23,7 @@ S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含�
    （`skills/verify_previous.py`）、换图（`skills/rerender.py`）按工作区里上一轮的执行计划重放，临时统计照存下的
    脚本重算、不调模型。
 10. 写工作区（§10）：`last` 每轮写（寒暄、能力介绍、没看懂的轮次除外）；只有取过数的轮次覆盖 `turn`、`results`、
-    `charts`。
+    `charts`；走到执行、又不是执行时追问的轮次写 `suggest`（答后建议的去重与点了要执行的计划）。
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ from factory_issue_module.declarations import (
 from factory_issue_module.domains import base, shared
 from factory_issue_module.domains.base import Ask
 from factory_issue_module.plan import clarify, timespan
-from factory_issue_module.plan.planner import PlanInputs, Planner, PlanResult
+from factory_issue_module.plan.planner import PlanInputs, Planner, PlanResult, with_master
 from factory_issue_module.skills import introduce, rerender, verify_previous
 from factory_issue_module.turn import errors, execute, gate, greeting, workspace
 
@@ -58,6 +60,30 @@ HISTORY_TURNS = 3
 #: 质疑、换图却读不到上一轮时的追问（总述「接着上一轮问」：没有上文时追问，不猜）
 NO_PREVIOUS = {"reason": "接不上上一轮", "question": "没有找到上一轮的结果，请把要查的条件说完整一些。", "options": []}
 REPLAY_SKILLS = ("verify_previous", "rerender")
+#: 进度事件的阶段（`Event.progress`，docs/dev/03）：理解问题、取数与整理；只在要调模型或取数时发
+PROGRESS_PLAN = "plan"
+PROGRESS_QUERY = "query"
+
+
+class _LazyMaster:
+    """主数据按需取、一轮至多取一次（决策 2026-11-01「寒暄不取主数据与追问用例的取数断言」）：规划器写成
+    `introduce` 的轮次不取，其余轮次在号码直通确认、规整或执行之前取。"""
+
+    def __init__(self, ctx: Any, access: gate.DomainAccess, query: str, dept_aliases: Any, regions: Any) -> None:
+        self._ctx, self._access, self._query = ctx, access, query
+        self._dept_aliases, self._regions = dept_aliases, regions
+        self._got: tuple[shared.MasterData, Any] | None = None
+
+    async def get(self) -> tuple[shared.MasterData, Any]:
+        if self._got is None:
+            master = await shared.load(self._ctx, self._access.allowed(), self._query)
+            self._got = (master, master.entities(self._dept_aliases, self._regions))
+        return self._got
+
+    async def enrich(self, inputs: PlanInputs) -> PlanInputs:
+        master, entities = await self.get()
+        return with_master(inputs, classes=master.classes(self._dept_aliases, self._regions), entities=entities,
+                           machines=master.machines or None)
 
 
 async def _history(ctx: Any, request: ModuleRequest) -> list[dict[str, str]]:
@@ -122,25 +148,30 @@ async def run_turn(
     if pending is not None:
         await workspace.drop(ctx, workspace.PENDING)
     filled = workspace.fill(pending, query)
+    # 点了上一轮的接着问按钮：直接用那个按钮存下的计划，不调规划（§9.5）
+    suggest_state = await workspace.read(ctx, workspace.SUGGEST)
+    picked = workspace.picked(suggest_state, query) if filled is None else None
     # 本轮按什么问句理解：点了代码追问的按钮时按钮只写了选项，取存下的问句全文（原话加这一项，§4.4）；
     # 取人、对库、写分析、答后按钮、填不进去时重新规划都按它。`last.query` 仍记用户发来的原话
     asked = (filled.asked or query) if filled is not None else query
     topics = await config_files.load(ctx, TOPIC_TERMS)
     dept_aliases = await config_files.load(ctx, DEPT_ALIASES)
     regions = await config_files.load(ctx, FACTORY_REGIONS)
-    master = await shared.load(ctx, access.allowed(), asked)
-    entities = master.entities(dept_aliases, regions)
+    lazy = _LazyMaster(ctx, access, asked, dept_aliases, regions)
     planner = Planner(manifest, topics)
     inputs = PlanInputs(
         query=asked, history=history, previous_plan=previous.plan, previous_outcome=previous.outcome,
-        earlier_query=previous.earlier_query, today=today, classes=master.classes(dept_aliases, regions),
-        entities=entities, machines=master.machines or None)
+        earlier_query=previous.earlier_query, today=today)
     llm = getattr(ctx, "llm", None)
     if filled is not None:
         result = PlanResult(plan=filled.plan, source="filled", inferred=list(filled.inferred),
                             check_errors=list(filled.check_errors))
+    elif picked is not None:
+        logger.info("factory_issue_suggest_clicked", move=picked[1])
+        result = PlanResult(plan=picked[0], source="suggested")
     else:
-        result = await planner.plan(llm, inputs)
+        yield Event.progress(PROGRESS_PLAN, "正在理解问题")
+        result = await planner.plan(llm, inputs, enrich=lazy.enrich)
     if result.plan is None:
         for event in greeting.not_understood(access):
             yield event
@@ -157,6 +188,8 @@ async def run_turn(
             yield event
         return
 
+    # 规划时没补过主数据的（追问选项直填）在这里取；规划时取过的不再取
+    master, entities = await lazy.get()
     answer = await config_files.load(ctx, ANSWER_PARAMS)
     sites = await config_files.load(ctx, LINK_SITES)
     seg = await config_files.load(ctx, SEGMENTATION)
@@ -164,14 +197,19 @@ async def run_turn(
     focus = await workspace.read(ctx, workspace.FOCUS) if (previous.plan or previous.turn) else None
 
     carried = workspace.decided(previous.turn)
+    # 上一轮按地区说法选了其中几家：本轮「另外的」照候选减去选定的查（G43）；本轮直填记下的随本轮写进 `turn`
+    rest = workspace.rest_scopes(previous.turn)
+    filled_scopes = list(filled.scopes) if filled is not None else []
 
     def make_turn(result: PlanResult) -> execute.Turn:
         return execute.Turn(ctx=ctx, manifest=manifest, access=access, master=master, answer=answer,
                             resolver=base.Resolver(master=master, dept_aliases=dept_aliases, regions=regions,
-                                                   entities=entities, today=today, query=asked, carried=carried),
+                                                   entities=entities, today=today, query=asked, carried=carried,
+                                                   rest=rest),
                             query=asked, today=today, result=result, entities=entities, sites=sites,
                             previous_turn=previous.turn, previous_results=results, focus=focus,
-                            topics=topics, seg=seg, scripts=workspace.stored_scripts(previous.turn))
+                            topics=topics, seg=seg, scripts=workspace.stored_scripts(previous.turn),
+                            scopes=filled_scopes, history=history, suggest_state=suggest_state)
 
     if first.get("skill") in REPLAY_SKILLS:
         async for event in _replay(ctx, query, result, first, previous, make_turn(result), results):
@@ -201,7 +239,7 @@ async def run_turn(
     if isinstance(prepared, Ask) and filled is not None and prepared.question == filled.question:
         # 填进去的值没起作用（同一句追问又来了）：不再循环，按问句全文规划一次（`asked` 带着选定的那一项）
         logger.info("factory_issue_fill_no_effect", reason=prepared.reason)
-        result = await planner.plan(llm, inputs)
+        result = await planner.plan(llm, inputs, enrich=lazy.enrich)
         if result.plan is None:
             for event in greeting.not_understood(access):
                 yield event
@@ -217,6 +255,7 @@ async def run_turn(
     if isinstance(prepared, Ask):
         yield await _clarify_with_pending(ctx, query, result.plan, prepared, result, button_query=asked)
         return
+    yield Event.progress(PROGRESS_QUERY, "正在查询并整理结果")
     async for event in execute.run(result.plan, prepared, turn):
         yield event
     ask_event = await _write_after(ctx, query, execute.merge_details(result.plan), turn, result)
@@ -237,6 +276,7 @@ async def _write_after(ctx: Any, query: str, plan: dict, turn: execute.Turn, res
         if record.fetched:
             await workspace.write_turn(ctx, turn.query, plan, record)
     await workspace.write_last(ctx, query, outcome, plan, asked=turn.query)
+    await workspace.write_suggest(ctx, turn.suggest_state, record)
     return None
 
 

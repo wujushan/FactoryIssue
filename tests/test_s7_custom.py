@@ -319,7 +319,11 @@ def test_crowded_hint_names_only_missing_conditions():
 async def test_custom_stats_answers_with_table_chart_and_caliber():
     h = harness(plan(step(time=T30)), NARR, script_replies=[WEEKDAY])
     events = await run(h, "近 30 天的问题按星期几分布看看")
-    assert _types(events) == [EventType.DELTA, EventType.TABLE, EventType.CHART, EventType.DELTA, EventType.DELTA]
+    # 先给结论再给表与图（开发者 2026-11-02 定）；接着问只有换时间（§9.5）
+    assert _types(events) == [EventType.DELTA, EventType.DELTA, EventType.TABLE, EventType.CHART, EventType.DELTA,
+                              EventType.SUGGESTIONS]
+    assert [r["query"] for r in events[-1].data["recommendations"]] == ["换成近 90 天看看", "换成今年看看"]
+    assert NARR.split("。")[0] in events[1].data["text"]
     text = _text(events)
     assert text.startswith(f"{errors.CUSTOM_HEAD}。国内、巴西、海外，") and "共 10 张单（国内 4 张、巴西 4 张、海外 2 张）" in text
     table = _tables(events)[0]

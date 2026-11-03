@@ -9,6 +9,9 @@
     # 只跑某几条 / 失败时看 SQL 明细
     uv run python scripts/qa_test.py cases.json --only mat-001 --trace
 
+    # 并发跑，最多 4 个（默认 1，即串行）：多轮用例内部仍按顺序发，输出始终按用例顺序打印
+    uv run python scripts/qa_test.py docs/testcases/golden/cases.json --jobs 4
+
 平台侧协议、api-key 怎么申请、断言该锚在哪：见 docs/dev/10-automated-testing.md。
 本脚本覆盖 golden 常用断言：路由、澄清、取数条数上下限、列名（含禁列）、
 单元格包含、图表类型、正文包含/排除、建议按钮形状。合计＝分项之和这类关系
@@ -24,14 +27,19 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
 # 真实模型 + 真实库，单轮几十秒是常态。默认 5 秒的超时会把好用例判成失败。
 DEFAULT_TIMEOUT = 180.0
+
+# 同时发出去的用例数上限。真实模型与真实库是共用的，docs/dev/10 §4.5 也建议并发 ≤ 4。
+MAX_JOBS = 4
 
 
 def load_cases(path: Path) -> list[dict[str, Any]]:
@@ -227,7 +235,80 @@ def case_turns(case: dict[str, Any]) -> list[dict[str, Any]]:
     return turns
 
 
-def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool) -> int:
+class CaseResult(NamedTuple):
+    """一条用例跑完的结果。工作线程只产出它，报告由主线程按用例顺序打印。
+
+    不用 dataclass：tests/test_qa_assertions.py 用 spec 加载本脚本、没注册进 sys.modules，
+    dataclass 会在那里报错。
+    """
+
+    case_id: str
+    elapsed: float
+    problems: list[str]
+    body: dict[str, Any] | None
+
+    @property
+    def passed(self) -> bool:
+        return not self.problems
+
+
+def run_case(client: httpx.Client, case: dict[str, Any], trace: bool, stop: threading.Event) -> CaseResult:
+    """发送一条用例的全部轮次并做断言。
+
+    多轮用例在本条内部按顺序发，后一轮带上一轮返回的 conversation_id；会话不跨用例共用，
+    所以不同用例之间可以并发。断言只看最后一轮。stop 置位（出错或 Ctrl+C）后，
+    当前这一轮返回就不再发后面的轮次。
+    """
+    case_id = case.get("id") or case.get("query", "")[:20]
+    turns = case_turns(case)
+    conversation_id = None
+    body = None
+    problems: list[str] = []
+    started = time.monotonic()
+    for index, turn in enumerate(turns):
+        if stop.is_set():
+            # 已中断：这条的结果不会被打印（主线程已经在退出），这里只让它尽快结束
+            problems = ["已中断，后面的轮次没发"]
+            break
+        payload: dict[str, Any] = {"query": turn["query"], "include_trace": trace}
+        for field in ("target", "user_id"):
+            if turn.get(field):
+                payload[field] = turn[field]
+        if conversation_id:
+            payload["conversation_id"] = conversation_id
+        resp = client.post("/test/chat", json=payload)
+        if resp.status_code != 200:
+            problems = [f"第 {index + 1} 轮 HTTP {resp.status_code}: {resp.text[:300]}"]
+            body = None
+            break
+        body = resp.json()
+        conversation_id = body.get("conversation_id")
+        if index < len(turns) - 1 and body.get("error"):
+            problems = [f"前置轮报错：{body['error']}"]
+            break
+    elapsed = time.monotonic() - started
+    if not problems:
+        assert body is not None
+        problems = check(case, body)
+    return CaseResult(case_id, elapsed, problems, body)
+
+
+def report_lines(result: CaseResult) -> list[str]:
+    """一条用例的报告：通过一行；失败一行，再每条原因一行。"""
+    if result.passed:
+        query_count = (result.body or {}).get("query_count", 0)
+        return [f"✓ {result.case_id}  ({result.elapsed:.1f}s, {query_count} SQL)"]
+    return [f"✗ {result.case_id}  ({result.elapsed:.1f}s)", *(f"    - {p}" for p in result.problems)]
+
+
+def _result_of(future: Future[CaseResult]) -> CaseResult:
+    """等一条用例的结果。不用不带超时的 `future.result()`：Windows 上那样等，Ctrl+C 收不到。"""
+    while not future.done():
+        time.sleep(0.1)
+    return future.result()
+
+
+def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool, jobs: int) -> int:
     client = httpx.Client(
         base_url=base.rstrip("/"),
         headers={"Authorization": f"Bearer {key}"},
@@ -245,56 +326,48 @@ def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool) -> int
         print("⚠️  该 api-key 一周内到期，尽快找平台管理员续期", file=sys.stderr)
 
     passed, failed = 0, []
-    for case in cases:
-        case_id = case.get("id") or case.get("query", "")[:20]
-        # 多轮用例按顺序发，后一轮带上一轮返回的 conversation_id。断言只看最后一轮。
-        conversation_id = None
-        body = None
-        problems: list[str] = []
-        started = time.monotonic()
-        for index, turn in enumerate(case_turns(case)):
-            payload: dict[str, Any] = {"query": turn["query"], "include_trace": trace}
-            for field in ("target", "user_id"):
-                if turn.get(field):
-                    payload[field] = turn[field]
-            if conversation_id:
-                payload["conversation_id"] = conversation_id
-            resp = client.post("/test/chat", json=payload)
-            if resp.status_code != 200:
-                problems = [f"第 {index + 1} 轮 HTTP {resp.status_code}: {resp.text[:300]}"]
-                body = None
-                break
-            body = resp.json()
-            conversation_id = body.get("conversation_id")
-            if index < len(case_turns(case)) - 1 and body.get("error"):
-                problems = [f"前置轮报错：{body['error']}"]
-                break
-        elapsed = time.monotonic() - started
-        if problems:
-            failed.append((case_id, problems, body))
-            print(f"✗ {case_id}  ({elapsed:.1f}s)")
-            for problem in problems:
-                print(f"    - {problem}")
-            continue
-        assert body is not None
-        problems = check(case, body)
-        if problems:
-            failed.append((case_id, problems, body))
-            print(f"✗ {case_id}  ({elapsed:.1f}s)")
-            for problem in problems:
-                print(f"    - {problem}")
-        else:
-            passed += 1
-            print(f"✓ {case_id}  ({elapsed:.1f}s, {body.get('query_count', 0)} SQL)")
+    stop = threading.Event()
+    pool = ThreadPoolExecutor(max_workers=jobs)
+    try:
+        futures = [pool.submit(run_case, client, case, trace, stop) for case in cases]
+        # 按用例顺序收结果、顺序打印：后面的用例可能先跑完，就排着等前面的打完再打。
+        # 所以不管 --jobs 多大，输出和串行时逐行一样，两次运行的日志可以直接对比。
+        for future in futures:
+            result = _result_of(future)
+            for line in report_lines(result):
+                print(line)
+            if result.passed:
+                passed += 1
+            else:
+                failed.append(result)
+    except BaseException:
+        # 出错或 Ctrl+C：还没开始的用例不再发；正在进行的用例，当前这一轮返回后不再发后面的轮次。
+        stop.set()
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown()
 
     print(f"\n{'=' * 60}\n通过 {passed} / {len(cases)}，失败 {len(failed)}")
     if trace and failed:
         print("\n失败用例的 SQL/LLM 明细：")
-        for case_id, _problems, body in failed:
-            if body and body.get("trace"):
-                print(f"\n--- {case_id} ---")
-                print(json.dumps(body["trace"], ensure_ascii=False, indent=2)[:4000])
+        for result in failed:
+            if result.body and result.body.get("trace"):
+                print(f"\n--- {result.case_id} ---")
+                print(json.dumps(result.body["trace"], ensure_ascii=False, indent=2)[:4000])
     return 1 if failed else 0
+
+
+def _jobs_arg(value: str) -> int:
+    """`--jobs`：同时发几条用例，1 到 MAX_JOBS。"""
+    try:
+        jobs = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"要写整数，现在是 {value!r}") from None
+    if jobs < 1:
+        raise argparse.ArgumentTypeError("至少要 1 个")
+    if jobs > MAX_JOBS:
+        raise argparse.ArgumentTypeError(f"最多支持 {MAX_JOBS} 个，现在是 {jobs}")
+    return jobs
 
 
 def main() -> int:
@@ -304,6 +377,13 @@ def main() -> int:
     parser.add_argument("--api-key", default=os.getenv("FORGE_TEST_API_KEY", ""))
     parser.add_argument("--only", nargs="*", help="只跑这些用例 id")
     parser.add_argument("--trace", action="store_true", help="回传并打印失败用例的 SQL/LLM 明细")
+    parser.add_argument(
+        "--jobs",
+        type=_jobs_arg,
+        default=1,
+        metavar="N",
+        help=f"同时发出去的用例数，1 到 {MAX_JOBS}，默认 1（串行）。同一条用例的多轮仍按顺序发；输出始终按用例顺序打印",
+    )
     args = parser.parse_args()
 
     if not args.base_url or not args.api_key:
@@ -318,7 +398,11 @@ def main() -> int:
         cases = [c for c in cases if c.get("id") in wanted]
         if not cases:
             raise SystemExit(f"--only 没匹配到任何用例：{sorted(wanted)}")
-    return run(cases, base=args.base_url, key=args.api_key, trace=args.trace)
+    try:
+        return run(cases, base=args.base_url, key=args.api_key, trace=args.trace, jobs=args.jobs)
+    except KeyboardInterrupt:
+        print("\n已中断：不再发还没开始的用例和后面的轮次，正在进行的请求返回后退出", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

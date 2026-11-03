@@ -2,8 +2,9 @@
 
 每域：视图 → 条件 → 时间 → 排序（默认建单时间倒序，排序值相同按问题编号）→ 前 `limit` 张 → 表格给前
 `table_rows` 张；同时给分析用的事实、统计口径要的数与后一步引用的值。
-要导出（用户明说，或某域超过 `export_threshold` 张）时，该域的全部行（列与表格相同）作为明细帧放在返回值的
-顶层（`export_<域>`），编排用 `return_frames=True` 从 `outcome.frames` 取，不塞进 `result`（20 万字符上限）。
+要导出（用户明说，或某域列出的张数超过 `export_threshold` 张）时，列出的每个域的全部行（列与表格相同）作为
+明细帧放在返回值的顶层（`export_<域>`），编排用 `return_frames=True` 从 `outcome.frames` 取，不塞进 `result`
+（20 万字符上限）。
 结果单（后一步的 `issues` 引用、工作区 `results`）同样作为明细帧回传（`ids_<域>`：单 ID、问题编号）。
 引用值另给各域张数（`found`），工作区存下供质疑重查比对（设计 §10）。
 """
@@ -88,16 +89,14 @@ def run(data):
         facts = ls_facts(v, P, cond_kinds, P.get("blind", {}).get(dom) or []) if len(v) else {"张数": 0}
         if breakdowns:
             facts["分取值"] = breakdowns
-        exported = bool(L.get("export_ok")) and len(v) > 0 and (
-            bool(L.get("export")) or found > int(L.get("export_threshold") or 0))
-        if exported:
-            exports["export_" + dom] = ls_export(v, cols, names)
+        if len(v):  # 要不要导出在各域都列完之后定（列出的每个域都进文件）
+            exports["export_" + dom] = (v, cols, names)
         segments.append({"domain": dom, "table": {"columns": [names[c] for c in cols], "rows": rows},
                          "breakdowns": breakdowns,
                          "found": found, "listed": int(len(v)), "shown": int(len(head)),
                          "ids_shown": [int(x) for x in head["_id"].tolist()] if len(head) else [],
                          "limited": int(len(v)) < found, "truncated": int(len(head)) < int(len(v)),
-                         "empty": found == 0, "few": found <= 2, "exported": exported,
+                         "empty": found == 0, "few": found <= 2, "exported": False,
                          "facts": facts, "caliber": caliber})
         # 后一步引用、工作区要存的结果单（`limit` 之后、按表格的顺序）
         issues["ids_" + dom] = vw_ids(v)
@@ -110,6 +109,18 @@ def run(data):
                 if best is None or top["_rate_value"] > best["rate"]:
                     best = {"domain": dom, "id": int(top["_id"]), "number": top["_number"],
                             "rate": float(top["_rate_value"])}
+    # 导出（总述「排名、长清单与导出」）：用户明说，或某域列出的张数（「前 N 张」之后）超过阈值时，列出的每个域
+    # 都进文件、每域一页；只看列出的，不看截取之前该域一共有多少张
+    want = bool(L.get("export_ok")) and (
+        bool(L.get("export")) or any(s["listed"] > int(L.get("export_threshold") or 0) for s in segments))
+    frames_out = {}
+    if want:
+        for s in segments:
+            got = exports.get("export_" + s["domain"])
+            if got is not None:
+                s["exported"] = True
+                frames_out["export_" + s["domain"]] = ls_export(*got)
+    exports = frames_out
     # 结果单（`issues`）不放进 refs：几千张单的编号会撑满 result 的 20 万字符，经数据帧通道回传（设计 §8.1）
     refs = {"count": total_all, "max_defect_rate_issue": best, "found": found_by}
     # 三域一起列清单时开头给各域张数与合计（总述「跨域规则」清单呈现）

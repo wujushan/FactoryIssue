@@ -326,10 +326,11 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
         await summaries.fill_tables(T.ctx, segs, executed)
     if reasons:
         await X._add_reasons(T, segs)
+    at = len(out.events) + (2 if head else 1)  # 开头（各组张数、用了哪些说法）之后、各域的表之前
     out.events += _present(run, T, tp, res, segs, counts, head, crowded_hint(run.step) if crowded else "")
     narr = await _narrative(T, X, tp, res, segs, run)
     if narr is not None:
-        out.events.append(narr)
+        X.conclusion_first(out.events, narr, at)
     _caliber(C, run, tp, segs, sem_notes, X)
     if res.get("exported"):
         await summaries.fill_exports(T.ctx, outcome_frames, executed)
@@ -378,7 +379,21 @@ async def _search(run: Any, T: Any, R: Ready) -> tuple[dict[str, Any], dict[str,
     outcome2 = await runner.run(T.ctx, "text_merge", datasets, P2, return_frames=True)
     if not outcome2.ok:
         return None
-    return outcome2.result or {}, dict(getattr(outcome2, "frames", None) or {}), counts, sem_notes, crowded
+    res = outcome2.result or {}
+    if tp.semantic is not None and tp.mode == "类似问题":
+        _log_sim_scores(tp.semantic["query"], res.get("segments") or [])
+    return res, dict(getattr(outcome2, "frames", None) or {}), counts, sem_notes, crowded
+
+
+def _log_sim_scores(query: str, segs: Sequence[dict[str, Any]]) -> None:
+    """类似问题的分数分布测量（探测 Z1）：每域一行日志，`scores` 是本步范围内全部候选的 [重排分, 向量分]，与表格同序，
+    前 `listed` 个就是表格里的行。只记分数，不记文字与单号；记完从段里拿掉，不进呈现与工作区。"""
+    for seg in segs:
+        scores = seg.pop("sem_scores", None)
+        if scores is None:
+            continue
+        logger.info("factory_issue_sim_scores", domain=seg.get("domain"), query=query, listed=_n(seg, "g3"),
+                    scores=scores)
 
 
 async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mapping[str, pd.DataFrame],
@@ -393,7 +408,9 @@ async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mappin
     S = tp.semantic
     sim = S["kind"] == "sim"
     judge_max = int(T.answer.judge_max)
-    top_n = SIM_MAX if sim else max(judge_max, THIRD_MAX)
+    # 类似问题向重排要回全部候选的分（重排本来就给 `top_k` 张都打分，多回几行不多算），表格仍由沙箱截到
+    # `SIM_MAX` 张；全部分数供分布测量（探测 Z1，`_log_sim_scores`）
+    top_n = semantic.TOP_K if sim else max(judge_max, THIRD_MAX)
 
     def candidates(d: Domain) -> list[int] | None:
         if S.get("from") == "approach":

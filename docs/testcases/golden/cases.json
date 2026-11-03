@@ -12,7 +12,11 @@
     "2026-10-29：OS-005 实库没有符合条件的单，不出表；仍查不限建单时间、海外、已完成、退回仓库、物料问题（开发者实测）。",
     "2026-10-29：XC-029 近 30 天三域都是 0 张，不要求未结案、停线和近 90 天、今年按钮；仍查近 30 天、截至今天、三域、A920（开发者实测）。",
     "2026-10-29：XC-037 机型对库后显示 A920Pro，不锁用户原话的大写。近 30 天不写死起止日期；这次没有单，不强制出表。",
-    "2026-10-29：XC-039 上上周没有单，不强制出表。上上周是相对的自然周，不写死起止日期；仍查按建单时间、国内、不是截至今天（开发者实测）。"
+    "2026-10-29：XC-039 上上周没有单，不强制出表。上上周是相对的自然周，不写死起止日期；仍查按建单时间、国内、不是截至今天（开发者实测）。",
+    "2026-11-02：XC-020 问句时间由「上个月」改为「2026 年上半年」，窗口 [2026-01-01, 2026-07-01)（开发者要求）。",
+    "2026-11-02：XC-016 问句时间由「上个月」改为「6 月份」。没写年份、今年 6 月已过，窗口 [2026-06-01, 2026-07-01)（开发者要求）。",
+    "2026-11-02：XC-015 改为两轮（先打开 ZC2609012，再问能否结案）。第 2 轮仍不取数，断言锁固定只读话术。BR-012、CN-053 补上各轮说明，最后一轮锁口径里的固定说法（开发者要求）。",
+    "2026-11-02：BR-012 单号由 BR2608004 改为 BR2405005。BR2608004 在实库不存在。规划器试跑集里的同一条一并改了；其他 golden 用例没有用过这个号（开发者要求）。"
   ],
   "cases": [
     {
@@ -2026,11 +2030,13 @@
           "ProblemType",
           "ProblemId"
         ],
-        "anywhere_contains": [
-          "物料"
+        "answer_contains": [
+          "ZC2604012",
+          "机型一栏显示「物料」",
+          "不展示产品在制属性与影响数量"
         ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/CN-053.sql",
+      "note": "参考 SQL：docs/testcases/golden/sql/CN-053.sql。两轮：先打开 ZC2604012（物料标识为物料）；再问为什么机型显示「物料」、影响数量为什么没有。最后一轮说明这是中间产物上的问题。",
       "turns": [
         {
           "query": "ZC2604012 这张单是什么情况？",
@@ -2656,15 +2662,18 @@
           "ProblemType",
           "ProblemId"
         ],
-        "anywhere_contains": [
-          "5Why",
-          "库存处理"
+        "answer_contains": [
+          "BR2405005",
+          "5Why分析过程",
+          "暂不提供",
+          "请到管理页面查看",
+          "库存处理数量"
         ]
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/BR-012.sql",
+      "note": "参考 SQL：docs/testcases/golden/sql/BR-012.sql。两轮：先打开 BR2405005；再问 5Why 和库存处理数量。5Why 暂不提供。这张单最新处理过程「是否库存处理」为是，要给出库存处理数量。不锁数量本身。",
       "turns": [
         {
-          "query": "BR2608004 这张单处理得怎么样了？",
+          "query": "BR2405005 这张单处理得怎么样了？",
           "target": "FACTORY_ISSUE"
         },
         {
@@ -3328,7 +3337,7 @@
         "module": "FACTORY_ISSUE",
         "no_error": true,
         "clarify": true,
-        "max_queries": 0,
+        "no_tables": true,
         "answer_not_contains": [
           "dbo.",
           "ZCTracking_",
@@ -3421,7 +3430,7 @@
       "expect": {
         "module": "FACTORY_ISSUE",
         "no_error": true,
-        "max_queries": 0,
+        "no_tables": true,
         "answer_not_contains": [
           "dbo.",
           "ZCTracking_",
@@ -3451,7 +3460,7 @@
       "expect": {
         "module": "FACTORY_ISSUE",
         "no_error": true,
-        "max_queries": 0,
+        "no_tables": true,
         "answer_not_contains": [
           "dbo.",
           "ZCTracking_",
@@ -3528,16 +3537,31 @@
           "ProblemType",
           "ProblemId"
         ],
-        "anywhere_contains": [
-          "不能",
-          "当前状态"
-        ]
+        "answer_contains": [
+          "只读查询",
+          "不代替源系统",
+          "填单",
+          "审批",
+          "上传",
+          "改状态"
+        ],
+        "suggestions": true
       },
-      "note": "参考 SQL：docs/testcases/golden/sql/XC-015.sql"
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-015.sql。两轮：先打开 ZC2609012，「这张单」指它；再问能否结案。第 2 轮是只读请求，不取数、不改状态，回答用固定话术。",
+      "turns": [
+        {
+          "query": "ZC2609012 这张单现在到哪一步了？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "能帮我把这张单结案吗？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
     },
     {
       "id": "XC-016",
-      "query": "随便列一批上个月的国内问题",
+      "query": "随便列一批 6 月份的国内问题",
       "target": "FACTORY_ISSUE",
       "batch": "首批",
       "level": "P0",
@@ -3648,7 +3672,7 @@
     },
     {
       "id": "XC-020",
-      "query": "上个月 A8900 的，按类型统计，再按工厂统计。",
+      "query": "2026 年上半年 A8900 的，按类型统计，再按工厂统计。",
       "target": "FACTORY_ISSUE",
       "batch": "其余",
       "level": "P1",
@@ -4223,7 +4247,7 @@
           "ProblemId"
         ],
         "clarify": true,
-        "max_queries": 0,
+        "no_tables": true,
         "visible_contains": [
           "近 30 天",
           "今年"
@@ -4321,6 +4345,49 @@
         }
       },
       "note": "参考 SQL：docs/testcases/golden/sql/XC-040.sql。固定统计没有按星期几分组，走临时统计（总述「回答怎么组织」「临时统计」）。表头由助手起，不锁列名、列顺序与图型；只锁临时统计的开头与统计方法、按建单时间、三域都查。2026-10-31 开发者同意加这一条（S7）。"
+    },
+    {
+      "id": "XC-041",
+      "query": "那另外两个工厂呢？",
+      "target": "FACTORY_ISSUE",
+      "batch": "其余",
+      "level": "P1",
+      "result_form": "组合",
+      "data_path": "结构化",
+      "verification": "A",
+      "expect": {
+        "module": "FACTORY_ISSUE",
+        "no_error": true,
+        "min_queries": 1,
+        "answer_not_contains": [
+          "dbo.",
+          "ZCTracking_",
+          "BrazilProblem",
+          "OverseasProblem",
+          "IsDelete",
+          "ProblemType",
+          "ProblemId"
+        ],
+        "visible_contains": [
+          "柯洱斯",
+          "亮亮"
+        ]
+      },
+      "note": "参考 SQL：docs/testcases/golden/sql/XC-041.sql。第 2 轮是点追问按钮「惠州百富」时发出的消息（按钮只发选项本身，靠会话工作区直填）；第 3 轮按「惠州的三个工厂」减去惠州百富查。",
+      "turns": [
+        {
+          "query": "今年上半年国内惠州的三个工厂一共出了多少问题？",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "惠州百富",
+          "target": "FACTORY_ISSUE"
+        },
+        {
+          "query": "那另外两个工厂呢？",
+          "target": "FACTORY_ISSUE"
+        }
+      ]
     }
   ]
 }

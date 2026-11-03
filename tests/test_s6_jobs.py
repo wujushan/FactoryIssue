@@ -38,7 +38,7 @@ def test_strip_rich_drops_all_images_and_tags_but_keeps_paragraphs():
     raw = ('<p>屏幕<b>花屏</b></p><img src="data:image/png;base64,AAAA"><p>USB 接口&nbsp;松动</p>'
            '<img src="https://x/a.png"><div>data:image/jpeg;base64,BBBB 换线</div>')
     assert textnorm.strip_rich(raw) == "屏幕花屏\nUSB 接口 松动\n换线"
-    assert "[图片](https://x/a.png)" in textnorm.rich_display(raw)[0]  # 详情展示仍留外链图片
+    assert "![图片](https://x/a.png)" in textnorm.rich_display(raw)[0]  # 详情展示仍留外链图片
     assert textnorm.strip_rich(None) == textnorm.strip_rich(float("nan")) == textnorm.strip_rich("<p></p>") == ""
 
 

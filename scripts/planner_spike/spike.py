@@ -265,7 +265,7 @@ async def run_plan(caller: Caller, case: dict, group: str) -> dict:
         except (ValueError, json.JSONDecodeError) as exc:
             errors = [f"不是合格的 JSON：{exc}"]
         if not errors and checks:
-            query_errors = resolve.query_checks(resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome")), case["q"])
+            query_errors = resolve.query_checks(resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome")), case["q"], case)
         if errors or query_errors:
             first_plan = plan if not errors else None
             repair_msgs = [*messages, {"role": "assistant", "content": first["content"]},
@@ -621,7 +621,7 @@ def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
                 plan = _replan(r)
             resolved = resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome"))
             if r.get("query_errors") or (not GROUPS.get(group, {}).get("query_checks") and resolved is not None
-                                         and resolve.query_checks(resolved, case["q"])):
+                                         and resolve.query_checks(resolved, case["q"], case)):
                 query_bounced += 1
             if plan is not None:
                 json_ok += 1
@@ -1326,7 +1326,7 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
         for k, alt in enumerate(case["expect"]):
             counts["aux"] += 1
             exp = scoring.render_expected({**case, "expect": [alt]})
-            errs = resolve.query_checks(resolve.apply(exp, case["q"], case.get("previous_plan"), case.get("previous_outcome")), case["q"])
+            errs = resolve.query_checks(resolve.apply(exp, case["q"], case.get("previous_plan"), case.get("previous_outcome")), case["q"], case)
             if errs:
                 problems.append(f"校验误拒期望计划 {case['id']}（第 {k + 1} 种写法）：{errs}")
     must_bounce = [
@@ -1345,6 +1345,12 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
         counts["aux"] += 1
         if not resolve.query_checks(resolve.apply(plan, query), query):
             problems.append(f"校验该拦没拦「{label}」")
+    # 第 19 条：指上一轮那张单的问句写成了超出范围（CN-053）
+    counts["aux"] += 1
+    cn053 = next(c for c in PLAN_CASES if c["id"] == "CN-053")
+    out_of_scope = {"steps": [{"id": "s1", "skill": "introduce", "when": None, "params": {"kind": "超出范围"}}]}
+    if not resolve.query_checks(resolve.apply(out_of_scope, cn053["q"], cn053.get("previous_plan")), cn053["q"], cn053):
+        problems.append("校验该拦没拦「指上一轮那张单的问句写成超出范围」")
 
     # 校验第 12 条：params 里格式之外的键打回（错层、自造的条件键）；参数层的 from、topic_scope 丢掉不打回
     key_cases = [

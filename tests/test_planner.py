@@ -16,7 +16,7 @@ from forge_core.events import EventType
 from factory_issue_module.config import files
 from factory_issue_module.declarations import TOPIC_TERMS
 from factory_issue_module.plan import clarify, normalize, prompt
-from factory_issue_module.plan.planner import PlanInputs, Planner
+from factory_issue_module.plan.planner import PlanInputs, Planner, with_master
 from factory_issue_module.turn import errors, workspace
 
 TOPICS = files.default(TOPIC_TERMS)
@@ -231,7 +231,8 @@ async def test_jp04_partial_domain_greeting_via_planner():
     assert text.count(errors.APPLY_TO_VIEW) == 2 and "国内" in text
     for rec in events[1].data["recommendations"]:
         assert "巴西" not in rec["query"] and "海外" not in rec["query"]
-    assert data_queries(h) == [] and len(h.llm.calls) == 1
+    # 寒暄一条 SQL 都不发，规划前的主数据也不取（决策 2026-11-01「寒暄不取主数据与追问用例的取数断言」）
+    assert h.queries == [] and len(h.llm.calls) == 1
 
 
 @pytest.mark.parametrize(("kind", "answer"), [("只读请求", errors.READ_ONLY), ("超出范围", errors.OUT_OF_SCOPE)])
@@ -239,7 +240,85 @@ async def test_introduce_out_of_scope(kind: str, answer: str):
     h = make_harness(scopes.account_jia(), llm_replies=[plan_of(step("introduce", kind=kind))])
     events = await run(h, "帮我把 ZC9910001 结案")
     assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS] and answer in _text(events)
-    assert data_queries(h) == []
+    assert h.queries == []
+
+
+@pytest.mark.parametrize(("query", "kind"), [("你好，你能帮我查什么？", "能力"), ("能帮我把这张单结案吗？", "只读请求")])
+async def test_introduce_with_three_domains_sends_no_sql(query: str, kind: str):
+    """XC-014、XC-015：三域都可查时，规划器写成 introduce 的轮次一条 SQL 都不发（主数据也不取）。"""
+    h = make_harness(scopes.GREEN, llm_replies=[plan_of(step("introduce", kind=kind))])
+    events = await run(h, query)
+    assert _types(events) == [EventType.DELTA, EventType.SUGGESTIONS]
+    assert h.queries == [] and len(h.llm.calls) == 1
+
+
+async def test_business_question_still_loads_master_data_before_normalizing():
+    """反面：其余计划照旧先取主数据（第 7 条、第 15 条要用），模型写的追问也一样。"""
+    h = make_harness(scopes.GREEN, llm_replies=[plan_of(step(
+        "clarify", reason="缺时间", question="想统计哪段时间？", options=["今年", "近 30 天"]))])
+    events = await run(h, "统计一下制程问题")
+    assert _types(events) == [EventType.CLARIFY]
+    assert h.queries and data_queries(h) == []
+
+
+# ---------------------------------------------------------------- 主数据按需取（`Planner.plan` 的 `enrich`）
+
+
+class _Enrich:
+    def __init__(self, machines: set[str] | None = None, classes: dict | None = None) -> None:
+        self.calls = 0
+        self.machines = machines
+        self.classes = classes or {}
+
+    async def __call__(self, inputs: PlanInputs) -> PlanInputs:
+        self.calls += 1
+        return with_master(inputs, classes=self.classes, entities={}, machines=self.machines)
+
+
+async def test_enrich_skipped_for_introduce_only():
+    enrich = _Enrich()
+    result = await Planner(MANIFEST, TOPICS).plan(_LLM(plan_of(step("introduce", kind="寒暄"))),
+                                                  PlanInputs(query="你好"), enrich=enrich)
+    assert result.plan["steps"][0]["skill"] == "introduce" and enrich.calls == 0
+
+
+async def test_introduce_with_filters_loads_master_data_and_normalizes_as_before():
+    """评审 A2：带条件的介绍按普通计划先取主数据。「亮亮」在库里既是加工厂又是供应商，第 7 条改成追问，
+    与不按需取主数据时相同（只看技能就不取的话，这里会答介绍）。"""
+    enrich = _Enrich(classes={"工厂": ["亮亮"], "供应商": ["亮亮"]})
+    reply = plan_of(step("introduce", kind="能力", filters=[{"field": "加工厂", "op": "是", "value": "亮亮"}]))
+    result = await Planner(MANIFEST, TOPICS).plan(_LLM(reply), PlanInputs(query="亮亮今年多少单"), enrich=enrich)
+    assert enrich.calls == 1 and result.plan["steps"][0]["skill"] == "clarify"
+
+
+async def test_introduce_rewritten_by_normalizing_then_loads_master_data():
+    """防御分支：先按不带条件的介绍没取主数据，规整后不再只是介绍（第 18 条：上一轮查出 0 张、本轮「其中」又沿用
+    上一轮）时补上主数据再规整一遍，结果仍是第 18 条的追问。"""
+    enrich = _Enrich()
+    reply = plan_of(step("introduce", kind="能力", domains={"value": ["国内"], "from": "previous"}))
+    inputs = PlanInputs(query="其中按状态统计一下", previous_outcome=workspace.OUTCOME_EMPTY)
+    result = await Planner(MANIFEST, TOPICS).plan(_LLM(reply), inputs, enrich=enrich)
+    assert enrich.calls == 1
+    assert result.plan["steps"][0]["skill"] == "clarify"
+    assert result.plan["steps"][0]["params"]["reason"] == normalize.NO_RESULT_REASON
+
+
+async def test_enrich_called_once_for_other_plans_and_before_repair():
+    enrich = _Enrich()
+    llm = _LLM("不是 JSON", LIST_LAST_MONTH)
+    result = await Planner(MANIFEST, TOPICS).plan(llm, PlanInputs(query="上个月国内的问题"), enrich=enrich)
+    assert result.plan["steps"][0]["skill"] == "list_issues" and enrich.calls == 1 and len(llm.calls) == 2
+
+
+async def test_enrich_for_shortcut_rechecks_with_machine_list():
+    """号码直通先不带机型清单判断；会直通时补上主数据再判断，对得上机型的串改交规划器，主数据不再取第二次。"""
+    plain = _Enrich()
+    result = await Planner(MANIFEST, TOPICS).plan(_LLM(), PlanInputs(query="A35-000-RD6-00E0"), enrich=plain)
+    assert result.source == "shortcut" and plain.calls == 1
+    machine = _Enrich(machines={"A35000RD600E0"})
+    llm = _LLM(LIST_LAST_MONTH)
+    result = await Planner(MANIFEST, TOPICS).plan(llm, PlanInputs(query="A35-000-RD6-00E0"), enrich=machine)
+    assert result.source == "model" and machine.calls == 1 and len(llm.calls) == 1
 
 
 async def test_model_clarify_is_one_clarify_event():

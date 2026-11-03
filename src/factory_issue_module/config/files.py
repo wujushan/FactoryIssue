@@ -145,6 +145,9 @@ class AnswerParams:
     rerank_max: int
     rerank_score_threshold: float | None
     custom_stats_enabled: bool
+    #: 答后建议由模型挑（false 时按代码的默认顺序取，设计 §9.5）；等模型的秒数
+    suggest_model: bool = True
+    suggest_seconds: int = 5
 
 
 # ---------------------------------------------------------------- Markdown 两种形态
@@ -380,8 +383,10 @@ def segmentation_from(data: Mapping[str, Any]) -> Segmentation:
 
 _ANSWER_KEYS = (
     "top_n", "export_threshold", "table_rows", "judge_max", "rerank_max",
-    "rerank_score_threshold", "custom_stats_enabled",
+    "rerank_score_threshold", "custom_stats_enabled", "suggest_model", "suggest_seconds",
 )
+#: 等模型挑答后建议的秒数的范围（设计 §11）
+SUGGEST_SECONDS_RANGE = (1, 30)
 
 
 def parse_answer_params(text: str) -> AnswerParams:
@@ -400,10 +405,16 @@ def answer_params_from(data: Mapping[str, Any]) -> AnswerParams:
         if type(threshold) not in (int, float) or not 0 <= threshold <= 1:
             raise ConfigFormatError(f"rerank_score_threshold 要写 0 到 1 之间的数，现在是 {threshold!r}")
         threshold = float(threshold)
-    enabled = merged["custom_stats_enabled"]
-    if type(enabled) is not bool:
-        raise ConfigFormatError(f"custom_stats_enabled 要写 true 或 false，现在是 {enabled!r}")
-    return AnswerParams(**ints, rerank_score_threshold=threshold, custom_stats_enabled=enabled)
+    flags = {}
+    for key in ("custom_stats_enabled", "suggest_model"):
+        if type(merged[key]) is not bool:
+            raise ConfigFormatError(f"{key} 要写 true 或 false，现在是 {merged[key]!r}")
+        flags[key] = merged[key]
+    seconds = merged["suggest_seconds"]
+    low, high = SUGGEST_SECONDS_RANGE
+    if type(seconds) is not int or not low <= seconds <= high:
+        raise ConfigFormatError(f"suggest_seconds 要写 {low} 到 {high} 之间的整数（秒），现在是 {seconds!r}")
+    return AnswerParams(**ints, rerank_score_threshold=threshold, **flags, suggest_seconds=seconds)
 
 
 #: issue 必须先列：brazil、attachment 不写时与它相同

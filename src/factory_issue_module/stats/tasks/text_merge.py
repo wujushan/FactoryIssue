@@ -11,7 +11,7 @@
 
 import pandas as pd
 
-from factory_issue_module.stats.lib.common import fi_int, fi_num, fi_rank, fi_with_counts
+from factory_issue_module.stats.lib.common import fi_int, fi_num, fi_rank, fi_round, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
 from factory_issue_module.stats.lib.views import vw_counts, vw_filter, vw_sorted, vw_time
 
@@ -51,6 +51,19 @@ def tm_sem(frame, threshold, related_only):
     return [(iid, ctx, value) for _rank, iid, ctx, value in rows]
 
 
+def tm_scores(frame):
+    """按意思一路的明细帧 → {单 ID: [重排分, 向量分]}（保留 4 位小数，没有的为 None）。只给类似问题的分数分布测量用
+    （探测 Z1）：沙箱外只记日志，不进回答。"""
+    out = {}
+    if frame is None or len(frame) == 0:
+        return out
+    for r in frame.to_dict("records"):
+        iid = fi_int(r.get("issue_id"))
+        if iid is not None and iid not in out:
+            out[iid] = [fi_round(fi_num(r.get("rerank")), 4), fi_round(fi_num(r.get("score")), 4)]
+    return out
+
+
 def tm_order(sem, numbers):
     """按分数从高到低，同分按问题编号（同一查询两次给出的前几张一样）；没有分数的排在最后、保持原来的先后。"""
     scored = [x for x in sem if x[2] is not None]
@@ -85,6 +98,7 @@ def run(data):
     T = P["tm"]
     labels = T["labels"]
     segments, frames, by_domain = [], {}, []
+    pending = {}
     totals = {"kw": 0, "g1": 0, "g2": 0, "g3": 0, "listed": 0}
     for dom in P["domains"]:
         v = dm_view(dom, data, P)
@@ -100,6 +114,11 @@ def run(data):
         numbers = {int(i): str(n) for i, n in zip(v["_id"].tolist(), v["_number"].tolist())} if len(v) else {}
         # 先去掉不在本步范围里的（已删除、不合条件），排好再截条数：不让它们占掉名额
         sem = tm_order([x for x in sem if x[0] not in hits and x[0] in numbers], numbers)
+        # 类似问题：本步范围内全部候选的分数，按表格的先后（前 `g3` 个就是表格里的行），截条数之前取
+        sem_scores = []
+        if sim:
+            got = tm_scores(data.get("sem_" + dom))
+            sem_scores = [got.get(i, [None, None]) for i, _c, _v in sem]
         sem = [(i, c) for i, c, _v in sem][: int(T["sim_max"] if sim else T["third_max"])]
         vk = v[v["_id"].apply(lambda x: int(x) in hits)].copy() if len(v) else v.copy()
         if len(vk):
@@ -132,10 +151,8 @@ def run(data):
         g1 = int((vk["_grp"] == 1).sum()) if len(vk) else 0
         g2 = int((vk["_grp"] == 2).sum()) if len(vk) else 0
         listed = n_kw + n3
-        exported = bool(T.get("export_ok")) and listed > 0 and (
-            bool(T.get("export")) or n_kw > int(T.get("export_threshold") or 0))
-        if exported:
-            frames["export_" + dom] = pd.DataFrame(tm_rows(everything, cols), columns=[names[c] for c in cols])
+        if listed > 0:  # 要不要导出在各域都列完之后定（列出的每个域都进文件）
+            pending["export_" + dom] = (everything, cols, names)
         frames["ids_" + dom] = tm_ids(everything)
         facts = tm_facts(everything)
         segments.append({
@@ -145,11 +162,23 @@ def run(data):
             "cut_g1": shown_g1 < g1, "cut_g2": shown_g2 < g2,
             "ids_shown": [int(x) for x in shown["_id"].tolist()] if len(shown) else [],
             "truncated": int(len(head_k)) < n_kw, "empty": listed == 0, "few": listed <= 2,
-            "exported": exported, "facts": facts, "caliber": {"未计入": missing},
+            "exported": False, "facts": facts, "caliber": {"未计入": missing},
+            **({"sem_scores": sem_scores} if sim else {}),
         })
         by_domain.append([dom, n_kw])
         for k, n in (("kw", n_kw), ("g1", g1), ("g2", g2), ("g3", n3), ("listed", listed)):
             totals[k] += n
+    # 导出（同清单）：用户明说，或某域按词找到的超过阈值时，列出的每个域都进文件、每域一页
+    want = bool(T.get("export_ok")) and (
+        bool(T.get("export")) or any(s["kw"] > int(T.get("export_threshold") or 0) for s in segments))
+    if want:
+        for s in segments:
+            got = pending.get("export_" + s["domain"])
+            if got is not None:
+                s["exported"] = True
+                everything, cols, names = got
+                frames["export_" + s["domain"]] = pd.DataFrame(tm_rows(everything, cols),
+                                                                columns=[names[c] for c in cols])
     refs = {"count": totals["listed"], "found": {s["domain"]: s["found"] for s in segments}}
     return {"segments": segments, "refs": refs, "totals": totals, "by_domain": by_domain,
             "exported": [[s["domain"], s["found"]] for s in segments if s["exported"]], **frames}

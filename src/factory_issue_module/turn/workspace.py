@@ -15,6 +15,9 @@
     找的是什么与用的说法（`texts`，S6b 加，版本号随之为 2）。
   - `charts`：本轮各段图的数据行（沙箱产出，原样），换图用。
   - `focus`：最近一张被单独说到的单（域、问题编号、单 ID），「这单」「它」用；本轮没有就留着上一张。
+  - `suggest`（§9.5）：本会话执行过、推荐过的意图键与问句（`seen`，答后建议去重）；本轮的接着问按钮与各自的计划
+    （`offered`，下一轮问句与其中一个完全相同时直接执行，`picked`）；上一份清单里没点开的单（`carry`）。
+    走到执行这一步、又不是执行时追问的轮次都写（`write_suggest`）。
   - `pending_clarify`：代码追问时的计划、问话与每个选项怎么填回计划；下一轮问句与某个选项的 `query` 完全相同
     时直接填、不重新规划（`fill`），填好的计划照常过 §4.2 第 6 步。写进去了按钮的 `query` 就是选项本身，问句
     全文（原话加这一项）存在选项的 `full` 里，本轮按它理解；写不进去时按钮发问句全文（`plan/clarify.py`）。
@@ -53,6 +56,11 @@ RESULTS = "results"
 CHARTS = "charts"
 FOCUS = "focus"
 PENDING = "pending_clarify"
+#: 答后建议（§9.5、§10）：本会话执行过、推荐过的意图键与问句（`seen`），本轮的接着问按钮与计划（`offered`），
+#: 上一份清单里没点开的单（`carry`）。新加的键，不改其余键的形状，`VERSION` 不加
+SUGGEST = "suggest"
+SEEN_CAP = 300
+CARRY_MAX = 5
 #: 每步每域存的单 ID 上限（§10）
 ID_CAP = 5000
 
@@ -189,6 +197,11 @@ class TurnRecord:
     #: 本轮的结局：有没有查到结果、是不是整轮都失败（`last.outcome`）
     found: bool = False
     failed: bool = False
+    #: 答后建议（§9.5、§10 `suggest`）：本轮要记进 `seen` 的意图键与问句；本轮发出的接着问按钮
+    #: （{query, key, move, plan}）；新的 `carry`（None：留着上一份）
+    seen: list[str] = field(default_factory=list)
+    offered: list[dict[str, Any]] = field(default_factory=list)
+    carry: list[dict[str, Any]] | None = None
 
 
 def _capped(results: Mapping[str, Any]) -> dict[str, Any]:
@@ -210,6 +223,32 @@ async def write_turn(ctx: Any, query: str, plan: dict, record: TurnRecord) -> No
     await write(ctx, CHARTS, {"items": record.charts})
     if record.focus:
         await write(ctx, FOCUS, record.focus)
+
+
+# ---------------------------------------------------------------------------- 答后建议（§9.5）
+
+
+async def write_suggest(ctx: Any, before: Mapping[str, Any] | None, record: TurnRecord) -> None:
+    """`seen` 加上本轮的（最近 `SEEN_CAP` 条）；`offered` 换成本轮的；`carry` 有新的就换，去掉已在 `seen` 里的。"""
+    seen = [str(x) for x in (before or {}).get("seen") or []]
+    have = set(seen)
+    for key in record.seen:
+        if key and key not in have:
+            seen.append(key)
+            have.add(key)
+    seen = seen[-SEEN_CAP:]
+    carry = record.carry if record.carry is not None else list((before or {}).get("carry") or [])
+    carry = [c for c in carry if isinstance(c, Mapping) and c.get("key") not in have][:CARRY_MAX]
+    await write(ctx, SUGGEST, {"seen": seen, "offered": list(record.offered), "carry": carry})
+
+
+def picked(state: Mapping[str, Any] | None, query: str) -> tuple[dict, str] | None:
+    """本轮问句与上一轮某个接着问按钮的 `query` 完全相同：(那个按钮存下的计划, 动作)；否则 None。"""
+    said = (query or "").strip()
+    for item in (state or {}).get("offered") or []:
+        if isinstance(item, Mapping) and str(item.get("query") or "").strip() == said and isinstance(item.get("plan"), dict):
+            return copy.deepcopy(item["plan"]), str(item.get("move") or "")
+    return None
 
 
 # ---------------------------------------------------------------------------- 换算后的时间
@@ -318,12 +357,30 @@ class Filled:
     #: 本轮按什么问句理解：追问那一轮的原话加选定的这一项（按钮只写了选项；对库、写分析、答后按钮、
     #: 填不进去时重新规划都按它，§4.4）
     asked: str = ""
+    #: 按地区说法追问、选了其中几家时：[{field, said, candidates, chosen}]，本轮写进 `turn.steps`（`rest_scopes`）
+    scopes: tuple[dict[str, Any], ...] = ()
 
 
 def _patch(ask: Ask, option: str) -> dict[str, Any] | None:
     if not ask.fill or ask.said is None:
         return None
-    return {"kind": ask.fill, "sid": ask.sid, "said": ask.said, "option": option}
+    patch: dict[str, Any] = {"kind": ask.fill, "sid": ask.sid, "said": ask.said, "option": option}
+    if ask.scope:
+        patch["scope"] = {"field": str(ask.scope.get("field") or ""),
+                          "candidates": [str(c) for c in ask.scope.get("candidates") or []]}
+    return patch
+
+
+def rest_scopes(turn: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """上一轮 `turn.steps` 里记下的地区候选与选定的几家：条件名 → {said, candidates, chosen}（后一步覆盖前一步）。"""
+    out: dict[str, dict[str, Any]] = {}
+    for info in ((turn or {}).get("steps") or {}).values():
+        for s in (info or {}).get("scopes") or []:
+            if isinstance(s, Mapping) and s.get("field") and s.get("candidates"):
+                out[str(s["field"])] = {"said": str(s.get("said") or ""),
+                                        "candidates": [str(c) for c in s.get("candidates") or []],
+                                        "chosen": [str(c) for c in s.get("chosen") or []]}
+    return out
 
 
 async def write_pending(ctx: Any, *, query: str, plan: dict, ask: Ask, recommendations: Sequence[Mapping[str, Any]],
@@ -368,9 +425,16 @@ def fill(pending: Mapping[str, Any] | None, query: str) -> Filled | None:
     logger.info("factory_issue_fill", kind=option["patch"].get("kind"), reason=pending.get("reason"))
     inferred = [Inferred(step=str(x.get("step")), field=str(x.get("field")), values=tuple(x.get("values") or ()))
                 for x in pending.get("inferred") or [] if isinstance(x, Mapping)]
+    patch = option["patch"]
+    scopes: tuple[dict[str, Any], ...] = ()
+    scope = patch.get("scope")
+    if isinstance(scope, Mapping) and scope.get("field") and scope.get("candidates"):
+        chosen = [x.strip() for x in str(patch.get("option") or "").split("、") if x.strip()]
+        scopes = ({"field": str(scope["field"]), "said": str(patch.get("said") or ""),
+                   "candidates": [str(c) for c in scope["candidates"]], "chosen": chosen},)
     return Filled(plan=plan, query=str(pending.get("query") or ""), question=str(pending.get("question") or ""),
                   inferred=inferred, check_errors=[str(x) for x in pending.get("check_errors") or []],
-                  asked=str(option.get("full") or "").strip() or said)
+                  asked=str(option.get("full") or "").strip() or said, scopes=scopes)
 
 
 def _same(a: Any, b: str) -> bool:

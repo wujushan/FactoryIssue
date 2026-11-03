@@ -33,8 +33,16 @@ from forge_platform.stats import StatsRunner
 
 from factory_issue_module.declarations import ERP, INFO, MART, MODULE_CODE
 from factory_issue_module.module import FactoryIssueModule
+from factory_issue_module.present.suggest import MARKER as SUGGEST_MARKER
 
 MANIFEST = FactoryIssueModule.manifest
+
+
+def _quiet_module() -> FactoryIssueModule:
+    """单测看编排产出的完整事件：正文不分段、不发进度（`module.live`；分段与进度另有单测）。"""
+    module = FactoryIssueModule()
+    module.live = False
+    return module
 
 _IDENT = r'(?:\[[^\]]+\]|"[^"]+"|[A-Za-z_][\w]*)'
 _TABLE_REF = re.compile(rf"\b(?:FROM|JOIN)\s+({_IDENT}(?:\.{_IDENT})*)", re.IGNORECASE)
@@ -75,6 +83,23 @@ class FakeConnector:
         return frame.copy() if frame is not None else pd.DataFrame()
 
 
+_CANDIDATE_LINE = re.compile(r"^(c\d+)｜[^｜]+｜默认问句：([^｜]+)")
+
+
+def candidates_in(messages: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """答后建议那次调用里列出的候选：(编号, 默认问句)。"""
+    text = str(messages[-1].get("content") or "")
+    return [(m.group(1), m.group(2)) for m in (_CANDIDATE_LINE.match(line) for line in text.splitlines()) if m]
+
+
+def pick_first_two(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """答后建议的默认回放：照默认问句挑前两条（要写现象的那条不挑）。"""
+    text = str(messages[-1].get("content") or "")
+    slots = {line.split("｜", 1)[0] for line in text.splitlines() if line.endswith("要写现象")}
+    picks = [(cid, q) for cid, q in candidates_in(messages) if cid not in slots][:2]
+    return {"suggestions": [{"ids": [cid], "query": q} for cid, q in picks]}
+
+
 class FakeLLM:
     """按顺序回放回复。回放用完还被调用 = 不该调模型的地方调了。
 
@@ -85,6 +110,10 @@ class FakeLLM:
         self.replies = list(replies or [])
         self.calls: list[list[dict[str, Any]]] = []
         self.routes: dict[str, Any] = {}
+        #: 答后建议那次调用（设计 §9.5）单独记、单独回放，不占 `calls` 与顺序回放：每个取数轮都有这一次，
+        #: 混进 `calls` 会让「调了几次」「最后一次是分析段」的断言都跟着变。默认照代码的默认问句挑前两条
+        self.suggest_calls: list[list[dict[str, Any]]] = []
+        self.suggest_reply: Any = pick_first_two
 
     @staticmethod
     def check_messages(messages: list[dict[str, Any]]) -> None:
@@ -97,8 +126,15 @@ class FakeLLM:
 
     async def chat(self, messages: list[dict[str, Any]], **_: Any) -> dict[str, Any]:
         self.check_messages(messages)
-        self.calls.append(messages)
         system = str(messages[0].get("content") or "")
+        if SUGGEST_MARKER in system:
+            self.suggest_calls.append(messages)
+            reply = self.suggest_reply(messages) if callable(self.suggest_reply) else self.suggest_reply
+            if isinstance(reply, Exception):
+                raise reply
+            content = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
+            return {"choices": [{"message": {"role": "assistant", "content": content}}], "usage": {}}
+        self.calls.append(messages)
         route = next((fn for marker, fn in self.routes.items() if marker in system), None)
         if route is not None:
             reply = route(messages)
@@ -234,7 +270,7 @@ class Harness:
     config: FakeConfig
     files: FakeFiles
     retrieval: FakeRetrieval
-    module: FactoryIssueModule = field(default_factory=FactoryIssueModule)
+    module: FactoryIssueModule = field(default_factory=lambda: _quiet_module())
 
     def tables_queried(self) -> set[str]:
         return {t for q in self.queries for t in q.tables}

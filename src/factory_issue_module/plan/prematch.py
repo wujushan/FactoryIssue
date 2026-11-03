@@ -128,7 +128,8 @@ def number_shortcut(query: str, machines: Collection[str] | None = None) -> dict
     """返回直通的计划；问句里除了号码还有别的意思时返回 None，照常规划。
 
     `machines` 是可查的域的机型名称（S2 起由主数据给）：PN / PO 样子的串去掉连字符后对得上机型、用户又没说
-    是 PN、PO 时不直通。没给机型清单时按长相判断（`_MACHINE_SHAPE`）。不直通的代价只是一次规划调用。
+    是 PN、PO 时不直通。长相像机型的（`_MACHINE_SHAPE`）有没有清单都不直通，所以机型清单只会多拒几种直通：
+    不带清单时不直通的，带了也不直通（规划器据此先不带清单判断，`plan/planner.py`）。不直通的代价只是一次规划调用。
     """
     nums = find_numbers(query)
     if not nums:

@@ -232,7 +232,7 @@ CONFIG_FILES: list[ConfigFileSpec] = [
     ConfigFileSpec(
         name=ANSWER_PARAMS,
         description=(
-            "回答参数。TOML：top_n（排名条数）、export_threshold（超过多少张导出）、table_rows（表格给几张）、"
+            "回答参数。TOML：top_n（排名条数）、export_threshold（某域列出的超过多少张就导出，默认 20）、table_rows（表格给几张）、"
             "judge_max（「可能相关」每域最多判断几张）、rerank_max（每域最多重排几张）、"
             "rerank_score_threshold（重排分阈值，不写即不启用）、custom_stats_enabled（是否允许临时统计）"
         ),

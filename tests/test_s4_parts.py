@@ -33,7 +33,7 @@ def test_rich_display_strips_inline_images_and_tags():
     raw = ('<p>按键<img src="data:image/png;base64,' + "QUJD" * 500 + '" />手感差&nbsp;&amp;偏软</p>'
            '<p><img src="https://files.test.local/a.png"/></p><br/>第二段&#26469;')
     text, cut = rich_display(raw)
-    assert text == "按键手感差 &偏软\n[图片](https://files.test.local/a.png)\n第二段来" and not cut
+    assert text == "按键手感差 &偏软\n![图片](https://files.test.local/a.png)\n第二段来" and not cut
     assert rich_display(None) == ("", False) and rich_display(float("nan")) == ("", False)
     assert rich_display("<p> </p><p>&nbsp;</p>") == ("", False)  # 只剩空的格式标记
     long_text, cut = rich_display("字" * (RICH_LIMIT + 5))

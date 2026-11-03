@@ -236,6 +236,10 @@ async def test_cross_list_gives_counts_per_domain_and_one_analysis():
     h, events = await _go("近 30 天的问题有哪些", [plan(step("list_issues", time=T30)), NARR])
     text = _text(events)
     assert "合计 10 张：国内 4 张、巴西 4 张、海外 2 张" in text
+    # 先给结论再给表（开发者 2026-11-02 定）：分析段紧跟开头那句，在三张表之前
+    types = _types(events)
+    narr_at = next(i for i, e in enumerate(events) if e.type is EventType.DELTA and NARR in e.data["text"])
+    assert narr_at == 1 and narr_at < types.index(EventType.TABLE)
     assert [t["title"].split("：")[0] for t in _tables(events)] == ["国内问题单", "巴西问题单", "海外问题单"]
     # S6b 起三域文字查找表都有权时问题描述取自文字表（§9.2），开头不再说「暂不可用」
     assert len(h.llm.calls) == 2 and "问题描述摘要暂不可用" not in text

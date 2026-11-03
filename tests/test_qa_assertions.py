@@ -147,7 +147,8 @@ def test_case_turns_defaults_to_one_query():
 def test_golden_files_stay_inside_g3_rules():
     payload = json.loads((ROOT / "docs/testcases/golden/cases.json").read_text(encoding="utf-8"))
     cases = payload["cases"]
-    assert len(cases) == 115  # 2026-10-31 加临时统计的 XC-040（开发者同意）
+    # 2026-10-31 加临时统计的 XC-040；2026-11-02 加三轮的 XC-041（都经开发者同意）
+    assert len(cases) == 116
     ids = [case["id"] for case in cases]
     assert len(ids) == len(set(ids))
     permission_ids = {"XC-017", "XC-030", "XC-032", "XC-033", "XC-034"}
@@ -156,7 +157,10 @@ def test_golden_files_stay_inside_g3_rules():
     for case_id in permission_ids:
         assert case_id in manual
     multi = [case for case in cases if case.get("turns")]
-    assert len(multi) == 11
+    # 2026-11-02：XC-015 改为两轮（开发者要求）
+    assert len(multi) == 13
+    #: 多轮用例都是两轮，只有 XC-041 是三轮（追问 → 点一个选项 → 问另外的，2026-11-02 开发者同意）
+    three_turns = {"XC-041"}
     for case in cases:
         assert case["target"] == "FACTORY_ISSUE"
         assert case.get("query")
@@ -166,7 +170,7 @@ def test_golden_files_stay_inside_g3_rules():
         assert "count" not in tables
         if case.get("turns"):
             assert [turn["query"] for turn in qa.case_turns(case)][-1] == case["query"]
-            assert len(case["turns"]) == 2
+            assert len(case["turns"]) == (3 if case["id"] in three_turns else 2)
         sql_path = ROOT / "docs/testcases/golden/sql" / f"{case['id']}.sql"
         text = sql_path.read_text(encoding="utf-8")
         upper = text.upper()

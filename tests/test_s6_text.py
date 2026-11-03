@@ -438,6 +438,19 @@ async def test_text_search_export_per_domain_with_full_description():
     assert {r[0]: r[1] for r in rows[1:]}["ZC9901001"] == LONG
 
 
+async def test_text_search_conclusion_comes_before_the_tables():
+    """先给结论再给表（开发者 2026-11-02 定）：各组张数那句 → 分析 → 每域的表。"""
+    reply = plan(step("text_search", domains=CN, time=T30, mode="关键词", terms=["排线", "开裂", "NFC"], logic="或"))
+    h = harness(replies=[reply, "共 3 张。", "共 3 张。"])
+    events = await run(h, "国内描述里有排线、开裂或 NFC 的单")
+    types = [e.type for e in events]
+    # 分析段：模型写的，或核数不过时退回的那句（`text_search._narrative`）；这里只看位置
+    at = next(i for i, e in enumerate(events) if e.type is EventType.DELTA
+              and (e.data["text"].strip() == "共 3 张。" or "以上是按文字找到的单" in e.data["text"]))
+    assert 0 < at < types.index(EventType.TABLE)
+    assert "张" in events[at - 1].data["text"]  # 前面是各组张数那句
+
+
 async def test_lookup_table_desc_uses_the_text_table_too():
     nums = [{"raw": "ZC9901001", "kind_said": None}, {"raw": "ZC9901003", "kind_said": None}]
     h = harness(replies=[plan(step("lookup_numbers", numbers=nums))], missing=(1,))

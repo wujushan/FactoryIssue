@@ -260,6 +260,46 @@ def test_rule15_numbers_and_models_in_query_must_be_in_plan() -> None:
     assert [r for r, _ in checks([lst()], "ZC2608038 现在谁在处理")] == [15]
 
 
+def _intro(kind: str) -> dict:
+    return {"id": "s1", "skill": "introduce", "when": None, "params": {"kind": kind}}
+
+
+DETAIL_PREV = {"steps": [{"id": "s1", "skill": "issue_detail", "when": None,
+                          "params": {"issue": {"value": "ZC2604012", "from": "user"}}}]}
+
+
+def test_rule19_out_of_scope_on_previous_issue_bounces() -> None:
+    """CN-053：上一轮打开了一张单，本轮「这张物料单为什么…」写成超出范围时打回，说明里给出那张单。"""
+    q = "这张物料单为什么机型显示「物料」？它的影响数量怎么没有？"
+    issue = normalize.previous_issue(DETAIL_PREV)
+    assert issue == "ZC2604012"
+    bounced = normalize.tagged_checks(apply([_intro("超出范围")], q), q, ENTITIES, TODAY, issue)
+    assert [r for r, _ in bounced] == [19]
+    assert "这张物料单" in bounced[0][1] and "ZC2604012" in bounced[0][1] and "issue_detail" in bounced[0][1]
+    # 读不到上一轮计划时看上一轮的用户问句
+    assert normalize.previous_issue(None, "ZC2604012 这张单是什么情况？") == "ZC2604012"
+
+
+@pytest.mark.parametrize(("query", "kind", "issue"), [
+    ("能帮我把这张单结案吗？", "只读请求", "ZC2604012"),     # 只读请求照答
+    ("这张单的跟进人怎么样了", "寒暄", "ZC2604012"),          # 只管超出范围
+    ("今天天气怎么样", "超出范围", "ZC2604012"),              # 没指一张单
+    ("其它问题你能查吗", "超出范围", "ZC2604012"),            # 「其它」不是「它」
+    ("这些单为什么机型显示物料", "超出范围", "ZC2604012"),     # 指一批
+    ("这张单为什么机型显示物料", "超出范围", None),            # 上一轮没有单独说到的单
+])
+def test_rule19_does_not_bounce_other_introduces(query: str, kind: str, issue: str | None) -> None:
+    assert not normalize.tagged_checks(apply([_intro(kind)], query), query, ENTITIES, TODAY, issue)
+
+
+def test_rule19_previous_issue_needs_exactly_one_number() -> None:
+    two = {"steps": [{"id": "s1", "skill": "lookup_numbers", "when": None, "params": {
+        "numbers": [{"raw": "ZC2604012", "kind_said": None}, {"raw": "ZC2604013", "kind_said": None}]}}]}
+    assert normalize.previous_issue(two) is None
+    assert normalize.previous_issue({"steps": [lst()]}, "ZC2604012 这张单是什么情况？") is None  # 有计划时只看计划
+    assert normalize.previous_issue(None, None) is None
+
+
 def test_rule16_values_not_in_query_only_logged() -> None:
     plan = {"steps": [lst(filters=[{"field": "机型", "op": "是", "value": "A930", "from": "user"},
                                    {"field": "加工厂", "op": "是", "value": "亮亮", "from": "previous"}])]}

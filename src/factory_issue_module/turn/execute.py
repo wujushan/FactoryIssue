@@ -19,7 +19,9 @@
   那一步按号查单直接用存下的单 ID，不重查、不再列一遍（§10「递进筛选」）。「这单」写不出单号时用 `focus`。
 - 导出（S5，§9.3）：用户明说导出、或某域超过 `export_threshold` 张时，沙箱把该域全部行作为明细帧回传，每域一页
   写成一个文件，链接放在统计口径之后。
-- 答后按钮（S5，§9.5，`present/suggestions.py`）：其他理解在前，放宽与换时间范围其次，模板按钮最后，至多 4 个。
+- 答后按钮（§9.5，`present/suggestions.py`）：纠偏类（其他理解、按上月同期比、改按结案时间算、放宽与换时间范围、
+  这一步自己的选项）代码直出、排在前面；接着问由 `present/moves.py` 列候选、`present/suggest.py` 交模型挑，至多 3 个，
+  至多 4 个。模型调用在最后一步算完、还没发它的事件时就开始，与正文分段发出重叠（`_start_suggest`）。
 - 文字查找（S6b，`skills/text_search.py`）：条件照清单对库，执行交 `text_search.run_step`；清单、按号查单的问题描述
   一列在文字查找表可用的域换成摘要、导出给全文（`present/summaries.py`，§9.2）。递进筛选里照抄上一轮的文字查找时
   用存下的单 ID（`_use_stored_texts`）。
@@ -43,7 +45,7 @@ from typing import Any
 import pandas as pd
 import structlog
 from forge_core.errors import TableDenied
-from forge_core.events import Event
+from forge_core.events import Event, EventType
 from forge_core.module import ModuleManifest
 
 from factory_issue_module.config.files import AnswerParams, LinkSites
@@ -56,7 +58,7 @@ from factory_issue_module.plan.planner import PlanResult
 from factory_issue_module.plan.timespan import Span
 from factory_issue_module.config.files import Segmentation, TopicTerms
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import charts, columns, export, narrative, suggestions, summaries, tables
+from factory_issue_module.present import charts, columns, export, moves, narrative, suggest, suggestions, summaries, tables
 from factory_issue_module.skills import aggregate, custom_stats, issue_detail, list_issues, lookup_numbers, text_search
 from factory_issue_module.stats import runner
 from factory_issue_module.text import terms as text_terms
@@ -109,6 +111,12 @@ class Turn:
     seg: Segmentation | None = None
     #: 上一轮存下的临时统计脚本（[{describe, script}]，`workspace.stored_scripts`）：要算的一样时照它算，不调模型
     scripts: Sequence[Mapping[str, str]] = ()
+    #: 本轮由追问选项直填、按地区说法选了其中几家的（`workspace.Filled.scopes`）：与 `resolver.used` 一起写进
+    #: `turn.steps`，下一轮「另外的」照它查（G43）
+    scopes: Sequence[Mapping[str, Any]] = ()
+    #: 最近几轮对话（`conversation_messages`，答后建议给模型看）与工作区 `suggest`（去重、下一张，§9.5）
+    history: Sequence[Mapping[str, Any]] = ()
+    suggest_state: Mapping[str, Any] | None = None
 
 
 @dataclass
@@ -461,6 +469,9 @@ class StepOut:
     buttons: list[dict[str, str]] = field(default_factory=list)
     #: 这一步没有结果、但已经用业务话说明了（临时统计关掉、没算出来、一轮里的第二个）：整轮都没有结果时不再发整轮失败
     handled: bool = False
+    #: 答后建议要看的本步产物（§9.5，`present/moves.py`）：清单、统计的各段（`segs`）；详情给出的单与块
+    #: （`tickets`、`shown`）。只在本轮内存里用，不进工作区
+    digest: dict[str, Any] = field(default_factory=dict)
 
 
 def _time_text(run: StepRun) -> str | None:
@@ -640,6 +651,15 @@ def _add_caliber(C: cal.Caliber, run: StepRun, seg: dict[str, Any], dims: Sequen
         C.item(cal.small_sample(str(d), int(n)))
 
 
+def conclusion_first(events: list[Event], said: Event, at: int) -> None:
+    """先给结论、再给表格与图表（总述「回答怎么组织」，开发者 2026-11-02 定）：分析段插在开头那句之后（`at`），
+    后面接表格；分析段为空（没写出来、退回空模板）时不插。"""
+    text = str(said.data.get("text") or "")
+    if not text.strip():
+        return
+    events.insert(min(max(at, 0), len(events)), Event.delta(text.rstrip() + "\n\n"))
+
+
 async def _narrate(T: Turn, table_text: str | None, note: str | None, facts: dict[str, Any], fallback: str,
                    time_text: str | None) -> Event:
     facts = {"时间范围": time_text or "不限建单时间", **facts}
@@ -750,6 +770,8 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
     out.empty = all((s.get("found") or 0) == 0 for s in segs)
     out.found_any = not out.empty
     out.truncated = any(s.get("truncated") for s in segs)
+    out.digest = {"segs": [{k: s.get(k) for k in ("domain", "kind", "title", "name", "found", "empty", "facts")}
+                           for s in segs]}
     out.refs = {f"{run.sid}.{k}": v for k, v in (res.get("refs") or {}).items()}
     out.refs[f"{run.sid}.issues"] = issues_from_frames(getattr(outcome, "frames", None) or {})
     all_dims = [d for dims in dims_by.values() for d in dims]
@@ -807,6 +829,7 @@ async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Seque
             text = text[:-1] + f"；{who}问题描述摘要{columns.DESC_UNAVAILABLE}，其他列照常。"
         events.append(Event.delta(text + "\n\n"))
     described: list[str] = []
+    narrate: tuple[str, dict[str, Any]] | None = None
     for i, seg in enumerate(segs):
         dom = _BY_LABEL.get(seg.get("domain", ""), Domain.DOMESTIC)
         if multi and i:
@@ -816,12 +839,13 @@ async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Seque
         if table_text:
             described.append(table_text)
             if not multi and not seg.get("few"):
-                events.append(await _narrate(T, table_text, None, seg.get("facts") or {},
-                                             list_issues.fallback(seg.get("facts") or {}), time_text))
-    if multi and not res.get("few_total"):
-        facts = {"合计张数": res.get("found_total", 0), "各域张数": res.get("by_domain") or [],
-                 **{s["domain"]: s.get("facts") or {} for s in segs if not s.get("empty")}}
-        events.append(await _narrate(T, "；".join(described), None, facts, list_issues.fallback(facts), time_text))
+                narrate = (table_text, seg.get("facts") or {})
+    if multi and not res.get("few_total") and described:
+        narrate = ("；".join(described), {"合计张数": res.get("found_total", 0), "各域张数": res.get("by_domain") or [],
+                                         **{s["domain"]: s.get("facts") or {} for s in segs if not s.get("empty")}})
+    if narrate is not None:
+        said = await _narrate(T, narrate[0], None, narrate[1], list_issues.fallback(narrate[1]), time_text)
+        conclusion_first(events, said, 1)  # 开头（各域张数）之后、表格之前
     return events
 
 
@@ -858,6 +882,7 @@ async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], t
     for key, members in groups.items():
         described: list[str] = []
         facts: dict[str, Any] = {}
+        start = len(events)
         for i, seg in enumerate(members):
             if events and i:
                 events.append(Event.delta("\n\n"))
@@ -868,8 +893,7 @@ async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], t
                 facts = narr[1] if len(members) == 1 else {**facts, seg.get("domain", ""): narr[1]}
         if described:
             said = await _narrate(T, "；".join(described), None, facts, "", time_text)
-            if said.data.get("text", "").strip():
-                events.append(said)
+            conclusion_first(events, said, start + 1)  # 这一段开头那句之后、表格与图之前
         if key != list(groups)[-1]:
             events.append(Event.delta("\n\n"))
     return events
@@ -1039,6 +1063,8 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
         return out
     items: list[str] = []
     shown: list[dict[str, Any]] = []
+    given: list[dict[str, Any]] = []
+    blocks_shown: dict[str, list[str]] = {}
     for i, t in enumerate(allowed):
         if i:
             out.events.append(Event.delta("\n\n"))
@@ -1059,6 +1085,8 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
         items += issue_detail.caliber_items(ticket, keys)
         out.ok = out.found_any = True
         shown.append({"domain": str(ticket["domain"]), "number": str(ticket["number"]), "id": int(ticket["id"])})
+        given.append(ticket)
+        blocks_shown[str(ticket["number"])] = list(keys)
     if more:
         out.events.append(Event.delta(f"\n\n前一步的结果不止 {issue_detail.DETAIL_MAX} 张，这里只给前 "
                                       f"{issue_detail.DETAIL_MAX} 张的详情，其余可以按单号单独查。"))
@@ -1069,6 +1097,7 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
     if len(shown) == 1:  # 单独说到的那张单：下一轮「这单」「它」指它（§10 `focus`）
         T.record.focus = shown[0]
     out.refs = {f"{run.sid}.shown": shown}
+    out.digest = {"tickets": given, "shown": blocks_shown}
     return out
 
 
@@ -1269,6 +1298,17 @@ def _time_items(step: dict) -> list[dict[str, Any]]:
     return [t for t in schema.as_list((step.get("params") or {}).get("time")) if isinstance(t, dict) and t.get("said")]
 
 
+def _scopes_of(T: Turn) -> list[dict[str, Any]]:
+    """本轮直填记下的与按上一轮候选查了的，按（条件名, 原话）去重（各域、重放会各追加一次）。"""
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for s in [*T.scopes, *T.resolver.used]:
+        out.setdefault((str(s.get("field")), str(s.get("said"))), {
+            "field": str(s.get("field")), "said": str(s.get("said") or ""),
+            "candidates": [str(c) for c in s.get("candidates") or []],
+            "chosen": [str(c) for c in s.get("chosen") or []]})
+    return list(out.values())
+
+
 def _record(T: Turn, r: StepRun, out: StepOut) -> None:
     """记下这一步实际执行了什么（§10 `turn`、`results`）：查了哪些域、换算后的时间连同原话、各域张数与结果单 ID。"""
     if not out.domains:
@@ -1281,6 +1321,9 @@ def _record(T: Turn, r: StepRun, out: StepOut) -> None:
         "found": dict(out.refs.get(f"{r.sid}.found") or {}),
         # 看原话才定下的判据（巴西「涉及费用」按标记还是按明细）：沿用与重放照用（S5 评审 M1）
         "decided": {k: v for d in r.dsteps.values() for k, v in d.decided.items()}}
+    scopes = _scopes_of(T)
+    if scopes:  # 地区候选与选定的几家：下一轮「另外的」、重放本轮都照它（G43）
+        T.record.steps[r.sid]["scopes"] = scopes
     custom = out.extra.get("custom")
     if isinstance(custom, dict) and custom.get("script"):  # 临时统计：要算什么与那份脚本，重放照它算（S7）
         T.record.steps[r.sid]["custom"] = {"describe": str(custom.get("describe") or ""),
@@ -1301,29 +1344,96 @@ def _record(T: Turn, r: StepRun, out: StepOut) -> None:
         T.record.results[r.sid] = by
 
 
-def _one_number(r: StepRun, out: StepOut) -> str | None:
-    """这一步只说到一张单时它的问题编号（详情：给出了详情的那张；按号查单：只找到一张）；否则 None。"""
-    if r.skill == "issue_detail":
-        shown = out.refs.get(f"{r.sid}.shown") or []
-        return str(shown[0]["number"]) if len(shown) == 1 and shown[0].get("number") else None
-    focus = _focus_of(out.refs.get(f"{r.sid}.issues") or {})
-    return str(focus["number"]) if focus and focus.get("number") else None
+# ---------------------------------------------------------------------------- 答后建议（§9.5）
 
 
-def _templates(r: StepRun, out: StepOut, refs: Mapping[str, Any]) -> list[dict[str, str]]:
-    """这一步之后的模板按钮（§9.5）。"""
-    if r.skill == "list_issues":
-        return suggestions.list_templates(r.step, found=out.found_any, truncated=out.truncated,
-                                          exported=out.exported)
-    if r.skill == "aggregate":
-        return suggestions.aggregate_templates(r.step, top1=refs.get(f"{r.sid}.top1") or [])
-    if r.skill == "issue_detail":
-        return suggestions.detail_templates(issue_detail.aspects_of(r.step), _one_number(r, out))
-    if r.skill == "lookup_numbers":
-        return suggestions.detail_templates([], _one_number(r, out))
-    if r.skill in ("text_search", "custom_stats"):  # 只给这一步自己的（文字查找的最小版、临时统计没算出来时的能力介绍）
-        return list(out.buttons)
-    return []
+def _done(r: StepRun, out: StepOut) -> moves.Done:
+    """这一步执行完的样子，交 `present/moves.py` 列候选。"""
+    prefix = r.sid + "."
+    return moves.Done(sid=r.sid, skill=r.skill, step=r.step, domains=list(out.domains), found=out.found_any,
+                      truncated=out.truncated, exported=out.exported, segs=list(out.digest.get("segs") or []),
+                      refs={k[len(prefix):]: v for k, v in out.refs.items() if k.startswith(prefix)},
+                      tickets=list(out.digest.get("tickets") or []), shown=dict(out.digest.get("shown") or {}),
+                      spans=list(r.spans), deferred=r.deferred or _uses_refs(r.step))
+
+
+def _dims_ok(dim: str, labels: Sequence[str], basis: str) -> bool:
+    """本步各域都能按这个维度统计（换角度的候选，§9.5）。"""
+    for label in labels:
+        d = _BY_LABEL.get(str(label))
+        if d is None:
+            continue
+        dims, missing, _more = ADAPTERS[d].dims([dim], basis)
+        if missing or not dims:
+            return False
+    return True
+
+
+@dataclass
+class _Suggesting:
+    pool: moves.Pool
+    seen: set[str]
+    task: asyncio.Task | None = None
+
+    def cancel(self) -> None:
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+
+    async def result(self, n: int) -> list[suggest.Chosen]:
+        if self.task is None:
+            return []
+        if n <= 0:
+            self.cancel()
+            return []
+        try:
+            return list(await self.task)[:n]
+        except Exception as exc:  # noqa: BLE001 —— 答后建议出了意外不影响本轮回答
+            logger.warning("factory_issue_suggest_failed", error=type(exc).__name__)
+            return []
+
+
+def _start_suggest(T: Turn, done: Sequence[moves.Done], said: Sequence[str]) -> _Suggesting:
+    """记下本轮执行过的意图键，列候选，有候选时就开始调模型（不等，与正文分段发出重叠）。"""
+    asked = [k for d in done for k in moves.asked_keys(d)] + [moves.question_key(T.query)]
+    T.record.seen += asked
+    state = T.suggest_state or {}
+    seen = {str(x) for x in state.get("seen") or []} | set(asked)
+    C = moves.Context(today=T.today, access=[d.label for d in DOMAINS if T.access.can(d)],
+                      text_access=[d.label for d in DOMAINS if d in T.access.text_search], seen=seen,
+                      carry=[c for c in state.get("carry") or [] if isinstance(c, Mapping)], dims_ok=_dims_ok)
+    pool = moves.collect(done, C)
+    out = _Suggesting(pool=pool, seen=seen)
+    if pool.items:
+        out.task = asyncio.create_task(suggest.choose(
+            getattr(T.ctx, "llm", None), pool, query=T.query, history=T.history, answer="".join(said),
+            n=suggestions.MODEL_MAX, seconds=T.answer.suggest_seconds, seen=seen, use_model=T.answer.suggest_model))
+        # 用户中途停下、没人再等它时：它自己在 `suggest_seconds` 内结束，这里只把异常取走，免得记成未处理
+        out.task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+    return out
+
+
+def _offer(T: Turn, recs: Sequence[Mapping[str, str]], chosen: Sequence[suggest.Chosen], done: Sequence[moves.Done],
+           pool: moves.Pool | None) -> None:
+    """发出去的按钮记进 `T.record`：问句与意图键进 `seen`，接着问连同计划进 `offered`；清单、文字查找的轮次把
+    没用上的下钻到单留给下一轮（`carry`），统计、临时统计的轮次清空，详情、按号查单的轮次留着（§10）。"""
+    by_query = {c.query: c for c in chosen}
+    for rec in recs:
+        q = str(rec.get("query") or "")
+        T.record.seen.append(moves.question_key(q))
+        c = by_query.get(q)
+        if c is not None:
+            T.record.seen.append(c.key)
+            T.record.offered.append({"query": q, "key": c.key, "move": c.move, "plan": c.plan})
+    keys = {c.key for c in chosen}
+    if any(d.skill in ("list_issues", "text_search") for d in done):
+        items = pool.items if pool is not None else []
+        T.record.carry = [c.to_carry() for c in items if c.carry and c.key not in keys][:workspace.CARRY_MAX]
+    elif any(d.skill in ("aggregate", "custom_stats") for d in done):
+        T.record.carry = []
+
+
+def _texts(events: Iterable[Event]) -> list[str]:
+    return [str(ev.data.get("text") or "") for ev in events if ev.type is EventType.DELTA]
 
 
 def plan_alternatives(T: Turn) -> list[dict[str, str]]:
@@ -1349,12 +1459,20 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     #: 没有结果的步骤是不是都已用业务话说明了（临时统计关掉、没算出来）；有没说明的，整轮都没结果时照常发整轮失败
     unexplained = False
     custom_used = False
-    templates: list[dict[str, str]] = []
+    #: 这一步自己的可点选项（文字查找的最小版、临时统计没算出来时的能力介绍），纠偏类
+    step_buttons: list[dict[str, str]] = []
     alternatives: list[dict[str, str]] = []
     month_noted = False
+    #: 答后建议（§9.5）：执行完的各步、本轮正文、候选与那次模型调用
+    done: list[moves.Done] = []
+    said: list[str] = []
+    no_conditions = any(r.skill == "list_issues" and list_issues.no_conditions(r.step) for r in shown)
+    suggesting: _Suggesting | None = None
     for i, r in enumerate(shown, start=1):
         if multi:
-            yield Event.delta(f"{'' if i == 1 else chr(10) * 2}**{i}. {_title(r)}**\n\n")
+            title = f"{'' if i == 1 else chr(10) * 2}**{i}. {_title(r)}**\n\n"
+            said.append(title)
+            yield Event.delta(title)
         when = r.step.get("when")
         if schema.is_ref(when) and not refs.get(when["ref"]):
             yield Event.delta("前一步的条件不成立，这一段不列。")
@@ -1396,11 +1514,16 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             return
         refs |= out.refs
         _record(T, r, out)
-        templates += _templates(r, out, refs)
+        done.append(_done(r, out))
+        if r.skill in ("text_search", "custom_stats"):
+            step_buttons += list(out.buttons)
         any_ok = any_ok or out.ok
         unexplained = unexplained or (not out.ok and not out.handled)
         any_empty = any_empty or out.empty
         any_found = any_found or out.found_any
+        said += _texts(out.events)
+        if i == len(shown) and not no_conditions:  # 最后一步：先开始挑答后建议，再发这一步的事件
+            suggesting = _start_suggest(T, done, said)
         for ev in out.events:
             yield ev
         dep = any(schema.is_ref(f.get("value")) for s in shown[i:] for f in
@@ -1410,14 +1533,19 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             yield Event.delta("\n\n这一步没有结果，后面依赖它的步骤不再执行。")
             break
     T.record.found = any_found
+    if suggesting is None and not no_conditions:  # 最后一步没走到（条件不成立、依赖的那步没有结果）
+        suggesting = _start_suggest(T, done, said)
     if not any_ok:
         T.record.failed = True
+        if suggesting is not None:
+            suggesting.cancel()
         if unexplained:
             yield Event.error(errors.TURN_FAILED_CODE, errors.TURN_FAILED, fatal=True)
             return
-        recs = suggestions.merge(templates)  # 已用业务话说明（临时统计关掉、没算出来）：只附能力介绍的按钮
+        recs = suggestions.merge(step_buttons)  # 已用业务话说明（临时统计关掉、没算出来）：只附能力介绍的按钮
         if recs:
             yield Event.suggestions(recs)
+        _offer(T, recs, [], done, None)
         return
     if C.counted:
         yield Event.delta("\n\n" + C.text())
@@ -1428,11 +1556,19 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         widened = await _relax_buttons(plan, runs, T)
     elif any_found:
         widened = _recent_buttons(runs, T)
-    if any(r.skill == "list_issues" and list_issues.no_conditions(r.step) for r in shown):
-        templates = greeting.buttons(T.access)
-    recs = suggestions.merge(alternatives, plan_alternatives(T), _alternative_buttons(T), widened, templates)
+    if no_conditions:  # 不带任何条件的清单：不给接着问，给能力介绍的 3 个按钮（§9.4）
+        T.record.seen += [k for d in done for k in moves.asked_keys(d)] + [moves.question_key(T.query)]
+        step_buttons = greeting.buttons(T.access)
+    seen = suggesting.seen if suggesting is not None else set()
+    fixed = [r for r in suggestions.merge(alternatives, plan_alternatives(T), _alternative_buttons(T), widened,
+                                          step_buttons) if moves.question_key(r["query"]) not in seen]
+    chosen: list[suggest.Chosen] = []
+    if suggesting is not None:
+        chosen = await suggesting.result(min(suggestions.MODEL_MAX, suggestions.MAX_BUTTONS - len(fixed)))
+    recs = suggestions.merge(fixed, [suggestions.follow_up(c.query) for c in chosen])
     if recs:
         yield Event.suggestions(recs)
+    _offer(T, recs, chosen, done, suggesting.pool if suggesting is not None else None)
 
 
 # ---------------------------------------------------------------------------- 重放上一轮（质疑重查、换图，S5）
