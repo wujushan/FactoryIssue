@@ -29,8 +29,8 @@ _BY_LABEL = {d.label: d for d in DOMAINS}
 _COMPARED = ("list_issues", "aggregate", "lookup_numbers", "text_search", "custom_stats")
 _TITLES = {"list_issues": "清单", "aggregate": "统计", "lookup_numbers": "按号查单", "issue_detail": "单张单详情",
            "text_search": "按文字找单", "custom_stats": "临时统计"}
-#: 重查的文字查找里有模型逐张判断的一组（「可能相关」）时那句（S6b）
-JUDGED_NOTE = "按文字找单里「可能相关」一类按意思找到的单要逐张判断，每次判断可能略有不同，这几张的出入不一定是数据变了"
+#: 重查的文字查找里有模型逐张判断的单（「可能相关」一组、类似问题）时那句（S6b；类似问题 2026-11-03 起也逐张判断）
+JUDGED_NOTE = "按文字找单里按意思找到的单（「可能相关」一组、类似问题）要逐张判断，每次判断可能略有不同，这几张的出入不一定是数据变了"
 #: 变化的单那张表「变化」一列的说法（总述「表格列名」，`present/columns.py` 导入时核对）
 TEXTS = {"added": columns.VERIFY_ADDED, "removed": columns.VERIFY_REMOVED}
 CHANGE_COLUMN = columns.VERIFY_CHANGE

@@ -234,7 +234,8 @@ CONFIG_FILES: list[ConfigFileSpec] = [
         description=(
             "回答参数。TOML：top_n（排名条数）、export_threshold（某域列出的超过多少张就导出，默认 20）、table_rows（表格给几张）、"
             "judge_max（「可能相关」每域最多判断几张）、rerank_max（每域最多重排几张）、"
-            "rerank_score_threshold（重排分阈值，不写即不启用）、custom_stats_enabled（是否允许临时统计）"
+            "rerank_score_threshold（「可能相关」的重排分阈值，不写即不启用）、"
+            "similar_rerank_floor（类似问题的重排分下限，默认 0.2，写 0 即不按分数筛）、custom_stats_enabled（是否允许临时统计）"
         ),
     ),
     ConfigFileSpec(

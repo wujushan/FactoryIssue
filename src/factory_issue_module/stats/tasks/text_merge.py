@@ -2,7 +2,8 @@
 
 每域：视图 → 条件 → 时间（与按词一路同一套）→ 按词命中的单（`kw_<域>`）与按意思找到、判断为相关的单（`sem_<域>`）
 合起来：前两组（或按词找到的）按建单时间倒序，「可能相关」按重排分（没有时按向量分）从高到低、同分按问题编号、
-最多 `third_max` 张；类似问题只有按意思一路，同样排、最多 `sim_max` 张。各组张数、表格、分析用的事实都在这里算。
+最多 `third_max` 张；类似问题只有按意思一路，判断为相近、重排分不低于下限的同样排、最多 `sim_max` 张（决策
+2026-11-03「类似问题逐张判断与分数下限」）。各组张数、表格、分析用的事实都在这里算。
 
 表格给前两组各自最近的 `table_rows` 张（不分组时按词找到的最近 `table_rows` 张），再接上「可能相关」的全部
 （不超过 `third_max`）；要导出时全部行经数据帧通道回传
@@ -52,15 +53,16 @@ def tm_sem(frame, threshold, related_only):
 
 
 def tm_scores(frame):
-    """按意思一路的明细帧 → {单 ID: [重排分, 向量分]}（保留 4 位小数，没有的为 None）。只给类似问题的分数分布测量用
-    （探测 Z1）：沙箱外只记日志，不进回答。"""
+    """按意思一路的明细帧 → {单 ID: [重排分, 向量分, 判断]}（分数保留 4 位小数，没有的为 None；判断 1 相近、0 不相近、
+    None 没交去判断或那一批出错）。只给类似问题的分数日志用（探测 Z1 起记）：沙箱外只记日志，不进回答。"""
     out = {}
     if frame is None or len(frame) == 0:
         return out
     for r in frame.to_dict("records"):
         iid = fi_int(r.get("issue_id"))
         if iid is not None and iid not in out:
-            out[iid] = [fi_round(fi_num(r.get("rerank")), 4), fi_round(fi_num(r.get("score")), 4)]
+            verdict = (1 if bool(r.get("related")) else 0) if bool(r.get("judged")) else None
+            out[iid] = [fi_round(fi_num(r.get("rerank")), 4), fi_round(fi_num(r.get("score")), 4), verdict]
     return out
 
 
@@ -110,15 +112,17 @@ def run(data):
             v, missing = vw_time(v, P["times"].get(dom))
         hits = tm_hits(data.get("kw_" + dom))
         sim = bool(T.get("sim"))
-        sem = tm_sem(data.get("sem_" + dom), T.get("threshold"), not sim)
+        # 判断为相近（相关）、重排分不低于阈值的才要；类似问题的阈值是它自己的下限（决策 2026-11-03）
+        sem = tm_sem(data.get("sem_" + dom), T.get("threshold"), True)
         numbers = {int(i): str(n) for i, n in zip(v["_id"].tolist(), v["_number"].tolist())} if len(v) else {}
         # 先去掉不在本步范围里的（已删除、不合条件），排好再截条数：不让它们占掉名额
         sem = tm_order([x for x in sem if x[0] not in hits and x[0] in numbers], numbers)
-        # 类似问题：本步范围内全部候选的分数，按表格的先后（前 `g3` 个就是表格里的行），截条数之前取
+        # 类似问题：本步范围内全部候选的分数与判断（筛之前，按相近程度排），只进日志
         sem_scores = []
         if sim:
             got = tm_scores(data.get("sem_" + dom))
-            sem_scores = [got.get(i, [None, None]) for i, _c, _v in sem]
+            every = tm_order([x for x in tm_sem(data.get("sem_" + dom), None, False) if x[0] in numbers], numbers)
+            sem_scores = [got.get(i, [None, None, None]) for i, _c, _v in every]
         sem = [(i, c) for i, c, _v in sem][: int(T["sim_max"] if sim else T["third_max"])]
         vk = v[v["_id"].apply(lambda x: int(x) in hits)].copy() if len(v) else v.copy()
         if len(vk):

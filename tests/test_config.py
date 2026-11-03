@@ -106,6 +106,7 @@ def test_answer_params_default():
         10, 20, 20, 30, 100,
     )
     assert p.rerank_score_threshold is None and p.custom_stats_enabled is True
+    assert p.similar_rerank_floor == 0.2
 
 
 # ---------------------------------------------------------------- validate_config 正反例
@@ -215,11 +216,14 @@ def test_factory_regions_accepts_and_rejects():
 def test_answer_params_accepts_and_rejects():
     validate(ANSWER_PARAMS, "top_n = 5\nrerank_score_threshold = 0.3\ncustom_stats_enabled = false\n")
     assert files.parse_answer_params("rerank_score_threshold = 1\n").rerank_score_threshold == 1.0
+    assert files.parse_answer_params("similar_rerank_floor = 0\n").similar_rerank_floor == 0.0
     for text, message in [
         ("top_n = 0\n", "正整数"),
         ("top_n = true\n", "正整数"),
         ("table_rows = 2.5\n", "正整数"),
         ("rerank_score_threshold = 1.5\n", "0 到 1"),
+        ("similar_rerank_floor = -0.1\n", "0 到 1"),
+        ('similar_rerank_floor = "0.2"\n', "0 到 1"),
         ('custom_stats_enabled = "yes"\n', "true 或 false"),
         ("topn = 5\n", "不认识"),
     ]:

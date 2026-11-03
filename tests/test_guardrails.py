@@ -216,7 +216,8 @@ def _summary_all(messages: list[dict]) -> dict:
 
 
 #: 文字查找三种模型调用按 system 认（`fakes.FakeLLM.routes`）
-_S6_ROUTES = {"是否与用户要找的话题有关": _judge_all, "浓缩成一两句话": _summary_all,
+_S6_ROUTES = {"是否与用户要找的话题有关": _judge_all, "与用户描述的问题现象是不是同一类问题": _judge_all,
+              "浓缩成一两句话": _summary_all,
               "定按文字找单时用哪些说法": lambda m: {"terms": ["TP"]}}
 _S6_LONG = {1: {"desc": "客户现场反馈 A920 在批量 300 台中有 12 台开机后触摸屏偶发失灵，点击图标无反应，重启后恢复，影响出货",
                 "reason": "TP 排线压伤"},

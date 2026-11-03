@@ -148,6 +148,8 @@ class AnswerParams:
     #: 答后建议由模型挑（false 时按代码的默认顺序取，设计 §9.5）；等模型的秒数
     suggest_model: bool = True
     suggest_seconds: int = 5
+    #: 类似问题的重排分下限（0 到 1；写 0 即不按分数筛），只管类似问题，「可能相关」仍看 `rerank_score_threshold`
+    similar_rerank_floor: float = 0.2
 
 
 # ---------------------------------------------------------------- Markdown 两种形态
@@ -383,7 +385,7 @@ def segmentation_from(data: Mapping[str, Any]) -> Segmentation:
 
 _ANSWER_KEYS = (
     "top_n", "export_threshold", "table_rows", "judge_max", "rerank_max",
-    "rerank_score_threshold", "custom_stats_enabled", "suggest_model", "suggest_seconds",
+    "rerank_score_threshold", "similar_rerank_floor", "custom_stats_enabled", "suggest_model", "suggest_seconds",
 )
 #: 等模型挑答后建议的秒数的范围（设计 §11）
 SUGGEST_SECONDS_RANGE = (1, 30)
@@ -402,9 +404,8 @@ def answer_params_from(data: Mapping[str, Any]) -> AnswerParams:
     }
     threshold = merged.get("rerank_score_threshold")
     if threshold is not None:
-        if type(threshold) not in (int, float) or not 0 <= threshold <= 1:
-            raise ConfigFormatError(f"rerank_score_threshold 要写 0 到 1 之间的数，现在是 {threshold!r}")
-        threshold = float(threshold)
+        threshold = _unit("rerank_score_threshold", threshold)
+    floor = _unit("similar_rerank_floor", merged["similar_rerank_floor"])
     flags = {}
     for key in ("custom_stats_enabled", "suggest_model"):
         if type(merged[key]) is not bool:
@@ -414,7 +415,15 @@ def answer_params_from(data: Mapping[str, Any]) -> AnswerParams:
     low, high = SUGGEST_SECONDS_RANGE
     if type(seconds) is not int or not low <= seconds <= high:
         raise ConfigFormatError(f"suggest_seconds 要写 {low} 到 {high} 之间的整数（秒），现在是 {seconds!r}")
-    return AnswerParams(**ints, rerank_score_threshold=threshold, **flags, suggest_seconds=seconds)
+    return AnswerParams(**ints, rerank_score_threshold=threshold, **flags, suggest_seconds=seconds,
+                        similar_rerank_floor=floor)
+
+
+def _unit(key: str, value: Any) -> float:
+    """0 到 1 之间的数（重排分的阈值、下限）。"""
+    if type(value) not in (int, float) or not 0 <= value <= 1:
+        raise ConfigFormatError(f"{key} 要写 0 到 1 之间的数，现在是 {value!r}")
+    return float(value)
 
 
 #: issue 必须先列：brazil、attachment 不写时与它相同

@@ -54,6 +54,8 @@ ANSWER_PARAMS: dict[str, Any] = {
     "table_rows": 20,
     "judge_max": 30,
     "rerank_max": 100,
+    #: 类似问题的重排分下限，低于它的不列（决策 2026-11-03「类似问题逐张判断与分数下限」，探测 Z1）
+    "similar_rerank_floor": 0.2,
     "custom_stats_enabled": True,
     #: 答后建议（设计 §9.5、决策 2026-11-02「答后建议改由模型挑」）
     "suggest_model": True,

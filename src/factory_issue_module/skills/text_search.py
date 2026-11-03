@@ -42,6 +42,8 @@ logger = structlog.get_logger(__name__)
 EXPORT_FILENAME = "按文字找到的问题单.xlsx"
 THIRD_MAX = 10
 SIM_MAX = 10
+#: 类似问题每域交模型判断的张数（最相近的前几张，一批）；比 `SIM_MAX` 小时表格列不满
+SIM_JUDGE = 10
 CONTEXT_MAX = 120
 #: 统计口径里的找法（总述「统计口径说明」文字查找一行）
 METHODS = {"关键词": "关键词搜索", "话题": "涉及某个话题", "类似问题": "类似问题", "点名字段": "点名字段",
@@ -314,7 +316,7 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
     out.refs = {f"{run.sid}.{k}": v for k, v in (res.get("refs") or {}).items()}
     out.refs[f"{run.sid}.issues"] = X.issues_from_frames(outcome_frames)
     out.extra = {"text": {"key": terms.key(run.step), "terms": list(dict.fromkeys(tp.used + tp.used_approach)),
-                          "judged": tp.semantic is not None and tp.mode != "类似问题"}}
+                          "judged": tp.semantic is not None}}
     if not present:
         out.segs = list(segs)
         if caliber:
@@ -374,26 +376,29 @@ async def _search(run: Any, T: Any, R: Ready) -> tuple[dict[str, Any], dict[str,
     P2["tm"] = {"labels": labels, "group_title": columns.TEXT_GROUP, "context_title": columns.TEXT_CONTEXT,
                 "columns": cols, "table_rows": T.answer.table_rows, "export": (run.step.get("params") or {}).get("export") is True,
                 "export_threshold": T.answer.export_threshold, "export_ok": True, "third_max": THIRD_MAX,
-                "sim_max": SIM_MAX, "sim": tp.mode == "类似问题", "threshold": T.answer.rerank_score_threshold}
+                "sim_max": SIM_MAX, "sim": tp.mode == "类似问题",
+                # 类似问题按自己的下限筛（只管类似问题），「可能相关」仍按 `rerank_score_threshold`（缺省不启用）
+                "threshold": T.answer.similar_rerank_floor if tp.mode == "类似问题" else T.answer.rerank_score_threshold}
     datasets = {**R.frames, **{k: v for k, v in kw_frames.items() if k.startswith("kw_")}, **sem_frames}
     outcome2 = await runner.run(T.ctx, "text_merge", datasets, P2, return_frames=True)
     if not outcome2.ok:
         return None
     res = outcome2.result or {}
     if tp.semantic is not None and tp.mode == "类似问题":
-        _log_sim_scores(tp.semantic["query"], res.get("segments") or [])
+        _log_sim_scores(tp.semantic["query"], res.get("segments") or [], T.answer.similar_rerank_floor)
     return res, dict(getattr(outcome2, "frames", None) or {}), counts, sem_notes, crowded
 
 
-def _log_sim_scores(query: str, segs: Sequence[dict[str, Any]]) -> None:
-    """类似问题的分数分布测量（探测 Z1）：每域一行日志，`scores` 是本步范围内全部候选的 [重排分, 向量分]，与表格同序，
-    前 `listed` 个就是表格里的行。只记分数，不记文字与单号；记完从段里拿掉，不进呈现与工作区。"""
+def _log_sim_scores(query: str, segs: Sequence[dict[str, Any]], floor: float) -> None:
+    """类似问题的分数分布（探测 Z1 起记，留着供以后调下限）：每域一行日志，`scores` 是本步范围内全部候选的
+    [重排分, 向量分, 判断]，按相近程度排；判断 1 为相近、0 为不相近、None 为没交去判断或那一批出错。列出的是判断为 1、
+    重排分不低于 `floor` 的前 `listed` 张。只记分数，不记文字与单号；记完从段里拿掉，不进呈现与工作区。"""
     for seg in segs:
         scores = seg.pop("sem_scores", None)
         if scores is None:
             continue
         logger.info("factory_issue_sim_scores", domain=seg.get("domain"), query=query, listed=_n(seg, "g3"),
-                    scores=scores)
+                    floor=floor, scores=scores)
 
 
 async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mapping[str, pd.DataFrame],
@@ -402,14 +407,18 @@ async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mappin
     统计口径要写的几句, 候选是不是多到来不及逐张看完)。
 
     候选太多（设计 §5.4 第三种信号）：某域按意思找取回的张数到了上限（`top_n`，取回的就是最相近的那一批，后面可能
-    还有），或带 ＊ 的候选并进来后超过判断上限 `judge_max`（多出的没判）。类似问题不逐张判断，不算。"""
+    还有），或带 ＊ 的候选并进来后超过判断上限 `judge_max`（多出的没判）。类似问题只判最相近的 `SIM_JUDGE` 张，不算。
+
+    类似问题（决策 2026-11-03「类似问题逐张判断与分数下限」）：每域按平台给的先后取前 `SIM_JUDGE` 张交模型判断，
+    判为相近、重排分不低于 `similar_rerank_floor` 的才列（下限在 ⑥ 的沙箱里比，`handle()` 不比大小，所以低于下限的
+    也会交去判断）。某批判断出错时那几张按相近程度照列，开头与统计口径写明没能逐张判断。"""
     if tp.semantic is None:
         return {}, [], False
     S = tp.semantic
     sim = S["kind"] == "sim"
     judge_max = int(T.answer.judge_max)
-    # 类似问题向重排要回全部候选的分（重排本来就给 `top_k` 张都打分，多回几行不多算），表格仍由沙箱截到
-    # `SIM_MAX` 张；全部分数供分布测量（探测 Z1，`_log_sim_scores`）
+    # 类似问题向重排要回全部候选的分（重排本来就给 `top_k` 张都打分，多回几行不多算）：表格仍由沙箱截到
+    # `SIM_MAX` 张，全部分数进日志，供以后调下限（`_log_sim_scores`）
     top_n = semantic.TOP_K if sim else max(judge_max, THIRD_MAX)
 
     def candidates(d: Domain) -> list[int] | None:
@@ -452,18 +461,29 @@ async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mappin
                 items += [(i, stars[i], None, None) for i in extra if i not in seen]  # 向量表里没有段的：排在后面
                 crowded = crowded or len(items) > judge_max
         lists[d.label] = items
-    flags: dict[str, list[bool | None]] = {}
-    if not sim:
-        flags = await judge.judge(getattr(T.ctx, "llm", None), tp.description,
-                                  {dom: [x[1] for x in items] for dom, items in lists.items()}, judge_max,
-                                  tp.guides)
+    llm = getattr(T.ctx, "llm", None)
+    if sim:  # 类似问题：每域只判最相近的前 `SIM_JUDGE` 张（一批），重排分下限在 ⑥ 的沙箱里筛
+        flags = await judge.judge(llm, str(S["query"]), {dom: [x[1] for x in items[:SIM_JUDGE]]
+                                                          for dom, items in lists.items()}, SIM_JUDGE, similar=True)
+    else:
+        flags = await judge.judge(llm, tp.description, {dom: [x[1] for x in items] for dom, items in lists.items()},
+                                  judge_max, tp.guides)
+    unjudged = False
     frames: dict[str, pd.DataFrame] = {}
     for dom, items in lists.items():
-        related = flags.get(dom) or [True] * len(items)
+        got_flags = flags.get(dom) or []
+        rows = []
+        for k, (i, t, r, s) in enumerate(items):
+            flag = got_flags[k] if k < len(got_flags) else None
+            judged = flag is not None
+            related = bool(flag)
+            if sim and k < SIM_JUDGE and not judged:  # 那一批出错：按相近程度照列，开头与统计口径写明
+                related, unjudged = True, True
+            rows.append([i, k, _clip(t), r, s, related, judged])
         frames["sem_" + dom] = pd.DataFrame(
-            [[i, k, _clip(t), r, s, bool(related[k]) if k < len(related) else False]
-             for k, (i, t, r, s) in enumerate(items)],
-            columns=["issue_id", "rank", "context", "rerank", "score", "related"])
+            rows, columns=["issue_id", "rank", "context", "rerank", "score", "related", "judged"])
+    if unjudged:
+        notes.append(errors.SIMILAR_UNJUDGED)
     return frames, notes, crowded
 
 
@@ -545,7 +565,8 @@ def _caliber(C: cal.Caliber, run: Any, tp: TermPlan, segs: Sequence[dict[str, An
         X._add_caliber(C, run, seg, [], [])
     method = METHODS.get(tp.mode, tp.mode)
     if tp.mode == "类似问题":
-        words, complete = "按现象描述找意思相近的单", f"最多 {SIM_MAX} 张、按相近程度排序，不保证完整"
+        words = "按现象描述找意思相近的单"
+        complete = f"逐张判断是同一类现象的才列出，最多 {SIM_MAX} 张、按相近程度排序，不保证完整"
     elif tp.user_words:
         logic = f"（{'都要出现' if tp.logic == '和' else '出现任一个'}）" if len(tp.used) > 1 else ""
         words, complete = f"按{'、'.join(tp.used)}这些词{logic}", "列出全部命中的单"
