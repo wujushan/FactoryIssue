@@ -62,6 +62,35 @@ async def test_write_falls_back_when_model_errors():
     assert await narrative.write(llm, MANIFEST, Q, None, None, FACTS, {}, "共 37 张。") == "共 37 张。"
 
 
+def test_listed_rows_vouch_for_issue_numbers_not_for_numbers():
+    """【列出的单】只用来核点名的问题编号与名称，单上文字里的数不放行（决策 2026-11-03「回答骨架与排版」）。"""
+    rows = "国内｜ZC9901001｜问题描述：镜片脏污 7 处｜已结案"
+    assert [b["句子"] for b in narrative.check(Q, None, None, FACTS, "最像的是 ZC9901001。", {}, rows)["bad"]] == []
+    assert _bad("最像的是 ZC9901001。") == ["最像的是 ZC9901001"]  # 没给【列出的单】时照旧不合格
+    bad = narrative.check(Q, None, None, FACTS, "ZC9901001 有 7 处脏污。", {}, rows)["bad"]
+    assert [b["事实里没有的数"] for b in bad] == [[7.0]]
+
+
+async def test_write_requires_the_first_to_be_named():
+    """问「哪个最多」时第一名必须点到：没点到重写一次，仍没点到用模板句。"""
+    llm = FakeLLM(["共 37 张。其次是 L1400。", "共 37 张，A920 最多。其次是 L1400。"])
+    text = await narrative.write(llm, MANIFEST, Q, None, None, FACTS, {}, "模板句。", must=["A920"])
+    assert text == "共 37 张，A920 最多。其次是 L1400。" and "要点名最多的：A920" in llm.calls[1][-1]["content"]
+    llm = FakeLLM(["共 37 张。其次是 L1400。", "共 37 张。其次是 L1400。"])
+    assert await narrative.write(llm, MANIFEST, Q, None, None, FACTS, {}, "模板句。", must=["A920"]) == "模板句。"
+
+
+async def test_write_passes_rows_guide_and_drops_dimensions_when_asked():
+    llm = FakeLLM(["国内有现象相近的问题。最像的是 ZC9901001，已结案。"])
+    rows = "国内｜ZC9901001｜问题描述：镜片脏污｜已结案"
+    text = await narrative.write(llm, MANIFEST, Q, None, "巴西无权限，未计入。", FACTS, {}, "模板句。", rows=rows,
+                                 guide="按写法写。", dims=False)
+    assert text.startswith("国内有现象相近的问题")
+    system, user = llm.calls[0][0]["content"], llm.calls[0][1]["content"]
+    assert system == narrative.NARRATIVE_MODULE_SYSTEM  # 不带分析维度
+    assert "【列出的单】\n" + rows in user and "【写法】按写法写。" in user and "【说明】巴西无权限，未计入。" in user
+
+
 def test_sandbox_script_strips_internal_imports_and_compiles():
     script = runner.script("list", {"x": 1})
     assert "factory_issue_module" not in script and "__future__" not in script

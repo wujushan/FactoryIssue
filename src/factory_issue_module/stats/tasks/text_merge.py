@@ -165,6 +165,8 @@ def run(data):
             "shown_kw": int(len(head_k)), "shown_g1": shown_g1, "shown_g2": shown_g2,
             "cut_g1": shown_g1 < g1, "cut_g2": shown_g2 < g2,
             "ids_shown": [int(x) for x in shown["_id"].tolist()] if len(shown) else [],
+            # 表格每行是否未结案（与行同序）：交写结论的模型看，点名时说清结案没有（决策 2026-11-03「回答骨架与排版」）
+            "open_shown": [bool(x) for x in shown["_unclosed"].tolist()] if len(shown) else [],
             "truncated": int(len(head_k)) < n_kw, "empty": listed == 0, "few": listed <= 2,
             "exported": False, "facts": facts, "caliber": {"未计入": missing},
             **({"sem_scores": sem_scores} if sim else {}),

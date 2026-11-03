@@ -382,6 +382,19 @@ def is_factory_list(q: Query) -> bool:
         and re.search(r"SELECT DISTINCT \S*\[?FACTORY\]? FROM", sql) is not None
 
 
+def headed_tables(events: list[Any]) -> list[tuple[str, dict[str, Any]]]:
+    """每张表和它前面那个小标题（去掉粗体记号）。表格不带标题，小标题写在正文里（决策 2026-11-03「回答骨架与排版」）。"""
+    out: list[tuple[str, dict[str, Any]]] = []
+    head = ""
+    for event in events:
+        kind = getattr(event.type, "value", event.type)
+        if kind == "delta" and str(event.data.get("text") or "").strip().startswith("**"):
+            head = str(event.data["text"]).strip().strip("*")
+        elif kind == "table":
+            out.append((head, event.data))
+    return out
+
+
 async def run(harness: Harness, query: str) -> list[Any]:
     from forge_core.module import ModuleRequest
 

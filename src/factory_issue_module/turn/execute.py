@@ -65,6 +65,7 @@ from factory_issue_module.present import (
     charts,
     columns,
     export,
+    layout,
     links,
     moves,
     narrative,
@@ -667,21 +668,19 @@ def _add_caliber(C: cal.Caliber, run: StepRun, seg: dict[str, Any], dims: Sequen
         C.item(cal.small_sample(str(d), int(n)))
 
 
-def conclusion_first(events: list[Event], said: Event, at: int) -> None:
-    """先给结论、再给表格与图表（总述「回答怎么组织」，开发者 2026-11-02 定）：分析段插在开头那句之后（`at`），
-    后面接表格；分析段为空（没写出来、退回空模板）时不插。"""
-    text = str(said.data.get("text") or "")
-    if not text.strip():
-        return
-    events.insert(min(max(at, 0), len(events)), Event.delta(text.rstrip() + "\n\n"))
-
-
 async def _narrate(T: Turn, table_text: str | None, note: str | None, facts: dict[str, Any], fallback: str,
-                   time_text: str | None) -> Event:
+                   time_text: str | None, *, rows: str | None = None, guide: str | None = None, dims: bool = True,
+                   must: Sequence[str] = ()) -> str:
+    """一段的结论（决策 2026-11-03「回答骨架与排版」）：模型写，核数不过、没点全第一名时用 `fallback`（程序的模板句）。
+    `note` 是程序写在结论上面的提示行，交模型看、不让它重复。"""
     facts = {"时间范围": time_text or "不限建单时间", **facts}
-    text = await narrative.write(getattr(T.ctx, "llm", None), T.manifest, T.query, table_text, note, facts,
-                                 T.entities, fallback)
-    return Event.delta("\n\n" + text)
+    text = await narrative.write(getattr(T.ctx, "llm", None), T.manifest, T.query, table_text, note or None, facts,
+                                 T.entities, fallback, rows=rows, guide=guide, dims=dims, must=must)
+    return text.strip()
+
+
+def _future(run: StepRun) -> str:
+    return "，这段时间还没到" if any(s.future for s in run.spans) else ""
 
 
 def _absent_note(d: Domain, absent: Sequence[str]) -> str:
@@ -803,13 +802,38 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
         await summaries.fill_tables(T.ctx, segs, text_ok)
         if run.add_reasons:
             await _add_reasons(T, segs)
-    if head:
-        out.events.append(Event.delta("。".join(dict.fromkeys(head)) + "。\n\n"))
+        head += _desc_notes(keys_by, T)
+    head += _breakdown_notes(segs)
+    # 提示行（决策 2026-11-03「回答骨架与排版」）：结论之上一段；也交写结论的模型看，不让它重复
+    out.events += layout.para(head)
+    note = layout.sentences(head)
     if run.skill == "list_issues":
-        out.events += await _present_lists(run, T, res, segs, time_text, C, keys_by)
+        out.events += await _present_lists(run, T, res, segs, time_text, C, note)
         out.exported = await _export_lists(T, res, getattr(outcome, "frames", None) or {}, text_ok)
     else:
-        out.events += await _present_aggs(run, T, segs, time_text, C, all_dims, metrics)
+        out.events += await _present_aggs(run, T, segs, time_text, C, all_dims, metrics, note)
+    return out
+
+
+def _desc_notes(keys_by: Mapping[str, list[str]], T: Turn) -> list[str]:
+    """问题描述一列有、而本域文字查找表不可用的域（§9.2，总述「清单默认列」）：开头说明一次。"""
+    with_desc = [label for label, keys in keys_by.items() if "desc" in keys]
+    lacking = [label for label in with_desc if _BY_LABEL[label] not in T.access.text_search]
+    if not lacking:
+        return []
+    who = "" if len(lacking) == len(with_desc) else "、".join(lacking) + "的"
+    return [f"{who}问题描述摘要{columns.DESC_UNAVAILABLE}，其他列照常"]
+
+
+def _breakdown_notes(segs: Sequence[dict[str, Any]]) -> list[str]:
+    """一个说法对上几个部门时，开头写明「按以下几个部门统计：研发一部 2 张、研发二部 1 张」（总述「部门名称怎么对」；
+    张数来自沙箱）。几域一起时带域名。"""
+    multi = len({str(s.get("domain")) for s in segs}) > 1
+    out = []
+    for seg in segs:
+        for _title, pairs in seg.get("breakdowns") or []:
+            head = str(seg.get("domain") or "") if multi else ""
+            out.append(f"{head}按以下几个部门统计：" + "、".join(f"{name} {n} 张" for name, n in pairs))
     return out
 
 
@@ -830,125 +854,117 @@ async def _export_lists(T: Turn, res: Mapping[str, Any], frames: Mapping[str, pd
 
 
 async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Sequence[dict[str, Any]],
-                         time_text: str | None, C: cal.Caliber, keys_by: Mapping[str, list[str]]) -> list[Event]:
-    """一域：开头、表、分析。几域：开头先给各域张数与合计，每域一张表，分析段整步一次（总述「跨域规则」）。"""
-    events: list[Event] = []
+                         time_text: str | None, C: cal.Caliber, note: str) -> list[Event]:
+    """结论 → 每域一节：小标题（张数）、表格、表格下面一句（决策 2026-11-03「回答骨架与排版」）。几域时结论整步一次
+    （总述「跨域规则」清单呈现）。结论由模型写；只有一两张、模型没写出来时用 `list_issues.conclusion` 的模板句。"""
     multi = len(segs) > 1
-    scope = _scope(time_text)
-    # 问题描述一列有、而本域文字查找表不可用的域（§9.2）：开头说明一次
-    with_desc = [label for label, keys in keys_by.items() if "desc" in keys]
-    lacking = [label for label in with_desc if _BY_LABEL[label] not in T.access.text_search]
-    if multi:
-        text = list_issues.cross_opening(res, scope)
-        if lacking:
-            who = "" if len(lacking) == len(with_desc) else "、".join(lacking) + "的"
-            text = text[:-1] + f"；{who}问题描述摘要{columns.DESC_UNAVAILABLE}，其他列照常。"
-        events.append(Event.delta(text + "\n\n"))
+    order = list_issues.order_text(run.step)
+    sections: list[Event] = []
     described: list[str] = []
-    narrate: tuple[str, dict[str, Any]] | None = None
-    for i, seg in enumerate(segs):
+    for seg in segs:
         dom = _BY_LABEL.get(seg.get("domain", ""), Domain.DOMESTIC)
-        if multi and i:
-            events.append(Event.delta("\n\n"))
-        got, table_text = _present_list(run, T, seg, dom, time_text, C, dom.label in lacking and not multi)
-        events += got
+        got, table_text = _present_list(run, T, seg, dom, C, multi, order)
+        sections += got
         if table_text:
             described.append(table_text)
-            if not multi and not seg.get("few"):
-                narrate = (table_text, seg.get("facts") or {})
-    if multi and not res.get("few_total") and described:
-        narrate = ("；".join(described), {"合计张数": res.get("found_total", 0), "各域张数": res.get("by_domain") or [],
-                                         **{s["domain"]: s.get("facts") or {} for s in segs if not s.get("empty")}})
-    if narrate is not None:
-        said = await _narrate(T, narrate[0], None, narrate[1], list_issues.fallback(narrate[1]), time_text)
-        conclusion_first(events, said, 1)  # 开头（各域张数）之后、表格之前
-    return events
+    fallback = list_issues.conclusion(res, segs, _scope(time_text), _future(run))
+    shown = [s for s in segs if not s.get("empty")]
+    if multi:
+        few = bool(res.get("few_total"))
+        facts = {"合计张数": res.get("found_total", 0), "各域张数": res.get("by_domain") or [],
+                 **{s["domain"]: s.get("facts") or {} for s in shown}}
+    else:
+        few = not shown or bool(shown[0].get("few"))
+        facts = (shown[0].get("facts") or {}) if shown else {}
+    text = fallback
+    if described and not few:
+        text = await _narrate(T, "；".join(described), note, facts, fallback, time_text)
+    return [Event.delta(text), *sections]
 
 
-def _present_list(run: StepRun, T: Turn, seg: dict[str, Any], dom: Domain, time_text: str | None,
-                  C: cal.Caliber, desc_note: bool) -> tuple[list[Event], str | None]:
-    events: list[Event] = []
-    scope = _scope(time_text)
-    if seg.get("empty"):
-        future = any(s.future for s in run.spans)
-        events.append(Event.delta(f"{dom.label}{scope}没有查到单" + ("，这段时间还没到" if future else "") + "。"))
-        _add_caliber(C, run, seg, [], [])
-        return events, None
-    text = list_issues.opening(seg, dom.label, scope, list_issues.order_text(run.step)) + _breakdown_text(seg)
-    if desc_note:
-        text += f"；问题描述摘要{columns.DESC_UNAVAILABLE}，其他列照常"
-    events.append(Event.delta(text + "。"))
-    title = f"{dom.label}问题单" + (f"：{time_text}" if time_text else "")
-    ids = (seg.get("ids_shown") or None)
-    events.append(tables.event(seg["table"], title, link_ids=ids, domain=dom, sites=T.sites))
+def _present_list(run: StepRun, T: Turn, seg: dict[str, Any], dom: Domain, C: cal.Caliber, multi: bool,
+                  order: str | None) -> tuple[list[Event], str | None]:
+    """一域一节。没有单的域：几域一起时原位置一句，只有这一域时由结论说。"""
     _add_caliber(C, run, seg, [], [])
-    return events, tables.describe(title, seg["table"], seg.get("shown"))
+    if seg.get("empty"):
+        return ([Event.delta(f"{dom.label}没有查到单。")] if multi else []), None
+    head = list_issues.heading(seg, dom.label)
+    events = [layout.heading(head),
+              tables.event(seg["table"], "", link_ids=seg.get("ids_shown") or None, domain=dom, sites=T.sites)]
+    events += layout.para([list_issues.caption(seg, order)])
+    return events, tables.describe(head, seg["table"], seg.get("shown"))
 
 
 # ---------------------------------------------------------------------------- 统计
 
 
 async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], time_text: str | None,
-                        C: cal.Caliber, dims: Sequence[dict[str, Any]], metrics: Sequence[str]) -> list[Event]:
-    """每段：开头、表、图；同一维度按域分别给的几张表（处理环节、状态）合写一段分析。"""
+                        C: cal.Caliber, dims: Sequence[dict[str, Any]], metrics: Sequence[str], note: str) -> list[Event]:
+    """每个维度：结论 → 每张表一节（小标题写合计或总数、表、图）。同一维度按域分别给的几张表（处理环节、状态）共用
+    一段结论（决策 2026-11-03「回答骨架与排版」）。结论由模型写，问「哪个最多」时第一名（并列的全部）必须点到；
+    模型没写出来、只有概况一行时用 `aggregate.opening` 的模板句。"""
     events: list[Event] = []
     groups: dict[str, list[dict[str, Any]]] = {}
     for seg in segs:
         groups.setdefault(f"{seg.get('kind')}:{seg.get('title')}", []).append(seg)
-    for key, members in groups.items():
+    p = run.step.get("params") or {}
+    ranking = bool(p.get("ranking") or p.get("top"))
+    for members in groups.values():
+        sections: list[Event] = []
         described: list[str] = []
+        openings: list[str] = []
         facts: dict[str, Any] = {}
-        start = len(events)
-        for i, seg in enumerate(members):
-            if events and i:
-                events.append(Event.delta("\n\n"))
-            got, narr = _present_agg(run, T, seg, time_text, C, dims, metrics)
-            events += got
+        must: list[str] = []
+        for seg in members:
+            got, narr, opening = _present_agg(run, T, seg, time_text, C, dims, metrics)
+            sections += got
+            openings.append(opening)
             if narr is not None:
                 described.append(narr[0])
                 facts = narr[1] if len(members) == 1 else {**facts, seg.get("domain", ""): narr[1]}
+                if ranking:
+                    must += [str(x) for x in (seg.get("facts") or {}).get("第一") or []]
+        fallback = layout.sentences(openings)
+        text = fallback
         if described:
-            said = await _narrate(T, "；".join(described), None, facts, "", time_text)
-            conclusion_first(events, said, start + 1)  # 这一段开头那句之后、表格与图之前
-        if key != list(groups)[-1]:
-            events.append(Event.delta("\n\n"))
+            text = await _narrate(T, "；".join(described), note, facts, fallback, time_text,
+                                  must=list(dict.fromkeys(must)))
+        events += [Event.delta(text), *sections]
     return events
 
 
 def _present_agg(run: StepRun, T: Turn, seg: dict[str, Any], time_text: str | None, C: cal.Caliber,
                  dims: Sequence[dict[str, Any]], metrics: Sequence[str]
-                 ) -> tuple[list[Event], tuple[str, dict[str, Any]] | None]:
-    events: list[Event] = []
+                 ) -> tuple[list[Event], tuple[str, dict[str, Any]] | None, str]:
+    """一张表一节。返回 (这一节的事件, 交写结论的模型看的 (表格说明, 事实), 模板句)。"""
     scope = _scope(time_text)
     label = str(seg.get("domain") or "")
     if seg.get("kind") == "group":
         dims = [d for d in dims if d.get("title") == seg.get("title")]
+    _add_caliber(C, run, seg, dims, metrics)
     if (seg.get("found") or 0) == 0 and seg.get("kind") != "compare":
-        future = any(s.future for s in run.spans)
-        events.append(Event.delta(f"{label}{scope}没有查到单" + ("，这段时间还没到" if future else "") + "。"))
-        _add_caliber(C, run, seg, dims, metrics)
-        return events, None
+        return [], None, f"{label}{scope}没有查到单{_future(run)}"
     if seg.get("kind") == "group" and not (seg.get("table") or {}).get("rows"):
-        events.append(Event.delta(f"{label}{scope}共 {seg.get('found', 0)} 张，没有可以按{seg.get('title')}统计的单。"))
-        _add_caliber(C, run, seg, dims, metrics)
-        return events, None
-    events.append(Event.delta(aggregate.opening(seg, label, scope) + _breakdown_text(seg) + "。"))
+        return [], None, f"{label}{scope}共 {seg.get('found', 0)} 张，没有可以按{seg.get('title')}统计的单"
     suffix = f"：{time_text}" if time_text else ""
     title = f"{label}按{seg.get('title')}统计{suffix}" if seg.get("kind") == "group" else f"{label}统计{suffix}"
+    head = aggregate.heading(seg, label)
+    events = [layout.heading(head)]
     if seg.get("table"):
-        events.append(tables.event(seg["table"], title))
+        events.append(tables.event(seg["table"], ""))
+    events += layout.para([aggregate.caption(seg)])
     if seg.get("bins"):
-        events.append(tables.event(seg["bins"], f"{label}结案周期分档{suffix}"))
+        events += [layout.heading(f"{label}结案周期分档"), tables.event(seg["bins"], "")]
     item = chart_item(seg, dims, f"{label}结案周期分档{suffix}" if seg.get("bins") else title)
     if item is not None:
         T.record.charts.append(item)
         user_chart = (run.step.get("params") or {}).get("chart")
         events += chart_events(T, item, user_chart if isinstance(user_chart, str) else None)
     events += _rate_lists(seg, T, suffix)
-    _add_caliber(C, run, seg, dims, metrics)
+    opening = aggregate.opening(seg, label, scope, tie=False)
     if seg.get("kind") == "overview" and not seg.get("cross") and not (seg.get("facts") or {}).get("按问题类型"):
-        return events, None
-    return events, (tables.describe(title, seg.get("table") or {}, seg.get("groups")), seg.get("facts") or {})
+        return events, None, opening
+    return events, (tables.describe(head, seg.get("table") or {}, seg.get("groups")), seg.get("facts") or {}), opening
 
 
 def seg_chart_item(run: StepRun, seg: dict[str, Any]) -> dict[str, Any] | None:
@@ -1281,14 +1297,6 @@ def _recent_buttons(runs: Sequence[StepRun], T: Turn) -> list[dict[str, str]]:
             for i, option in enumerate(RELAX_OPTIONS, start=1)]
 
 
-def _breakdown_text(seg: dict[str, Any]) -> str:
-    """一个说法对上几个取值时：「按以下几个部门统计：研发一部 2 张、研发二部 1 张」（张数来自沙箱）。"""
-    parts = []
-    for _title, pairs in seg.get("breakdowns") or []:
-        parts.append("、".join(f"{name} {n} 张" for name, n in pairs))
-    return "".join(f"；按以下几个部门统计：{p}" for p in parts)
-
-
 def _month_to_date(run: StepRun, T: Turn) -> tuple[str, dict[str, str] | None] | None:
     """「这个月比上个月」：本月按月初到今天、上个月按完整自然月比，不自动换成同期；回答写明「本月截至今天」，并给
     「按上月同期比」（总述「时间说法怎么换算」）。返回 (开头那句, 按钮)；不是这种比较时 None。
@@ -1529,18 +1537,23 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     suggesting: _Suggesting | None = None
     #: 结果为空时的放宽一轮只对第一个为空的步骤做（§5.4）
     relaxed = False
+    #: 块与块之间的空行只在这里放（`present/layout.py`，决策 2026-11-03「回答骨架与排版」）
+    spaced = layout.Spacer()
     for i, r in enumerate(shown, start=1):
         if multi:
-            title = f"{'' if i == 1 else chr(10) * 2}**{i}. {_title(r)}**\n\n"
+            title = layout.section_title(i, _title(r))
             said.append(title)
-            yield Event.delta(title)
+            for ev in spaced([Event.delta(title)]):
+                yield ev
         when = r.step.get("when")
         if schema.is_ref(when) and not refs.get(when["ref"]):
-            yield Event.delta("前一步的条件不成立，这一段不列。")
+            for ev in spaced([Event.delta("前一步的条件不成立，这一段不列。")]):
+                yield ev
             continue
         if r.skill not in EXECUTABLE:  # 规整与校验之后不会有；万一有，这一段答查不到
             logger.warning("factory_issue_step_not_executable", skill=r.skill)
-            yield Event.delta(f"{errors.SECTION_FAILED}。")
+            for ev in spaced([Event.delta(f"{errors.SECTION_FAILED}。")]):
+                yield ev
             unexplained = True
             continue
         notes = opening if i == 1 else []
@@ -1552,12 +1565,12 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             if month[1] is not None:
                 alternatives.append(month[1])
         if r.skill == "issue_detail":
-            if notes:
-                yield Event.delta("。".join(notes) + "。\n\n")
+            for ev in spaced(layout.para(notes)):
+                yield ev
             out = await _run_detail(r, T, refs, C)
         elif r.skill == "lookup_numbers":
-            if notes:
-                yield Event.delta("。".join(notes) + "。\n\n")
+            for ev in spaced(layout.para(notes)):
+                yield ev
             out = await _run_lookup(r, T, C)
         elif r.skill == "text_search":
             out = await text_search.run_step(r, T, refs, C, notes)
@@ -1570,7 +1583,7 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             # 执行时才产生的追问：编排先写 `pending_clarify` 再发 `clarify`（写进去了按钮问句才能只写选项，§4.4）
             if out.ask is not None:
                 T.record.ask = out.ask
-            for ev in out.events:
+            for ev in spaced(out.events):
                 yield ev
             return
         if not relaxed and can_relax(r, out):  # 结果为空：只放宽一个条件、预查张数，说一句卡在哪（§5.4）
@@ -1592,13 +1605,14 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         said += _texts(out.events)
         if i == len(shown) and not no_conditions:  # 最后一步：先开始挑答后建议，再发这一步的事件
             suggesting = _start_suggest(T, done, said)
-        for ev in out.events:
+        for ev in spaced(out.events):
             yield ev
         dep = any(schema.is_ref(f.get("value")) for s in shown[i:] for f in
                   schema.as_list((s.step.get("params") or {}).get("filters")) if isinstance(f, dict)) or any(
             schema.is_ref(issue_detail.issue_value(s.step)) for s in shown[i:] if s.skill == "issue_detail")
         if out.empty and dep:
-            yield Event.delta("\n\n这一步没有结果，后面依赖它的步骤不再执行。")
+            for ev in spaced([Event.delta("这一步没有结果，后面依赖它的步骤不再执行。")]):
+                yield ev
             break
     T.record.found = any_found
     if suggesting is None and not no_conditions:  # 最后一步没走到（条件不成立、依赖的那步没有结果）
@@ -1615,10 +1629,9 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             yield Event.suggestions(recs)
         _offer(T, recs, [], done, None)
         return
-    if C.counted:
-        yield Event.delta("\n\n" + C.text())
-    for text in T.record.exports:
-        yield Event.delta("\n\n" + text)
+    tail = ([Event.delta(layout.foot(C.text()))] if C.counted else []) + [Event.delta(t) for t in T.record.exports]
+    for ev in spaced(tail):
+        yield ev
     # 有结果、只说「最近」：另给两个时间范围；结果为空时的放宽走接着问（上面的 `_relax_neighbors`）
     widened = _recent_buttons(runs, T) if any_found and not any_empty else []
     if no_conditions:  # 不带任何条件的清单：不给接着问，给能力介绍的 3 个按钮（§9.4）

@@ -1,8 +1,8 @@
 """按条件列清单（设计 §4.3 清单一行、§6.3、§9.2；总述「清单默认列」「跨域规则」清单呈现）。
 
-事件顺序：`delta`（开头：各域张数与合计、无权的域、「按 X 理解」）→ 每域一个 `table` → `delta`（分析）→ 统计口径
-（整轮合并，放最后）→ 导出链接（S5：用户明说导出，或某域超过导出阈值时，`turn/execute.py::_export_lists`）。
-问题描述摘要随 S6（在那之前文字查找不可用，问题描述一列写「暂不可用」）。
+事件顺序（决策 2026-11-03「回答骨架与排版」）：提示行（无权的域、「按 X 理解」）→ 结论 → 每域一节（小标题写张数、
+`table`、表格下面一句）→ 统计口径（整轮合并，放最后）→ 导出链接（用户明说导出，或某域超过导出阈值时，
+`turn/execute.py::_export_lists`）。问题描述一列在文字查找表无权的域写「暂不可用」。
 """
 
 from __future__ import annotations
@@ -147,15 +147,21 @@ def order_text(step: dict) -> str | None:
     return f"按{by}从{'低到高' if asc else '高到低'}"
 
 
-def opening(seg: dict[str, Any], label: str, scope: str, order: str | None = None) -> str:
-    """开头一句：张数与表格列了几张（数都来自沙箱）。不是按建单时间倒序时不说「最近」。"""
-    text = f"{label}{scope}共 {seg.get('found', 0)} 张"
+def heading(seg: dict[str, Any], label: str) -> str:
+    """一域一节的小标题：这一域有几张（决策 2026-11-03「回答骨架与排版」；张数来自沙箱）。"""
+    found = seg.get("found", 0)
     if seg.get("limited"):
-        text += f"，按要求列出前 {seg.get('listed', 0)} 张"
-    if seg.get("truncated"):
-        text += (f"，表格列出最近 {seg.get('shown', 0)} 张" if order is None
-                 else f"，表格{order}列出前 {seg.get('shown', 0)} 张")
-    return text
+        return f"{label}问题单（共 {found} 张，按要求列出前 {seg.get('listed', 0)} 张）"
+    return f"{label}问题单（{found} 张）"
+
+
+def caption(seg: dict[str, Any], order: str | None = None) -> str:
+    """表格下面那句：表格只列了前几张时说列了哪几张；要导出时指向结尾的附件。不是按建单时间倒序时不说「最近」。"""
+    if not seg.get("truncated"):
+        return ""
+    text = (f"表格列出最近 {seg.get('shown', 0)} 张" if order is None
+            else f"表格{order}列出前 {seg.get('shown', 0)} 张")
+    return text + ("，完整清单见文末附件" if seg.get("exported") else "")
 
 
 def domain_counts(by_domain: Sequence[Sequence[Any]]) -> str:
@@ -163,18 +169,17 @@ def domain_counts(by_domain: Sequence[Sequence[Any]]) -> str:
     return "、".join(f"{d} {n} 张" for d, n in by_domain)
 
 
-def cross_opening(res: dict[str, Any], scope: str) -> str:
-    """三域一起列清单时开头一句：各域张数与合计（总述「跨域规则」清单呈现）。"""
-    by_domain = res.get("by_domain") or []
-    labels = "、".join(str(d) for d, _n in by_domain)
-    return f"{labels}{scope}合计 {res.get('found_total', 0)} 张：{domain_counts(by_domain)}。"
-
-
-def fallback(facts: dict[str, Any]) -> str:
-    """分析段核数两次都不过时的模板句（数字取自沙箱的 facts）。"""
-    if "各域张数" in facts:
-        return f"合计 {facts.get('合计张数', 0)} 张：{domain_counts(facts['各域张数'])}。"
-    text = f"共 {facts.get('张数', 0)} 张"
+def conclusion(res: dict[str, Any], segs: Sequence[dict[str, Any]], scope: str, future: str = "") -> str:
+    """结论的模板句：只有一两张不写分析、模型没写出合格的结论时用（数字取自沙箱）。各域张数在小标题上，这里只给
+    合计；只有一域时给张数、最多的问题类型与未结案几张。"""
+    labels = "、".join(str(s.get("domain")) for s in segs)
+    if all(s.get("empty") for s in segs):
+        return f"{labels}{scope}{'都' if len(segs) > 1 else ''}没有查到单{future}。"
+    if len(segs) > 1:
+        return f"{labels}{scope}合计 {res.get('found_total', 0)} 张。"
+    seg = segs[0]
+    facts = seg.get("facts") or {}
+    text = f"{labels}{scope}共 {seg.get('found', 0)} 张"
     types = facts.get("按问题类型") or []
     if types:
         text += f"，最多的问题类型是{types[0][0]}（{types[0][1]} 张）"

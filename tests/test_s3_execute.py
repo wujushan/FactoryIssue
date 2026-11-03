@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 import s3_data
 import scopes
-from fakes import data_queries, is_factory_list, make_harness, run, table_tail
+from fakes import data_queries, headed_tables, is_factory_list, make_harness, run, table_tail
 from forge_core.events import EventType
 
 from factory_issue_module.declarations import DOMAINS, LOOKUP_TABLES, Domain
@@ -232,15 +232,16 @@ async def test_overseas_series_is_not_a_condition():
 
 
 async def test_cross_list_gives_counts_per_domain_and_one_analysis():
-    """总述「跨域规则」清单呈现：开头各域张数与合计，每域一张表，分析段整步一次。"""
+    """总述「跨域规则」清单呈现：各域张数在各域小标题上，每域一张表，结论整步一次、在最前（决策 2026-11-03
+    「回答骨架与排版」）。"""
     h, events = await _go("近 30 天的问题有哪些", [plan(step("list_issues", time=T30)), NARR])
     text = _text(events)
-    assert "合计 10 张：国内 4 张、巴西 4 张、海外 2 张" in text
-    # 先给结论再给表（开发者 2026-11-02 定）：分析段紧跟开头那句，在三张表之前
     types = _types(events)
-    narr_at = next(i for i, e in enumerate(events) if e.type is EventType.DELTA and NARR in e.data["text"])
-    assert narr_at == 1 and narr_at < types.index(EventType.TABLE)
-    assert [t["title"].split("：")[0] for t in _tables(events)] == ["国内问题单", "巴西问题单", "海外问题单"]
+    assert events[0].data["text"] == NARR and types.index(EventType.TABLE) == 2
+    heads = [e.data["text"].strip() for e in events if e.type is EventType.DELTA and "问题单（" in e.data["text"]]
+    assert heads == ["**国内问题单（4 张）**", "**巴西问题单（4 张）**", "**海外问题单（2 张）**"]
+    assert "合计 10 张：" not in text  # 不在开头逐域再说一遍
+    assert [t["title"] for t in _tables(events)] == ["", "", ""]
     # S6b 起三域文字查找表都有权时问题描述取自文字表（§9.2），开头不再说「暂不可用」
     assert len(h.llm.calls) == 2 and "问题描述摘要暂不可用" not in text
     assert "统计范围：国内、巴西、海外" in text
@@ -269,7 +270,7 @@ async def test_cross_levels_list_every_level():
     rows = {r[0]: r[1:] for r in _tables(events)[0]["rows"]}
     assert list(rows) == ["A+", "A", "B", "C", "未填"] and rows["A+"] == [0, 0, 0, 0]
     assert rows["未填"] == [1, 1, 0, 2]  # 国内 NULL、巴西空串都算未填
-    assert "最多的是B（4 张）" in _text(events)
+    assert "**国内、巴西、海外按问题等级统计（合计 10 张）**" in _text(events)
 
 
 async def test_cross_overview_rows_per_domain_and_set_aside():
@@ -378,7 +379,7 @@ async def test_jp01_partial_domains_no_sql_for_brazil_or_overseas():
     br_os = {table_tail(t) for d in (Domain.BRAZIL, Domain.OVERSEAS) for t in (d.master_table, *d.sub_tables)}
     br_os |= {"Brazil_Factory", "Brazil_RequestList", "ProductName", "NewProduct"}
     assert {t for q in h.queries for t in q.tables} & br_os == set()
-    assert [t["title"].split("：")[0] for t in _tables(events)] == ["国内问题单"]
+    assert [head.split("（")[0] for head, _t in headed_tables(events)] == ["国内问题单"]
     assert set(LOOKUP_TABLES) and all(d in DOMAINS for d in (Domain.BRAZIL, Domain.OVERSEAS))
 
 
@@ -407,7 +408,7 @@ async def test_stage_dims_stay_per_domain():
     """处理环节各域不同，按域分别给，每域一张，不合成跨域的环节表；分析段这一维写一次。"""
     reply = plan(step("aggregate", time=T30, group_by=["处理环节"]))
     h, events = await _go("近 30 天各环节有多少单", [reply, "国内、巴西、海外各环节都只有 1 张。没有哪一个环节明显积压。"])
-    titles = [t["title"].split("按")[0] for t in _tables(events)]
+    titles = [head.split("按")[0] for head, _t in headed_tables(events)]
     assert titles == ["国内", "巴西", "海外"] and len(h.llm.calls) == 2
     assert _text(events).count("处理环节：") == 1
 
@@ -523,7 +524,7 @@ async def test_status_column_per_domain():
     reply = plan(step("list_issues", time=T30, filters=[{"field": "状态", "op": "是", "value": "未结案",
                                                           "from": "user"}]))
     h, events = await _go("近 30 天未结案的单", [reply, NARR])
-    cols = {t["title"].split("问题单")[0]: t["columns"] for t in _tables(events)}
+    cols = {head.split("问题单")[0]: t["columns"] for head, t in headed_tables(events)}
     assert "当前状态" in cols["国内"] and "状态" in cols["巴西"] and "状态" in cols["海外"]
     assert "当前状态" not in cols["巴西"] and "当前状态" not in cols["海外"]
 

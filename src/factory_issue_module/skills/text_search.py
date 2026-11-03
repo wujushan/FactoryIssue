@@ -5,18 +5,20 @@
 2. ① 定说法（`text/terms.py`，可能一次模型调用）。
 3. 各域按条件取数（与清单同一个取数单元），另读本域分段表（预筛过）与文字表要比的列（`text/keyword.py`）。
 4. ② 沙箱按词匹配、按单归组（`stats/tasks/keyword_match.py`），同时给出本步范围内的单（按意思一路限定候选）。
-5. ③④ 按意思找（`text/semantic.py`）；⑤「可能相关」交模型逐张判断（`text/judge.py`）。类似问题不判断。
+5. ③④ 按意思找（`text/semantic.py`）；⑤「可能相关」与类似问题交模型逐张判断（`text/judge.py`）。
 6. ⑥ 沙箱收拢、计数、排序（`stats/tasks/text_merge.py`）；问题描述摘要（`present/summaries.py`）、原因与措施（只取
-   表格里列出的单，§13）；开头、表格、分析、统计口径「文字查找」一项、按钮。
+   表格里列出的单，§13）；提示行、结论、各域一节、统计口径「文字查找」一项、按钮。
 
-事件顺序：`delta`（开头：各组张数、本次按哪些说法找）→ 每域一个 `table` → `delta`（分析）→ 统计口径（整轮合并）
-→ 导出链接 → `suggestions`。数字都来自沙箱。
+事件顺序（决策 2026-11-03「回答骨架与排版」）：提示行（无权与未计入的域、本次按哪些说法找）→ 结论（模型写，看得到
+每域前几张单的内容；模板句是 `fallback`）→ 每域一节（小标题写张数、`table`、表格下面几句）→ 要增减说法、候选太多
+时那句 → 统计口径或查找说明（整轮合并）→ 导出链接 → `suggestions`。数字都来自沙箱。
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -30,7 +32,7 @@ from factory_issue_module.config import files as config_files
 from factory_issue_module.declarations import SEGMENTATION, TOPIC_TERMS, Domain
 from factory_issue_module.domains import base, enums
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import columns, export, summaries, tables
+from factory_issue_module.present import columns, export, layout, summaries, tables
 from factory_issue_module.skills import list_issues
 from factory_issue_module.stats import runner
 from factory_issue_module.text import judge, keyword, semantic, terms
@@ -41,9 +43,13 @@ logger = structlog.get_logger(__name__)
 
 EXPORT_FILENAME = "按文字找到的问题单.xlsx"
 THIRD_MAX = 10
-SIM_MAX = 10
-#: 类似问题每域交模型判断的张数（最相近的前几张，一批）；比 `SIM_MAX` 小时表格列不满
+#: 类似问题每域交模型判断的张数（最相近的前几张，一批）。每域列几张是 `answer_params.toml` 的 `similar_rows`（默认 5，
+#: 决策 2026-11-03「回答骨架与排版」），不超过这里（`config/files.SIMILAR_ROWS_MAX`）：没判断过的不列
 SIM_JUDGE = 10
+#: 写结论的模型每域看表格前几张单的内容（【列出的单】）
+NARRATIVE_ROWS = 5
+#: 交写结论的模型看的每格文字最多几个字
+NARRATIVE_CELL = 150
 CONTEXT_MAX = 120
 #: 统计口径里的找法（总述「统计口径说明」文字查找一行）
 METHODS = {"关键词": "关键词搜索", "话题": "涉及某个话题", "类似问题": "类似问题", "点名字段": "点名字段",
@@ -125,13 +131,13 @@ def _n(seg: Mapping[str, Any], key: str) -> int:
 
 
 def opening(tp: TermPlan, seg: Mapping[str, Any], label: str, scope: str, counts: Mapping[str, Any]) -> str:
-    """一域的开头一句（张数都来自沙箱）。"""
+    """一域的一句（张数都来自沙箱）：没有单的域在原位置说这一句；结论的模板句也用它。"""
     head = f"{label}{scope}"
     third = _n(seg, "g3")
     if tp.mode == "类似问题":
         if not third:
             return f"{head}按现象描述没有找到相近的问题"
-        return f"{head}按现象描述找到 {third} 张相近的问题，按相近程度排序，不保证完整"
+        return f"{head}按现象描述列出 {third} 张最相近的问题"
     if tp.mode == "关键词":
         how = "同时出现" if tp.logic == "和" and len(tp.used) > 1 else ("出现任一个词" if len(tp.used) > 1 else "出现")
         words = "、".join(f"「{w}」" for w in tp.used)
@@ -183,6 +189,82 @@ def adjust_hint(tp: TermPlan) -> str:
     if not tp.by_model or tp.user_words or tp.mode == "类似问题":
         return ""
     return "要增减说法时可以直接说「再加上『某个说法』」或「去掉『某个说法』」重新找"
+
+
+def _what(tp: TermPlan) -> str:
+    """各域小标题里「找到的是什么单」（决策 2026-11-03「回答骨架与排版」）。"""
+    if tp.mode == "类似问题":
+        return "最相近的问题"
+    if tp.mode == "关键词":
+        how = "同时出现" if tp.logic == "和" and len(tp.used) > 1 else ("出现任一个词" if len(tp.used) > 1 else "出现")
+        return f"{tp.where}里{how}{'、'.join(f'「{w}」' for w in tp.used)}的单"
+    if tp.intersect:
+        return f"用{tp.approach}处理过、又涉及{tp.label}的单"
+    if tp.grouped:
+        return f"与{tp.label}有关的单"
+    where = tp.where if tp.mode == "点名字段" else terms.MEASURE_SCOPE.split("（")[0]
+    what = tp.label if tp.mode == "点名字段" else tp.approach
+    return f"{where}里提到{what}的单"
+
+
+def heading(tp: TermPlan, seg: Mapping[str, Any], label: str) -> str:
+    """一域一节的小标题：这一域找到几张，另有可能相关的一并写上（张数都来自沙箱）。"""
+    third = _n(seg, "g3")
+    if tp.mode == "类似问题":
+        return f"{label}{_what(tp)}（{third} 张）"
+    more = f"，另有 {third} 张{columns.TEXT_GROUPS['3']}" if third else ""
+    return f"{label}{_what(tp)}（{_n(seg, 'kw')} 张{more}）"
+
+
+def captions(tp: TermPlan, seg: Mapping[str, Any], counts: Mapping[str, Any]) -> list[str]:
+    """表格下面的几句：分组各几张与含义、两边都命中为 0 时各边几张、表格没列全（总述「涉及某个话题怎么找」）。"""
+    out: list[str] = []
+    kw, third = _n(seg, "kw"), _n(seg, "g3")
+    if tp.grouped and kw:
+        text = f"问题本身涉及的 {_n(seg, 'g1')} 张"
+        if _n(seg, "g2"):
+            text += f"、处理中提到的 {_n(seg, 'g2')} 张；处理中提到的多是顺带提到，请看每行命中的文字"
+        out.append(text)
+    if tp.intersect and not kw:
+        out.append(f"用{tp.approach}处理过的 {int(counts.get('approach') or 0)} 张，"
+                   f"涉及{tp.label}的 {int(counts.get('topic') or 0)} 张")
+    if seg.get("truncated"):
+        if tp.grouped:  # 前两组各给最近几张（S6b 评审 M1），分开说；哪组没列全由沙箱给
+            listed = (f"问题本身涉及的{'最近 ' if seg.get('cut_g1') else ' '}{_n(seg, 'shown_g1')} 张"
+                      + (f"、处理中提到的{'最近 ' if seg.get('cut_g2') else ' '}{_n(seg, 'shown_g2')} 张"
+                         if _n(seg, "g2") else ""))
+        else:
+            listed = f"最近 {_n(seg, 'shown_kw')} 张直接提到的单"
+        out.append(f"表格列出{listed}" + (f"，以及 {third} 张{columns.TEXT_GROUPS['3']}的单" if third else "")
+                   + ("，完整清单见文末附件" if seg.get("exported") else ""))
+    if third and tp.mode != "类似问题":
+        out.append(f"{columns.TEXT_GROUPS['3']}的仅供参考，不保证找全")
+    return out
+
+
+def fallback(tp: TermPlan, segs: Sequence[Mapping[str, Any]], scope: str, counts: Mapping[str, Any]) -> str:
+    """结论的模板句：只有一两张不写分析、模型没写出合格的结论时用（张数、单号都来自沙箱）。"""
+    labels = "、".join(str(s.get("domain")) for s in segs)
+    hit = [s for s in segs if not s.get("empty")]
+    miss = [str(s.get("domain")) for s in segs if s.get("empty")]
+    if len(segs) == 1:
+        seg = segs[0]
+        return opening(tp, seg, str(seg.get("domain")), scope, counts.get(str(seg.get("domain"))) or {}) + "。"
+    if not hit:
+        if tp.mode == "类似问题":
+            return f"{labels}{scope}按现象描述都没有找到相近的问题。"
+        return layout.sentences([f"{labels}{scope}{_what(tp)}都没有找到"]
+                                + [opening(tp, s, str(s.get("domain")), "", counts.get(str(s.get("domain"))) or {})
+                                   for s in segs if tp.intersect])
+    who = "、".join(str(s.get("domain")) for s in hit)
+    if tp.mode == "类似问题":
+        numbers = [str(r[0]) for s in hit for r in (s.get("table") or {}).get("rows") or []]
+        text = f"{who}{scope}有现象相近的问题" + (f"：{'、'.join(numbers)}" if len(numbers) <= 3 else "")
+    else:
+        total = sum(_n(s, "kw") for s in hit)
+        third = sum(_n(s, "g3") for s in hit)
+        text = f"{who}{scope}{_what(tp)}合计 {total} 张" + (f"，另有 {third} 张{columns.TEXT_GROUPS['3']}" if third else "")
+    return text + (f"；{'、'.join(miss)}没有找到" if miss else "") + "。"
 
 
 def first_fields(seg: Any) -> str:
@@ -292,7 +374,7 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
             executed.remove(d)
             problems.append(f"{d.label}：{errors.SECTION_FAILED}")
     C.domains([d.label for d in executed],
-              ([errors.not_counted(label_denied)] if label_denied else []) + excluded + not_counted)
+              ([errors.not_counted(label_denied)] if label_denied else []) + excluded + not_counted, kind="text")
     head += ([errors.not_counted(label_denied)] if label_denied else []) + excluded + not_counted + problems
     for d in executed:
         head += run.dsteps[d].notes + run.dsteps[d].skipped
@@ -320,7 +402,7 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
     if not present:
         out.segs = list(segs)
         if caliber:
-            _caliber(C, run, tp, segs, sem_notes, X)
+            _caliber(C, run, tp, segs, sem_notes, X, T.answer.similar_rows)
         return out
     head += sem_notes
     keys, reasons = table_keys(run.step, _labels(tp)[1])
@@ -328,12 +410,15 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
         await summaries.fill_tables(T.ctx, segs, executed)
     if reasons:
         await X._add_reasons(T, segs)
-    at = len(out.events) + (2 if head else 1)  # 开头（各组张数、用了哪些说法）之后、各域的表之前
-    out.events += _present(run, T, tp, res, segs, counts, head, crowded_hint(run.step) if crowded else "")
-    narr = await _narrative(T, X, tp, res, segs, run)
-    if narr is not None:
-        X.conclusion_first(out.events, narr, at)
-    _caliber(C, run, tp, segs, sem_notes, X)
+    # 提示行：无权与未计入的域、本次按哪些说法找、说法清单「说明」里那种问法的那一句（决策 2026-11-03「回答骨架与排版」）
+    notice = [*head, used_text(tp), tp.asked_rule]
+    by_domain = counts.get("by_domain") or {}
+    scope = X._scope(X._time_text(run))
+    conclusion = await _narrative(T, X, tp, res, segs, run, layout.sentences(notice),
+                                  fallback(tp, segs, scope, by_domain))
+    out.events += layout.para(notice)
+    out.events += _present(T, tp, segs, by_domain, conclusion, crowded_hint(run.step) if crowded else "")
+    _caliber(C, run, tp, segs, sem_notes, X, T.answer.similar_rows)
     if res.get("exported"):
         await summaries.fill_exports(T.ctx, outcome_frames, executed)
         text = await export.save_lists(T.ctx, res["exported"], outcome_frames, EXPORT_FILENAME)
@@ -376,7 +461,7 @@ async def _search(run: Any, T: Any, R: Ready) -> tuple[dict[str, Any], dict[str,
     P2["tm"] = {"labels": labels, "group_title": columns.TEXT_GROUP, "context_title": columns.TEXT_CONTEXT,
                 "columns": cols, "table_rows": T.answer.table_rows, "export": (run.step.get("params") or {}).get("export") is True,
                 "export_threshold": T.answer.export_threshold, "export_ok": True, "third_max": THIRD_MAX,
-                "sim_max": SIM_MAX, "sim": tp.mode == "类似问题",
+                "sim_max": T.answer.similar_rows, "sim": tp.mode == "类似问题",
                 # 类似问题按自己的下限筛（只管类似问题），「可能相关」仍按 `rerank_score_threshold`（缺省不启用）
                 "threshold": T.answer.similar_rerank_floor if tp.mode == "类似问题" else T.answer.rerank_score_threshold}
     datasets = {**R.frames, **{k: v for k, v in kw_frames.items() if k.startswith("kw_")}, **sem_frames}
@@ -418,7 +503,7 @@ async def _semantic(T: Any, tp: TermPlan, executed: Sequence[Domain], kw: Mappin
     sim = S["kind"] == "sim"
     judge_max = int(T.answer.judge_max)
     # 类似问题向重排要回全部候选的分（重排本来就给 `top_k` 张都打分，多回几行不多算）：表格仍由沙箱截到
-    # `SIM_MAX` 张，全部分数进日志，供以后调下限（`_log_sim_scores`）
+    # `similar_rows` 张，全部分数进日志，供以后调下限（`_log_sim_scores`）
     top_n = semantic.TOP_K if sim else max(judge_max, THIRD_MAX)
 
     def candidates(d: Domain) -> list[int] | None:
@@ -501,77 +586,97 @@ def crowded_hint(step: Mapping[str, Any]) -> str:
     return f"「{columns.TEXT_GROUPS['3']}」一组的候选较多，来不及逐张看完，只看了最相近的一批；{tail}"
 
 
-def _present(run: Any, T: Any, tp: TermPlan, res: Mapping[str, Any], segs: Sequence[dict[str, Any]],
-             counts: Mapping[str, Mapping[str, Any]], head: list[str], hint: str = "") -> list[Event]:
+def _present(T: Any, tp: TermPlan, segs: Sequence[dict[str, Any]], counts: Mapping[str, Mapping[str, Any]],
+             conclusion: str, hint: str = "") -> list[Event]:
+    """结论 → 每域一节（小标题、表格、表格下面几句）→ 各节之后的提示（要增减说法、候选太多时加条件）。
+    提示行在调用方（决策 2026-11-03「回答骨架与排版」）。"""
     from factory_issue_module.turn import execute as X
 
-    events: list[Event] = []
-    if head:
-        events.append(Event.delta("。".join(dict.fromkeys(head)) + "。\n\n"))
-    time_text = X._time_text(run)
-    scope = X._scope(time_text)
-    by_domain = counts.get("by_domain") or {}
-    lines = [opening(tp, seg, str(seg.get("domain")), scope, by_domain.get(str(seg.get("domain"))) or {})
-             for seg in segs]
-    if len(segs) > 1:
-        totals = res.get("totals") or {}
-        total_kw, total_third = int(totals.get("kw") or 0), int(totals.get("g3") or 0)
-        tail = f"合计 {total_kw} 张" + (f"，另有 {total_third} 张{'相近的问题' if tp.mode == '类似问题' else '可能相关'}"
-                                       if total_third else "")
-        if tp.mode == "类似问题":
-            tail = f"合计 {total_third} 张相近的问题"
-        lines.append(tail)
-    # 用户问的正是说法清单「说明」里点名的那种问法（问「漏电的问题」）：照写那一条怎么判（总述「涉及某个话题怎么找」）
-    # `hint`：第三组候选太多、来不及逐张看完时建议加条件（设计 §5.4）
-    extra = [x for x in (used_text(tp), tp.asked_rule, adjust_hint(tp), hint) if x]
-    events.append(Event.delta("；\n".join(lines) + "。" + ("\n" + "。".join(extra) + "。" if extra else "")))
+    events: list[Event] = [Event.delta(conclusion)]
+    multi = len(segs) > 1
     for seg in segs:
         dom = X._BY_LABEL.get(str(seg.get("domain")), Domain.DOMESTIC)
-        if seg.get("empty"):
+        got = counts.get(dom.label) or {}
+        if seg.get("empty"):  # 没有单的域：几域一起时原位置一句，只有这一域时由结论说
+            if multi:
+                events.append(Event.delta(opening(tp, seg, dom.label, "", got) + "。"))
             continue
-        text = ""
-        if seg.get("truncated"):
-            if tp.grouped:  # 前两组各给最近几张（S6b 评审 M1），分开说；哪组没列全由沙箱给
-                listed = (f"问题本身涉及的{'最近 ' if seg.get('cut_g1') else ' '}{_n(seg, 'shown_g1')} 张"
-                          + (f"、处理中提到的{'最近 ' if seg.get('cut_g2') else ' '}{_n(seg, 'shown_g2')} 张"
-                             if _n(seg, "g2") else ""))
-            else:
-                listed = f"最近 {_n(seg, 'shown_kw')} 张直接提到的单"
-            text = f"\n\n{dom.label}表格列出{listed}" + (
-                f"，以及 {_n(seg, 'g3')} 张{columns.TEXT_GROUPS['3']}的单" if _n(seg, "g3") else "") + "。"
-        events.append(Event.delta(text + "\n\n"))
-        title = f"{dom.label}按文字找到的单" + (f"：{time_text}" if time_text else "")
-        events.append(tables.event(seg["table"], title, link_ids=seg.get("ids_shown") or None, domain=dom, sites=T.sites))
+        events.append(layout.heading(heading(tp, seg, dom.label)))
+        events.append(tables.event(seg["table"], "", link_ids=seg.get("ids_shown") or None, domain=dom, sites=T.sites))
+        events += layout.para(captions(tp, seg, got))
+    # `hint`：第三组候选太多、来不及逐张看完时建议加条件（设计 §5.4）
+    events += layout.para([adjust_hint(tp), hint])
     return events
 
 
+_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+
+
+def _cell(value: Any) -> str:
+    """交写结论的模型看的一格：去掉 Markdown 链接只留文字，压成一行，最多 `NARRATIVE_CELL` 个字。"""
+    flat = " ".join(_LINK.sub(r"\1", str(value if value is not None else "")).split())
+    return flat if len(flat) <= NARRATIVE_CELL else flat[:NARRATIVE_CELL] + "…"
+
+
+def listed_rows(segs: Sequence[Mapping[str, Any]]) -> str:
+    """【列出的单】：每域表格前 `NARRATIVE_ROWS` 张的内容，末尾写结案没有（是否未结案由沙箱按行给）。"""
+    lines: list[str] = []
+    for s in segs:
+        table = s.get("table") or {}
+        cols = [str(c) for c in table.get("columns") or []]
+        opened = list(s.get("open_shown") or [])
+        for k, row in enumerate((table.get("rows") or [])[:NARRATIVE_ROWS]):
+            cells = [f"{c}：{_cell(v)}" if i else _cell(v) for i, (c, v) in enumerate(zip(cols, row, strict=False))]
+            state = ("未结案" if opened[k] else "已结案") if k < len(opened) else ""
+            lines.append("｜".join([str(s.get("domain")), *cells, *([state] if state else [])]))
+    return "\n".join(lines)
+
+
+#: 写结论的【写法】（决策 2026-11-03「回答骨架与排版」）
+SIM_GUIDE = ("用户想知道以前有没有出现过他描述的现象。【列出的单】是各域按相近程度排在最前、已经逐张看过是同一类现象的单。"
+             "第一句回答有没有出现过；再点名最像的两三张：问题编号、一句话说清是什么现象、当时的原因与措施、结案没有。"
+             "不按问题类型、机型分布分析。")
+ROWS_GUIDE = "【列出的单】是各域表格里排在最前的几张。点名最需要关注的单时从里面挑，说清是什么问题、结案没有。"
+
+
 async def _narrative(T: Any, X: Any, tp: TermPlan, res: Mapping[str, Any], segs: Sequence[dict[str, Any]],
-                     run: Any) -> Event | None:
+                     run: Any, note: str, fallback_text: str) -> str:
+    """结论。合计只有一两张（09 文档「不分析的三种情形」）、各域都没有单时不调模型，用模板句；合计张数取自沙箱。
+    看的是几域合计，不是每域：三域各一两张时合计已有好几张，结论要点名最像的几张（同清单的 `few_total`）。"""
     shown = [s for s in segs if not s.get("empty")]
-    # 只有一两张时分析就是复述（09 文档「不分析的三种情形」）；合计张数取自沙箱
-    if not shown or all(s.get("few") for s in shown) or int((res.get("totals") or {}).get("listed") or 0) <= 2:
-        return None
-    facts: dict[str, Any] = {"找法": METHODS.get(tp.mode, tp.mode), "话题或说法": tp.label}
+    if not shown or int((res.get("totals") or {}).get("listed") or 0) <= 2:
+        return fallback_text
+    sim = tp.mode == "类似问题"
+    facts: dict[str, Any] = {"找法": METHODS.get(tp.mode, tp.mode), ("现象描述" if sim else "话题或说法"): tp.label}
     for s in shown:
-        facts[str(s.get("domain"))] = {**(s.get("facts") or {}), "直接提到": _n(s, "kw"), "可能相关": _n(s, "g3")}
-    described = "；".join(tables.describe(f"{s.get('domain')}按文字找到的单", s["table"], s.get("shown")) for s in shown)
-    fallback = "以上是按文字找到的单，请看每行命中的文字。"
-    return await X._narrate(T, described, None, facts, fallback, X._time_text(run))
+        f = s.get("facts") or {}
+        if sim:  # 最相近的几张按问题类型、机型分布没有意义，只给张数与未结案几张
+            facts[str(s.get("domain"))] = {"列出的张数": _n(s, "g3"), "其中未结案": f.get("未结案", 0)}
+        elif tp.grouped:
+            facts[str(s.get("domain"))] = {**f, "问题本身涉及": _n(s, "g1"), "处理中提到": _n(s, "g2"),
+                                           columns.TEXT_GROUPS["3"]: _n(s, "g3")}
+        else:
+            facts[str(s.get("domain"))] = {**f, "按词找到": _n(s, "kw"), columns.TEXT_GROUPS["3"]: _n(s, "g3")}
+    described = "；".join(tables.describe(heading(tp, s, str(s.get("domain"))), s["table"], s.get("shown"))
+                          for s in shown)
+    return await X._narrate(T, described, note, facts, fallback_text, X._time_text(run), rows=listed_rows(shown),
+                            guide=SIM_GUIDE if sim else ROWS_GUIDE, dims=not sim)
 
 
 def _caliber(C: cal.Caliber, run: Any, tp: TermPlan, segs: Sequence[dict[str, Any]], sem_notes: Sequence[str],
-             X: Any) -> None:
+             X: Any, similar_rows: int) -> None:
+    """统计口径（或查找说明）「文字查找」一项。按哪些词或说法找已写在开头的提示行（`used_text`），这里不重复
+    （决策 2026-11-03「回答骨架与排版」）；类似问题没有说法，写「按现象描述找意思相近的单」。"""
     for seg in segs:
         X._add_caliber(C, run, seg, [], [])
     method = METHODS.get(tp.mode, tp.mode)
+    words = ""
     if tp.mode == "类似问题":
         words = "按现象描述找意思相近的单"
-        complete = f"逐张判断是同一类现象的才列出，最多 {SIM_MAX} 张、按相近程度排序，不保证完整"
+        complete = f"逐张判断是同一类现象的才列出，每域最多 {similar_rows} 张、按相近程度排序，不保证完整"
     elif tp.user_words:
-        logic = f"（{'都要出现' if tp.logic == '和' else '出现任一个'}）" if len(tp.used) > 1 else ""
-        words, complete = f"按{'、'.join(tp.used)}这些词{logic}", "列出全部命中的单"
+        complete = "列出全部命中的单"
     else:
-        words = used_text(tp).replace("本次", "")
         if tp.grouped:
             complete = f"问题本身涉及、处理中提到两组全部列出，可能相关一组最多 {THIRD_MAX} 张、不保证找全"
         elif tp.semantic is not None:

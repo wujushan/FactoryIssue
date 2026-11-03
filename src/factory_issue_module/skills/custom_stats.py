@@ -35,7 +35,7 @@ from factory_issue_module import landed
 from factory_issue_module.declarations import DOMAINS, Domain
 from factory_issue_module.domains import brazil, domestic, overseas
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import columns, tables
+from factory_issue_module.present import columns, layout, tables
 from factory_issue_module.skills import aggregate
 from factory_issue_module.stats import custom as checks
 from factory_issue_module.stats import runner
@@ -451,34 +451,41 @@ def _add_caliber(C: cal.Caliber, run: Any, executed: Sequence[Domain], not_count
 
 
 def opening(res: Mapping[str, Any], ds: Sequence[str], scope: str) -> str:
-    """开头：注明临时统计，再给计入的张数（几域时各域张数，数都来自沙箱 ①）。"""
+    """结论的模板句：计入的张数（几域时各域张数，数都来自沙箱 ①）。只有一两行、模型没写出合格的结论时用。"""
     found = res.get("found") or {}
-    text = f"{errors.CUSTOM_HEAD}。{'、'.join(ds)}{scope}共 {res.get('total', 0)} 张单"
+    text = f"{'、'.join(ds)}{scope}共 {res.get('total', 0)} 张单"
     if len(ds) > 1:
         text += "（" + "、".join(f"{d} {found.get(d, 0)} 张" for d in ds) + "）"
     return text + "。"
 
 
+def heading(res: Mapping[str, Any], ds: Sequence[str]) -> str:
+    """结果表那一节的小标题：计入几张单，几域时各域几张（决策 2026-11-03「回答骨架与排版」）。"""
+    found = res.get("found") or {}
+    per = "：" + "、".join(f"{d} {found.get(d, 0)} 张" for d in ds) if len(ds) > 1 else ""
+    return f"临时统计结果（计入 {res.get('total', 0)} 张单{per}）"
+
+
 async def _present(run: Any, T: Any, result: Mapping[str, Any], res: Mapping[str, Any], ds: Sequence[str],
                    head: Sequence[str], time_text: str | None, title: str, item: Mapping[str, Any] | None,
                    code: str) -> list[Event]:
+    """提示行（「以下为临时统计」在最前）→ 结论 → 结果表一节（小标题、表、图）。"""
     from factory_issue_module.turn import execute as X
 
-    events: list[Event] = []
-    if head:
-        events.append(Event.delta("。".join(dict.fromkeys(head)) + "。\n\n"))
-    events.append(Event.delta(opening(res, ds, X._scope(time_text))))
+    notice = [errors.CUSTOM_HEAD, *head]
     table = {"columns": list(result.get("columns") or []), "rows": [list(r) for r in result.get("rows") or []]}
-    events.append(tables.event(table, title))
+    fallback = opening(res, ds, X._scope(time_text))
+    text = fallback
+    if len(table["rows"]) > 2:  # 只有一两行时分析就是复述（09 文档「不分析的三种情形」）
+        facts = {"总单数": res.get("total", 0), "各域单数": [[d, (res.get("found") or {}).get(d, 0)] for d in ds],
+                 "临时统计的结果": {"列": table["columns"], "行": table["rows"]}}
+        text = await X._narrate(T, tables.describe(heading(res, ds), table, None), layout.sentences(notice), facts,
+                                fallback, time_text)
+    events = [*layout.para(notice), Event.delta(text), layout.heading(heading(res, ds)), tables.event(table, "")]
     if item is not None:
         T.record.charts.append(dict(item))
         events += X.chart_events(T, item, None)
     lists = {d: rl for d, rl in (res.get("rate_lists") or {}).items() if d in ds}
     if lists and _uses_rate(code):
         events += X._rate_lists({"rate_lists": lists}, T, f"：{time_text}" if time_text else "")
-    if len(table["rows"]) > 2:  # 只有一两行时分析就是复述（09 文档「不分析的三种情形」）
-        facts = {"总单数": res.get("total", 0), "各域单数": [[d, (res.get("found") or {}).get(d, 0)] for d in ds],
-                 "临时统计的结果": {"列": table["columns"], "行": table["rows"]}}
-        said = await X._narrate(T, tables.describe(title, table, None), None, facts, "", time_text)
-        X.conclusion_first(events, said, 2 if head else 1)  # 开头之后、表格与图之前
     return events

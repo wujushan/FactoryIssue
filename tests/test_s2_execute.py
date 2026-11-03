@@ -52,10 +52,11 @@ async def test_domestic_list_default_columns_analysis_and_caliber():
     narrative = "近 30 天国内共 4 张，硬件问题最多。最需要关注的是 ZC9901001。其中 1 张已完成。"
     h, events = await _go("近 30 天国内的问题有哪些",
                           [plan(step("list_issues", domains=CN, time=RECENT30)), narrative])
-    # 先给结论再给表（开发者 2026-11-02 定）：开头 → 分析 → 表 → 统计口径 → 按钮（S5 起答后有模板按钮，§9.5）
+    # 回答骨架（决策 2026-11-03「回答骨架与排版」）：结论 → 小标题（张数）→ 表 → 统计口径 → 按钮（§9.5）
     assert _types(events) == [EventType.DELTA, EventType.DELTA, EventType.TABLE, EventType.DELTA,
                               EventType.SUGGESTIONS]
-    assert narrative in events[1].data["text"] and "共 4 张" in events[0].data["text"]
+    assert events[0].data["text"] == narrative and events[1].data["text"] == "\n\n**国内问题单（4 张）**"
+    assert _tables(events)[0]["title"] == ""  # 小标题写在正文里，表格不另带标题
     table = _tables(events)[0]
     assert table["columns"] == ["问题编号", "机型", "问题类型", "不良率", "不良数量", "问题描述"]
     assert [r[0] for r in table["rows"]] == ["ZC9901001", "ZC9901002", "ZC9901003", "ZC9901004"]  # 建单时间倒序
@@ -74,16 +75,34 @@ async def test_domestic_list_default_columns_analysis_and_caliber():
 async def test_domestic_aggregate_by_type_table_chart_caliber():
     reply = plan(step("aggregate", domains=CN, time=RECENT30, group_by=["问题类型"], metrics=["单数", "占比"]))
     h, events = await _go("近 30 天国内按问题类型统计", [reply, "共 4 张，硬件问题最多。物料问题和软件问题各 1 张。"])
-    # 先给结论再给表与图（开发者 2026-11-02 定）；S5 起答后有「列出第一名的单」（§9.5）
+    # 结论 → 小标题（总数）→ 表 → 图 → 统计口径（决策 2026-11-03「回答骨架与排版」）；答后有「列出第一名的单」（§9.5）
     assert _types(events) == [EventType.DELTA, EventType.DELTA, EventType.TABLE, EventType.CHART, EventType.DELTA,
                               EventType.SUGGESTIONS]
-    assert "硬件问题最多" in events[1].data["text"]
+    assert "硬件问题最多" in events[0].data["text"]
+    assert events[1].data["text"] == "\n\n**国内按问题类型统计（共 4 张）**"
     table = _tables(events)[0]
     assert table["columns"] == ["问题类型", "单数", "占比（%）"]
     assert table["rows"][0] == ["硬件问题", 2, 50]
     chart = next(e.data for e in events if e.type is EventType.CHART)
     assert chart["chart_type"] == "pie" and chart["series"][0]["data"] == [2, 1, 1]
-    assert "最多的是硬件问题（2 张）" in _text(events)
+    # 模型写的结论合格时，原先的开头一句（模板句）不再出现
+    assert "最多的是硬件问题（2 张）" not in _text(events)
+
+
+async def test_aggregate_conclusion_falls_back_to_the_template_when_the_model_fails():
+    reply = plan(step("aggregate", domains=CN, time=RECENT30, group_by=["问题类型"], metrics=["单数", "占比"]))
+    h, events = await _go("近 30 天国内按问题类型统计", [reply, "合计 99 张。", "合计 98 张。"])
+    assert events[0].data["text"].startswith("国内，") and "最多的是硬件问题（2 张）" in events[0].data["text"]
+    assert "99" not in _text(events) and "98" not in _text(events)
+
+
+async def test_ranking_conclusion_must_name_the_first():
+    """问「哪个最多」时第一名必须点到（总述「排名、长清单与导出」）：没点到重写一次，仍没点到用模板句。"""
+    reply = plan(step("aggregate", domains=CN, time=RECENT30, group_by=["问题类型"], ranking=True))
+    h, events = await _go("近 30 天国内哪类问题最多", [reply, "共 4 张。物料问题和软件问题各 1 张。",
+                                                  "共 4 张，硬件问题最多。物料问题和软件问题各 1 张。"])
+    assert events[0].data["text"] == "共 4 张，硬件问题最多。物料问题和软件问题各 1 张。"
+    assert "要点名最多的：硬件问题" in h.llm.calls[-1][-1]["content"]
 
 
 async def test_stages_need_current_state_and_task_sql_carries_both_names():
@@ -102,7 +121,12 @@ async def test_overview_close_cycle_and_rate():
     reply = plan(step("aggregate", domains=CN, time=RECENT30, metrics=["结案周期", "合计不良率"]))
     h, events = await _go("近 30 天国内平均多久结案", [reply, "共 4 张。已结案的 1 张平均 5 天结案。"])
     text = _text(events)
-    assert "合计不良率 2.67%" in text and "中位数 5 天" in text and "结案确认" in text and "不参与" in text
+    # 指标在概况那一行表里；结论是模型写的那段（决策 2026-11-03「回答骨架与排版」）
+    overview = dict(zip(_tables(events)[0]["columns"], _tables(events)[0]["rows"][0], strict=True))
+    assert overview["不良率（%）"] == 2.67 and overview["结案周期中位数（天）"] == 5
+    assert events[0].data["text"] == "共 4 张。已结案的 1 张平均 5 天结案。"
+    assert "**国内统计（共 4 张）**" in text and "**国内结案周期分档**" in text
+    assert "结案确认" in text and "不参与" in text
     assert any(t["columns"] == ["结案周期", "单数"] for t in _tables(events))
 
 
@@ -313,7 +337,9 @@ async def test_chained_steps_pass_top_values_by_reference():
     h, events = await _go("近 30 天国内问题最多的机型是哪个，把它的单列出来",
                           [plan(s1, s2), "共 4 张。A920 最多，有 2 张。"])
     text = _text(events)
-    assert "**1. " in text and "**2. " in text and text.count("统计口径") == 1
+    # 段标题用三级标题，结尾前一条分隔线（开发者 2026-11-03 看样例后定）
+    assert text.startswith("### 1. ") and "\n\n### 2. " in text and text.count("统计口径") == 1
+    assert "\n\n---\n\n**统计口径**" in text
     tables = _tables(events)
     assert tables[0]["rows"] == [["A920", 2]]
     assert [r[0] for r in tables[1]["rows"]] == ["ZC9901001", "ZC9901003"]

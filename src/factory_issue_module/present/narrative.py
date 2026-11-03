@@ -1,9 +1,12 @@
-"""分析段与核数（设计 §8.3、§1.3「写分析」）。
+"""结论段与核数（设计 §8.3、§1.3「写分析」）。
 
-写分析提示由这里持有（S2 起），`scripts/planner_spike/` 反过来 import：提示原文、`narrative_user` 的拼法与核数
-`check` 都从 spike 逐字搬来，搬过来之后 spike 的自检与离线重算分数不变（任务单 S2）。
+写结论的提示由这里持有（S2 起），`scripts/planner_spike/` 反过来 import：`narrative_user` 的拼法与核数 `check` 从
+spike 搬来。2026-11-03 起这一段是回答最前面的结论，由它一个作者写，程序的模板句只作退路（决策 2026-11-03
+「回答骨架与排版」）：提示改了开头与第 1、7 条，加了第 8、9 条；spike 的写分析一项要重跑才知道分数。
 
-- 输入：用户问题、已展示表格的说明、代码的说明（「按 X 理解」）、`facts`（沙箱产出，列表已附项数）。
+- 输入：用户问题、表格的说明、程序写在上面的提示行（【说明】）、`facts`（沙箱产出，列表已附项数）；按文字找单另有
+  每域前几张单的内容（【列出的单】）与这类问法的写法（【写法】）。类似问题的 system 不带分析维度（`dims=False`）。
+- 问「哪个最多」时第一名（并列的全部）必须点到（`must`），没点全按不合格重写一次。
 - 核数逐句做：数、约数与比值、日期、点名的问题编号与机型 / 系列 / 工厂 / 部门 / 供应商都要能在事实、表格、问句里
   找到（§8.3）。「前 N 名」不查；「第 N 名」N 不超过事实里最长的列表时不查；「A 和 B 两类」不查；「这三张」照查；
   「这 / 那 + 两」本句前文用「和」「与」「、」点过名时不查。
@@ -26,10 +29,10 @@ from factory_issue_module.plan.prematch import find_entities
 
 logger = structlog.get_logger(__name__)
 
-NARRATIVE_MODULE_SYSTEM = """你是「制程问题查询助手」的回答撰写人。程序已经查好数据、算好数字，并已把表格和图表展示给用户。你只写表格下面的一段分析文字。
+NARRATIVE_MODULE_SYSTEM = """你是「制程问题查询助手」的回答撰写人。程序已经查好数据、算好数字。你写回答最前面的一段结论，程序会在它下面接着给出各域的表格、图表和统计口径。
 
 要求：
-1. 第一句直接回应用户的问题：有几张、有没有、哪个最多、是否增加。
+1. 第一句直接回答用户的问题：有没有、有几张、哪个最多、是否增加。各域的张数程序会写在各域表格的小标题上，不要逐域报张数；需要时说合计，或点名最多的域。
 2. 只能使用【事实】里出现的数字，不自己做任何计算：不求和、不求差、不算百分比、不数行数。事实里没有的数字就不说。下面几种也算自己计算，不要写：
    - 把几项加起来说（「两类合计七成以上」「后三类不足四分之一」）；
    - 自己定一个整数当门槛（「连续三个月 30 单以上」「均超过 10 单」「超过一半」）；
@@ -41,22 +44,30 @@ NARRATIVE_MODULE_SYSTEM = """你是「制程问题查询助手」的回答撰写
 4. 用业务说法，不出现英文代码、数据库表名或字段名。
 5. 不写统计口径，程序会另附。
 6. 写 3 到 6 句话，不用标题，不用列表，不用 Markdown。
-7. 【说明】里有程序做过的调整（如放宽了时间范围、按什么理解），要在开头一句说清楚。"""
+7. 【说明】是程序已经写在你这段上面的提示（如按什么理解、哪个域没计入），不要重复，但结论要与它一致。
+8. 有【列出的单】时，点名的问题编号从里面挑；不要引用单上文字里的数字和日期。
+9. 有【写法】时按【写法】写。"""
 
 _CHAT_KW: dict[str, Any] = {"temperature": 0.2}
 
 
-def narrative_system(manifest: ModuleManifest) -> str:
-    """system 串只随 manifest 的分析维度变（§5.6：不放日期、用户、权限）。"""
-    return NARRATIVE_MODULE_SYSTEM + "\n\n" + analysis_section(manifest)
+def narrative_system(manifest: ModuleManifest, *, dims: bool = True) -> str:
+    """system 串只随 manifest 的分析维度变（§5.6：不放日期、用户、权限）。`dims=False`：不按分析维度分析的问法
+    （类似问题，决策 2026-11-03「回答骨架与排版」），另一份固定的 system。"""
+    return NARRATIVE_MODULE_SYSTEM + ("\n\n" + analysis_section(manifest) if dims else "")
 
 
-def narrative_user(question: str, table: str | None, note: str | None, facts: Any) -> str:
+def narrative_user(question: str, table: str | None, note: str | None, facts: Any, *, rows: str | None = None,
+                   guide: str | None = None) -> str:
     parts = [f"【用户问题】{question}"]
     if table:
         parts.append(f"【已展示的表格】{table}")
     if note:
         parts.append(f"【说明】{note}")
+    if rows:
+        parts.append(f"【列出的单】\n{rows}")
+    if guide:
+        parts.append(f"【写法】{guide}")
     parts.append("【事实】" + json.dumps(facts, ensure_ascii=False))
     return "\n".join(parts)
 
@@ -161,14 +172,17 @@ def _ordinal_free(sentence: str, max_rank: int = 0) -> str:
 
 
 def check(question: str, note: str | None, table: str | None, facts: Any, text: str,
-          entities: Mapping[str, Sequence[str]]) -> dict:
-    """逐句核数。`entities` 是「名字 → 在库里属于哪几类」（本轮可查的域的主数据；spike 传它的合成主数据）。"""
+          entities: Mapping[str, Sequence[str]], rows: str | None = None) -> dict:
+    """逐句核数。`entities` 是「名字 → 在库里属于哪几类」（本轮可查的域的主数据；spike 传它的合成主数据）。
+
+    `rows` 是交给模型看的单的内容（【列出的单】）：只用来核点名的问题编号与机型、工厂等名称，不放行其中的数字与日期
+    （单上的文字里什么数都有，放行了就核不住模型自己数出来的张数）。"""
     allowed = allowed_numbers(question, note, table, facts)
     max_rank = max(_list_lengths(facts), default=0)
     body = _THINK.sub("", text or "")
     sentences = [s for s in re.split(r"[。！？；\n]+", body) if s.strip()]
     raw_source = _source(question, note, table, facts)
-    source = raw_source.upper()
+    source = (raw_source + " " + (rows or "")).upper()
     years, months, days = _date_sources(raw_source)
     with_numbers, bad = 0, []
     for s in sentences:
@@ -228,27 +242,35 @@ def _content(resp: Any) -> str:
 
 
 async def write(llm: Any, manifest: ModuleManifest, question: str, table: str | None, note: str | None,
-                facts: Any, entities: Mapping[str, Sequence[str]], fallback: str) -> str:
-    """一段分析。核数不过的句子删掉；删了首句或剩不到 2 句时重写一次；仍不行用 `fallback`。"""
+                facts: Any, entities: Mapping[str, Sequence[str]], fallback: str, *, rows: str | None = None,
+                guide: str | None = None, dims: bool = True, must: Sequence[str] = ()) -> str:
+    """一段结论。核数不过的句子删掉；删了首句、剩不到 2 句，或 `must` 里的名字没点全时重写一次；仍不行用 `fallback`。
+
+    `must`：结论必须点到的名字（问「哪个最多」时的第一名，并列的全部，总述「排名、长清单与导出」）。"""
     if llm is None:
         return fallback
-    messages = [{"role": "system", "content": narrative_system(manifest)},
-                {"role": "user", "content": narrative_user(question, table, note, facts)}]
+    messages = [{"role": "system", "content": narrative_system(manifest, dims=dims)},
+                {"role": "user", "content": narrative_user(question, table, note, facts, rows=rows, guide=guide)}]
     for attempt in (1, 2):
         try:
             text = _content(await llm.chat(messages, **_CHAT_KW))
         except Exception as exc:  # noqa: BLE001 —— 模型出错走模板句，异常只进日志
             logger.warning("factory_issue_narrative_failed", attempt=attempt, error=type(exc).__name__)
             return fallback
-        result = check(question, note, table, facts, text, entities)
+        result = check(question, note, table, facts, text, entities, rows)
         kept, n = _kept_text(text, result)
-        if not result["first_bad"] and n >= 2:
+        missed = [m for m in must if m and m not in kept]
+        if not result["first_bad"] and n >= 2 and not missed:
             if result["bad"]:
                 logger.info("factory_issue_narrative_dropped", sentences=len(result["bad"]))
             return kept
-        logger.info("factory_issue_narrative_rejected", attempt=attempt, bad=len(result["bad"]))
+        logger.info("factory_issue_narrative_rejected", attempt=attempt, bad=len(result["bad"]), missed=len(missed))
         wrong = "；".join(f"「{b['句子']}」里的「{'、'.join(map(str, b['事实里没有的数']))}」" for b in result["bad"])
-        ask = (f"下面这些在【事实】里找不到，请只用【事实】里的数字和名称重写整段：{wrong}" if wrong
-               else "请按要求写 3 到 6 句，第一句直接回应用户的问题。")
+        if wrong:
+            ask = f"下面这些在【事实】里找不到，请只用【事实】里的数字和名称重写整段：{wrong}"
+        elif missed:
+            ask = f"第一句要点名最多的：{'、'.join(missed)}（并列的都要点到）。请重写整段。"
+        else:
+            ask = "请按要求写 3 到 6 句，第一句直接回应用户的问题。"
         messages = [*messages[:2], {"role": "assistant", "content": text}, {"role": "user", "content": ask}]
     return fallback

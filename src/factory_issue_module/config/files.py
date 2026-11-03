@@ -150,6 +150,8 @@ class AnswerParams:
     suggest_seconds: int = 5
     #: 类似问题的重排分下限（0 到 1；写 0 即不按分数筛），只管类似问题，「可能相关」仍看 `rerank_score_threshold`
     similar_rerank_floor: float = 0.2
+    #: 类似问题每域列几张（1 到 `SIMILAR_ROWS_MAX`，决策 2026-11-03「回答骨架与排版」）
+    similar_rows: int = 5
 
 
 # ---------------------------------------------------------------- Markdown 两种形态
@@ -385,10 +387,13 @@ def segmentation_from(data: Mapping[str, Any]) -> Segmentation:
 
 _ANSWER_KEYS = (
     "top_n", "export_threshold", "table_rows", "judge_max", "rerank_max",
-    "rerank_score_threshold", "similar_rerank_floor", "custom_stats_enabled", "suggest_model", "suggest_seconds",
+    "rerank_score_threshold", "similar_rerank_floor", "similar_rows", "custom_stats_enabled", "suggest_model",
+    "suggest_seconds",
 )
 #: 等模型挑答后建议的秒数的范围（设计 §11）
 SUGGEST_SECONDS_RANGE = (1, 30)
+#: 类似问题每域最多列几张：不超过每域逐张判断的张数（`skills/text_search.SIM_JUDGE`，单测核对两者一致），没判断过的不列
+SIMILAR_ROWS_MAX = 10
 
 
 def parse_answer_params(text: str) -> AnswerParams:
@@ -415,8 +420,11 @@ def answer_params_from(data: Mapping[str, Any]) -> AnswerParams:
     low, high = SUGGEST_SECONDS_RANGE
     if type(seconds) is not int or not low <= seconds <= high:
         raise ConfigFormatError(f"suggest_seconds 要写 {low} 到 {high} 之间的整数（秒），现在是 {seconds!r}")
+    rows = merged["similar_rows"]
+    if type(rows) is not int or not 1 <= rows <= SIMILAR_ROWS_MAX:
+        raise ConfigFormatError(f"similar_rows 要写 1 到 {SIMILAR_ROWS_MAX} 之间的整数，现在是 {rows!r}")
     return AnswerParams(**ints, rerank_score_threshold=threshold, **flags, suggest_seconds=seconds,
-                        similar_rerank_floor=floor)
+                        similar_rerank_floor=floor, similar_rows=rows)
 
 
 def _unit(key: str, value: Any) -> float:

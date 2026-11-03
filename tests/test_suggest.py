@@ -179,8 +179,8 @@ async def test_two_candidates_on_the_same_base_compose_into_one():
     assert stored["skill"] == "aggregate" and stored["params"]["group_by"] == ["问题类型"]
     assert stored["params"]["filters"][-1]["value"] == "未结案"
     events = await c.ask("没结案的按问题类型统计", "未结案的单里硬件问题最多。软件问题 1 张。")
-    titles = [e.data.get("title", "") for e in events if e.type is EventType.TABLE]
-    assert any("按问题类型统计" in t for t in titles)
+    heads = [e.data["text"] for e in events if e.type is EventType.DELTA and e.data["text"].strip().startswith("**")]
+    assert any("按问题类型统计" in t for t in heads)  # 小标题写在正文里（决策 2026-11-03「回答骨架与排版」）
 
 
 # ---------------------------------------------------------------------------- 模型的选择怎么核对

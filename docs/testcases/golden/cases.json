@@ -282,7 +282,7 @@
         ],
         "answer_contains": [
           "不保证完整",
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-007.sql"
@@ -1532,7 +1532,7 @@
         ],
         "answer_contains": [
           "不保证完整",
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-040.sql"

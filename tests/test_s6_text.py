@@ -288,8 +288,10 @@ async def test_jp11_text_search_only_covers_permitted_domains():
     assert [c["table"] for c in h.retrieval.calls] == [Domain.DOMESTIC.vec_table]  # 只检索国内向量表
     assert "restrict_ids" not in h.retrieval.calls[0]  # 没有条件：不限定候选
     text = _text(events)
-    assert "巴西、海外无权限，未计入" in text and "统计范围：国内；巴西、海外无权限，未计入" in text
-    assert "按现象描述找到 1 张相近的问题" in text and "文字查找：类似问题" in text
+    # 只有文字查找：结尾叫查找说明（决策 2026-11-03「回答骨架与排版」）
+    assert "巴西、海外无权限，未计入" in text and "查找范围：国内；巴西、海外无权限，未计入" in text
+    assert "统计口径" not in text and "**查找说明**" in text and "计数单位" not in text
+    assert "国内最相近的问题（1 张）" in text and "文字查找：类似问题" in text and "每域最多 5 张" in text
     assert not h.llm.routed(JUDGE_MARK) and len(h.llm.routed(SIM_MARK)) == 1  # 按类似问题的标准判断
 
 
@@ -316,7 +318,7 @@ async def test_similar_lists_only_judged_close_and_above_the_floor():
     assert body[judge.SIM_KEY] == "开机时屏幕出现花屏" and [c["no"] for c in body["候选"]] == [1, 2, 3]
     assert h.retrieval.calls[0]["top_n"] == semantic.TOP_K
     text = _text(events)
-    assert "按现象描述找到 1 张相近的问题" in text and "逐张判断是同一类现象的才列出" in text
+    assert "国内最相近的问题（1 张）" in text and "逐张判断是同一类现象的才列出" in text
     got = [x for x in logs if x["event"] == "factory_issue_sim_scores"]
     assert got[0]["floor"] == 0.2 and got[0]["listed"] == 1
     assert got[0]["scores"] == [[0.9, 0.8, 1], [0.5, 0.8, 0], [0.1, 0.8, 1]]
@@ -509,17 +511,22 @@ async def test_text_search_export_per_domain_with_full_description():
     assert {r[0]: r[1] for r in rows[1:]}["ZC9901001"] == LONG
 
 
-async def test_text_search_conclusion_comes_before_the_tables():
-    """先给结论再给表（开发者 2026-11-02 定）：各组张数那句 → 分析 → 每域的表。"""
+async def test_text_search_answer_follows_the_skeleton():
+    """回答骨架（决策 2026-11-03「回答骨架与排版」）：提示行（按哪些词找）→ 结论 → 每域一节（小标题写张数、表）
+    → 查找说明。模型两次都只写一句，结论退回模板句；张数不在开头逐域再说一遍。"""
     reply = plan(step("text_search", domains=CN, time=T30, mode="关键词", terms=["排线", "开裂", "NFC"], logic="或"))
     h = harness(replies=[reply, "共 3 张。", "共 3 张。"])
     events = await run(h, "国内描述里有排线、开裂或 NFC 的单")
     types = [e.type for e in events]
-    # 分析段：模型写的，或核数不过时退回的那句（`text_search._narrative`）；这里只看位置
-    at = next(i for i, e in enumerate(events) if e.type is EventType.DELTA
-              and (e.data["text"].strip() == "共 3 张。" or "以上是按文字找到的单" in e.data["text"]))
-    assert 0 < at < types.index(EventType.TABLE)
-    assert "张" in events[at - 1].data["text"]  # 前面是各组张数那句
+    table_at = types.index(EventType.TABLE)
+    before = [e.data["text"] for e in events[:table_at] if e.type is EventType.DELTA]
+    assert len(before) == 3
+    assert before[0].startswith("按这些词找（出现任一个）：排线、开裂、NFC")  # 提示行在最前
+    assert "共 3 张" in before[1] and before[1].startswith("\n\n国内，")  # 结论（模板句）
+    assert before[2] == "\n\n**国内比对范围内的文字里出现任一个词「排线」、「开裂」、「NFC」的单（3 张）**"  # 小标题写张数
+    after = "".join(e.data["text"] for e in events[table_at:] if e.type is EventType.DELTA)
+    assert "**查找说明**" in after and "排线、开裂、NFC" not in after  # 说法在提示行，结尾不重复
+    assert all("；\n" not in e.data["text"] for e in events if e.type is EventType.DELTA)
 
 
 async def test_lookup_table_desc_uses_the_text_table_too():
