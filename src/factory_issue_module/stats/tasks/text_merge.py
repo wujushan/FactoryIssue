@@ -12,7 +12,7 @@
 
 import pandas as pd
 
-from factory_issue_module.stats.lib.common import fi_int, fi_num, fi_rank, fi_round, fi_with_counts
+from factory_issue_module.stats.lib.common import fi_int, fi_named_facts, fi_num, fi_round, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
 from factory_issue_module.stats.lib.insights import in_insights, in_similar
 from factory_issue_module.stats.lib.views import vw_counts, vw_filter, vw_sorted, vw_time
@@ -78,11 +78,11 @@ def tm_order(sem, numbers):
 def tm_facts(v):
     if not len(v):
         return {"张数": 0}
-    pairs_type, _f, _t = fi_rank(vw_counts(v, "type"))
-    pairs_machine, _f, _t = fi_rank(vw_counts(v, "_machines", multi=True), 5)
-    facts = {"张数": int(len(v)), "按问题类型": [list(p) for p in pairs_type],
-             "按机型（前五）": [list(p) for p in pairs_machine[:5]],
-             "未结案": int(v["_unclosed"].astype(bool).sum())}
+    facts = {"张数": int(len(v))}
+    # 「未填」「其他（未识别）」「未识别机型」不参加排名（G87、G88）
+    fi_named_facts(facts, "按问题类型", "问题类型", vw_counts(v, "type"))
+    fi_named_facts(facts, "按机型（前五）", "机型", vw_counts(v, "_machines", multi=True), 5)
+    facts["未结案"] = int(v["_unclosed"].astype(bool).sum())
     return fi_with_counts(facts)
 
 

@@ -168,7 +168,8 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         kind = schema.OP_KINDS.get(str(f.get("op") or "是"), "eq")
         neg = kind in ("ne", "nhas")
         raw = f.get("value")
-        values = base.values_of(R.refs.get(raw["ref"], []) if schema.is_ref(raw) else raw)
+        ref = base.from_ref(raw)
+        values = base.values_of(R.refs.get(raw["ref"], []) if ref else raw)
         if not values:
             continue
         if _MASTER_OF.get(fld) in m.failed:
@@ -177,22 +178,33 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         if fld in _ABSENT:
             out.excluded.append(_ABSENT[fld])
             continue
+        blank = None if ref or fld in base.BLANK_OK or fld == "其他" else base.blank_said(values)
+        if blank is not None:  # 按「没填」筛（G89）
+            return base.blank_ask(fld, blank)
         shown = base.join(values)
+        miss: list[str] = []
         if fld == "机型":
             hit: list[str] = []
             for v in values:
                 got = names.machines(v, m.machines_in(DOMAIN), each=kind == "has")
                 if not got:
+                    if ref:  # 前一步给的名称本域没有（G90）
+                        miss.append(v)
+                        continue
                     return base.not_found("机型", v, R.entities, KIND_MACHINE)
                 hit += [x for x in got if x not in hit]
+            if base.ref_misses(out, LABEL, "机型", hit, miss):
+                continue
             if kind == "has":
                 out.notes.append(f"按以下机型统计：{base.join(hit)}")
             out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg})
             out.echo.append(("机型", base.join(hit)))
         elif fld == "系列":
-            got_series = series_of(values, m, DOMAIN)
+            got_series = series_of(values, m, DOMAIN, misses=miss if ref else None)
             if isinstance(got_series, Ask):
                 return got_series
+            if base.ref_misses(out, LABEL, "系列", got_series, miss):
+                continue
             out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg})
             out.echo.append(("系列", base.join(got_series)))
         elif fld == "加工厂":
@@ -205,6 +217,12 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 continue
             hit = []
             for v in values:
+                if ref:  # 前一步给的就是库里的工厂名：按名称完全相同对，对不上的写明（G90）
+                    if v in m.factory_names():
+                        hit += [v] if v not in hit else []
+                    else:
+                        miss.append(v)
+                    continue
                 got = list(names.factories(v, m.factory_names(), R.regions))
                 if not got:
                     return base.not_found("加工厂", v, R.entities, None)
@@ -213,6 +231,8 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                     return Ask(f"「{v}」对上了这几家工厂：{base.join(got)}。按哪几家查？", [base.join(got), *got][:4],
                                reason="多工厂", said=v, scope=scope)
                 hit += [x for x in got if x not in hit]
+            if base.ref_misses(out, LABEL, "加工厂", hit, miss):
+                continue
             codes = m.factory_codes(hit)
             out.sql.append(cond("m.Factory", "NOT_IN" if neg else "IN", codes))
             out.echo.append(("加工厂", base.join(hit)))
@@ -333,12 +353,18 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
 # ---------------------------------------------------------------------------- 三域共用的几种条件（巴西、海外也调）
 
 
-def series_of(values: Sequence[str], m: MasterData, domain: Domain) -> list[str] | Ask:
-    """系列（总述「机型与系列怎么对」）：对不上时列出可选系列请用户选；给的是机型名称时说明它属于哪个系列。"""
+def series_of(values: Sequence[str], m: MasterData, domain: Domain,
+              misses: list[str] | None = None) -> list[str] | Ask:
+    """系列（总述「机型与系列怎么对」）：对不上时列出可选系列请用户选；给的是机型名称时说明它属于哪个系列。
+
+    `misses` 给了列表时（取值来自前一步，G90）对不上的记进去、不追问。"""
     pool = m.series_in(domain)
     hit: list[str] = []
     for v in values:
         got = list(names.series(v, pool))
+        if not got and misses is not None:
+            misses.append(v)
+            continue
         if not got:
             machine = names.machines(re.sub(r"系列$", "", v), m.machines_in(domain))
             tip = f"「{machine[0]}」是机型，属于{m.machine_series[machine[0]]}。" if (

@@ -15,6 +15,7 @@ from factory_issue_module.declarations import Domain
 from factory_issue_module.domains import enums
 from factory_issue_module.plan import schema
 from factory_issue_module.present import columns
+from factory_issue_module.skills import aggregate
 
 #: 用户没点名列时，条件对应的列加在默认 6 列后面（看得到按什么筛的）
 _FILTER_COLUMNS = {
@@ -180,9 +181,11 @@ def conclusion(res: dict[str, Any], segs: Sequence[dict[str, Any]], scope: str, 
     seg = segs[0]
     facts = seg.get("facts") or {}
     text = f"{labels}{scope}共 {seg.get('found', 0)} 张"
+    # 「按问题类型」只有参加排名的；「未填」「其他（未识别）」在「不参加排名的问题类型」，不点名为最多（G87、G88）
     types = facts.get("按问题类型") or []
     if types:
         text += f"，最多的问题类型是{types[0][0]}（{types[0][1]} 张）"
+        text += aggregate.distribution_blanks(facts, "问题类型")
     if facts.get("未结案"):
         text += f"，其中未结案 {facts['未结案']} 张"
     return text + "。"

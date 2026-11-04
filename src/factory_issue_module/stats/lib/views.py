@@ -222,6 +222,8 @@ def vw_group(view, dim, total_ids=None):
         else:
             vals = [r[col]]
         vals = [v for v in vals if v not in (None, "", "—") and (v != "未填" or dim.get("keep_blank"))]
+        if not vals and dim.get("unknown_col") and bool(r.get(dim["unknown_col"])):
+            vals = ["未识别机型"]  # 巴西、海外大机型有值但对不上产品主数据
         if not vals and dim.get("empty") is not None:
             vals = [dim["empty"]]
         for v in dict.fromkeys(vals):

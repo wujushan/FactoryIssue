@@ -92,7 +92,8 @@ def dims(group_by: Sequence[str], basis: str | None) -> tuple[list[dict[str, Any
         "域": {"const": LABEL, "title": columns.DOMAIN, "merge": True},
         "问题类型": {"col": "type", "keep_blank": True, "title": s("type"), "merge": True,
                      "universe": [*enums.OS_PROBLEM_TYPES.values(), "未填", enums.OS_UNKNOWN_TYPE]},
-        "机型": {"col": "_machines", "multi": True, "empty": "未填", "title": s("machine"), "merge": True},
+        "机型": {"col": "_machines", "multi": True, "empty": "未填", "unknown_col": "_machines_unknown",
+                 "title": s("machine"), "merge": True},
         "加工厂": {"col": "factory", "title": s("factory"), "merge": True},
         "国内工厂": {"col": "cn_factory", "title": s("cn_factory")},
         "结案与否": {"col": "_closed_label", "title": columns.CLOSED_OR_NOT, "merge": True,
@@ -135,7 +136,8 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         kind = schema.OP_KINDS.get(str(f.get("op") or "是"), "eq")
         neg = kind in ("ne", "nhas")
         raw = f.get("value")
-        values = base.values_of(R.refs.get(raw["ref"], []) if schema.is_ref(raw) else raw)
+        ref = base.from_ref(raw)
+        values = base.values_of(R.refs.get(raw["ref"], []) if ref else raw)
         if not values:
             continue
         if _MASTER_OF.get(fld) in m.failed:
@@ -144,14 +146,23 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
         if fld in _ABSENT:
             out.excluded.append(_ABSENT[fld])
             continue
+        blank = None if ref or fld in base.BLANK_OK or fld == "其他" else base.blank_said(values)
+        if blank is not None:  # 按「没填」筛（G89）
+            return base.blank_ask(fld, blank)
         shown = base.join(values)
+        miss: list[str] = []
         if fld == "机型":
             hit: list[str] = []
             for v in values:
                 got = names.machines(v, m.machines_in(DOMAIN), each=kind == "has")
                 if not got:
+                    if ref:  # 前一步给的名称本域没有（G90）
+                        miss.append(v)
+                        continue
                     return base.not_found("机型", v, R.entities, KIND_MACHINE)
                 hit += [x for x in got if x not in hit]
+            if base.ref_misses(out, LABEL, "机型", hit, miss):
+                continue
             if kind == "has":
                 out.notes.append(f"海外按以下机型统计：{base.join(hit)}")
             out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg})
@@ -168,6 +179,12 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 continue
             hit = []
             for v in values:
+                if ref:  # 前一步给的就是库里的工厂名：按名称完全相同对，对不上的写明（G90）
+                    if v in pool:
+                        hit += [v] if v not in hit else []
+                    else:
+                        miss.append(v)
+                    continue
                 got = list(names.factories(v, pool, regions))
                 if not got:
                     return base.not_found("加工厂" if fld == "加工厂" else "国内工厂", v, R.entities, None)
@@ -177,6 +194,8 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                     return Ask(f"「{v}」对上了这几家工厂：{base.join(got)}。按哪几家查？", [base.join(got), *got][:4],
                                reason="多工厂", said=v, scope=scope)
                 hit += [x for x in got if x not in hit]
+            if base.ref_misses(out, LABEL, fld, hit, miss):
+                continue
             if fld == "加工厂":
                 out.sql.append(cond("m.Factory", "NOT_IN" if neg else "IN", hit))
             else:

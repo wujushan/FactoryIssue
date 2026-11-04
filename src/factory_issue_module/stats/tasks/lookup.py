@@ -18,7 +18,16 @@ import re
 
 import pandas as pd
 
-from factory_issue_module.stats.lib.common import fi_group, fi_int, fi_lookup, fi_records, fi_show, fi_unique, fi_with_counts
+from factory_issue_module.stats.lib.common import (
+    fi_group,
+    fi_int,
+    fi_lookup,
+    fi_rank_named,
+    fi_records,
+    fi_show,
+    fi_unique,
+    fi_with_counts,
+)
 from factory_issue_module.stats.lib.derive_brazil import br_latest
 from factory_issue_module.stats.lib.domains import dm_view
 from factory_issue_module.stats.lib.views import vw_counts, vw_sorted
@@ -156,7 +165,9 @@ def lk_section(lk, dom, view, data, L, P):
     base = [L["number"], L["type"], L["current_state"], L["machine"]]
     facts = {"张数": len(ids)}
     if len(sub):
-        facts["按问题类型"] = [list(p) for p in sorted(vw_counts(sub, "type"), key=lambda p: (-p[1], str(p[0])))]
+        # 分布照列全部取值，「未填」「其他（未识别）」排在最后（G87、G88）
+        named, blanks = fi_rank_named(vw_counts(sub, "type"))
+        facts["按问题类型"] = [list(p) for p in named] + blanks
         closed = vw_counts(sub, "_closed_label")
         order = {"未结案": 0, "已结案": 1}
         facts["是否结案"] = [list(p) for p in sorted(closed, key=lambda p: (order.get(p[0], 9), str(p[0])))]

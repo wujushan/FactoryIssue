@@ -14,7 +14,7 @@
 各域能算哪些指标看 `PARAMS["traits"]`：海外不良率是单上原文、不汇总，要不良率时逐单列出原文。
 """
 
-from factory_issue_module.stats.lib.common import fi_rank, fi_round, fi_with_counts
+from factory_issue_module.stats.lib.common import fi_named_facts, fi_rank, fi_round, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
 from factory_issue_module.stats.lib.insights import in_insights
 from factory_issue_module.stats.lib.views import (
@@ -117,6 +117,35 @@ def ag_rate_list(v, P, dom, C):
     return vw_rate_list(v, P["names"][dom], P["agg"]["table_rows"])
 
 
+def ag_split(pairs, unranked):
+    """[(取值, 张数)] → (参加排名的, 不参加排名的)。不参加排名的（「未填」「未识别机型」「其他（未识别）」，维度说明的
+    `unranked`）照常列一行、排在表格最后，不参加第一、前 N 名、并列（总述「排名、长清单与导出」，G87、G88）。"""
+    un = list(unranked or [])
+    ranked = [p for p in pairs if p[0] not in un]
+    blanks = sorted([p for p in pairs if p[0] in un], key=lambda p: un.index(p[0]))
+    return ranked, blanks
+
+
+def ag_blank_info(title, name, blanks, ranked, first, parts):
+    """不参加排名的几组：张数、按机型或系列时其中的国内物料单张数、没填的是否比第一名还多、是否只有这几组。数都在这里算；
+    呈现时程序写成「另有 N 张没填机型（其中物料单 M 张）」（`skills/aggregate.py::unranked_note`）。
+
+    `parts`：[(视图, {取值: 单 ID 集合})]；物料单只有国内视图有标记（`_material_flag`）。"""
+    rows = [[k, int(n)] for k, n in blanks if n]
+    if not rows:
+        return None
+    material = 0
+    if name in ("机型", "系列"):
+        for v, groups in parts:
+            ids = groups.get("未填") or set()
+            if ids and len(v) and "_material_flag" in v.columns:
+                material += int(v[v["_id"].isin(ids)]["_material_flag"].astype(bool).sum())
+    top_n = next((n for k, n in ranked if k == first[0]), 0) if first else 0
+    blank_n = next((n for k, n in rows if k == "未填"), 0)
+    return {"title": title, "rows": rows, "material": material, "over_first": bool(first) and blank_n > top_n,
+            "only": not first}
+
+
 def ag_top_values(kept, first, A):
     """引用值 `top_values`：用户给了名次数（`top`）时是表里的前 N 名（含第 N 名并列的），没给时同 `top1`（规划提示
     「步骤之间的引用」）。只说「哪个最多」时表格给前 10 名，后一步却只该接第一名。"""
@@ -142,22 +171,28 @@ def ag_dim_table(v, dim, A, C, period_bounds, metrics=None):
     pairs = [(k, len(ids)) for k, ids in groups.items()]
     metrics = A["metrics"] if metrics is None else metrics
     top = A.get("top") or (A["top_n"] if A.get("ranking") else None)
+    un = list(dim.get("unranked") or [])
+    ranked, blanks = ag_split(pairs, un)
     if dim.get("period"):
         kept = [(k, len(groups.get(k, ()))) for k in ag_ordered_keys(groups, dim, [v], period_bounds)]
         first, tied = [], []
         if kept:
             best = max(n for _k, n in kept)
             first = [k for k, n in kept if n == best]
+        blanks = []
     elif dim.get("order"):
         rank = {k: i for i, k in enumerate(dim["order"])}
-        kept = sorted(pairs, key=lambda p: (rank.get(p[0], len(rank)), str(p[0])))
-        _all, first, tied = fi_rank(pairs)
+        kept = sorted(ranked, key=lambda p: (rank.get(p[0], len(rank)), str(p[0]))) + blanks
+        _all, first, tied = fi_rank(ranked)
         if top:
-            kept, first, tied = fi_rank(pairs, top)
+            kept, first, tied = fi_rank(ranked, top)
+            kept = kept + blanks
     else:
-        kept, first, tied = fi_rank(pairs, top)
+        kept, first, tied = fi_rank(ranked, top)
         if not top and len(kept) > A["table_rows"]:
-            kept, first, tied = fi_rank(pairs, A["table_rows"])
+            kept, first, tied = fi_rank(ranked, A["table_rows"])
+        kept = kept + blanks
+    ranked_kept = [(k, n) for k, n in kept if k not in un]
     rows, chart = [], []
     for name, _n in kept:
         sub = v[v["_id"].isin(groups.get(name, set()))] if len(v) else v
@@ -170,12 +205,13 @@ def ag_dim_table(v, dim, A, C, period_bounds, metrics=None):
     if "占比" in metrics:
         columns.append(C["share"])
     summed = sum(len(ids) for ids in groups.values())
-    facts = {"按" + dim["title"]: [[k, n] for k, n in kept], "第一": first, "第一并列": len(first) > 1}
+    # 不参加排名的几组不进事实（写结论的模型只看排名），张数另放段上的 `unranked`
+    facts = {"按" + dim["title"]: [[k, n] for k, n in ranked_kept], "第一": first, "第一并列": len(first) > 1}
     if tied:
         facts["并列"] = tied
         facts["并列名次"] = int(top) if top else int(A["table_rows"])
-    if len(groups) > len(kept):
-        facts["分组总数"] = len(groups)
+    if len(ranked) > len(ranked_kept):
+        facts["分组总数"] = len(ranked)
     # 一单可多值的维度总写一句（总述「统计口径说明」多值归属：各组之和可能大于问题单总数）
     caliber = {"多值归属": bool(dim.get("multi")), "各组合计": summed}
     if dim.get("multi"):
@@ -187,7 +223,9 @@ def ag_dim_table(v, dim, A, C, period_bounds, metrics=None):
         caliber["无需定责"] = int((v["resp_dept"] == "无需定责").sum())
         caliber["未定责"] = int((v["resp_dept"] == "未定责").sum())
         caliber["物料问题"] = int(v["_resp_material"].astype(bool).sum())
-    return {"columns": columns, "rows": rows}, chart, facts, caliber, [k for k, _n in kept], first
+    blank_info = ag_blank_info(dim["title"], dim.get("name"), blanks, ranked, first, [(v, groups)])
+    return ({"columns": columns, "rows": rows}, chart, facts, caliber, [k for k, _n in ranked_kept], first,
+            blank_info)
 
 
 def ag_compare_groups(v_all, times, dim):
@@ -215,14 +253,16 @@ def ag_compare(parts, A, C):
             gb[k] = gb.get(k, 0) + len(ids)
         na_all, nb_all, missing = na_all + n1, nb_all + n2, missing + m1 + m2
     dims = [d for _dom, _v, d in parts if d is not None]
-    names = sorted(set(ga) | set(gb), key=lambda k: (-(ga.get(k, 0) + gb.get(k, 0)), str(k)))
+    un = list((dims[0].get("unranked") if dims else None) or [])
+    # 不参加排名的几组排在最后，也不算「增加的」（后一步不接它，G87）
+    names = sorted(set(ga) | set(gb), key=lambda k: (k in un, -(ga.get(k, 0) + gb.get(k, 0)), str(k)))
     rows, increased_any = [], []
     for k in names:
         na, nb = ga.get(k, 0), gb.get(k, 0)
         diff = nb - na
         rate = f"{fi_round(diff / na * 100, 2):g}%" if na else "—"
         rows.append([k, na, nb, diff, rate])
-        if diff > 0:
+        if diff > 0 and k not in un:
             increased_any.append(k)
     if dims:
         diff = nb_all - na_all
@@ -274,9 +314,10 @@ def ag_overview(dom, v, missing, A, C, P):
     if found:
         for k, x in ag_metrics(v, metrics, C).items():
             row.setdefault(k, x)
-    pairs, _f, _t = fi_rank(vw_counts(v, "type")) if found else ([], [], [])
-    facts = {"总单数": found, "未结案": row[C["unclosed"]], "停线中": row[C["stopped"]],
-             "按问题类型": [list(p) for p in pairs], **mfacts}
+    facts = {"总单数": found, "未结案": row[C["unclosed"]], "停线中": row[C["stopped"]]}
+    # 「未填」「其他（未识别）」不参加排名，另放「不参加排名的问题类型」（G87、G88）
+    fi_named_facts(facts, "按问题类型", "问题类型", vw_counts(v, "type") if found else [])
+    facts.update(mfacts)
     rejected = int(v["_rejected"].astype(bool).sum()) if found else 0
     if rejected:
         facts["未结案中生产角色驳回、流程已结束"] = rejected
@@ -333,7 +374,7 @@ def ag_single(dom, v, missing, dims, A, C, P, refs):
     breakdowns = vw_breakdowns(v, P.get("breakdowns", {}).get(dom))
     out = []
     for dim in dims:
-        table, chart, facts, caliber, kept, first = ag_dim_table(v, dim, A, C, bounds, metrics)
+        table, chart, facts, caliber, kept, first, blank_info = ag_dim_table(v, dim, A, C, bounds, metrics)
         facts = {"总单数": found, **facts, **mfacts}
         if breakdowns:
             facts["分取值"] = breakdowns
@@ -345,7 +386,7 @@ def ag_single(dom, v, missing, dims, A, C, P, refs):
         out.append({"domain": dom, "kind": "group", "title": dim["title"], "multi": bool(dim.get("multi")),
                     "name": dim.get("name"), "table": table, "chart": {"dimension": dim["title"], "rows": chart},
                     "groups": len(table["rows"]), "found": found, "facts": fi_with_counts(facts),
-                    "breakdowns": breakdowns, "caliber": caliber})
+                    "breakdowns": breakdowns, "caliber": caliber, "unranked": blank_info})
     if "合计不良率" in A["metrics"] and T.get("rate") == "text" and out:
         out[0]["rate_list"] = ag_rate_list(v, P, dom, C)
     return out
@@ -428,9 +469,10 @@ def ag_cross_overview(timed, A, C, P, refs):
             vals = [r[columns.index(C[key])] for r in rows if isinstance(r[columns.index(C[key])], (int, float))]
             total_row[C[key]] = fi_round(sum(vals), 2) if vals else "—"
     rows.append([total_row.get(c, "—") for c in columns])
-    ranked, _f, _t = fi_rank(list(type_pairs.items()))
     facts = {"总单数": n_all, "各域单数": [[d, per[d]["单数"]] for d in per], "未结案": u_all,
-             "停线中": totals["stopped"], "按问题类型": [list(p) for p in ranked], "各域": per}
+             "停线中": totals["stopped"]}
+    fi_named_facts(facts, "按问题类型", "问题类型", list(type_pairs.items()))
+    facts["各域"] = per
     if totals["rejected"]:
         facts["未结案中生产角色驳回、流程已结束"] = totals["rejected"]
     if set_aside:
@@ -458,6 +500,8 @@ def ag_cross_dim(parts, A, C, P, refs):
     totals = {k: sum(len(groups[dom].get(k, ())) for dom, _v, _d in parts) for k in keys}
     top = A.get("top") or (A["top_n"] if A.get("ranking") else None)
     pairs = [(k, totals[k]) for k in keys]
+    un = list(dim0.get("unranked") or [])
+    ranked, blanks = ag_split(pairs, un)
     if dim0.get("period"):
         bounds = ag_bounds(P, parts[0][0], [dim0], ag_concat([v for _d, v, _x in parts]),
                            sum(len(v) for _d, v, _x in parts))
@@ -466,16 +510,21 @@ def ag_cross_dim(parts, A, C, P, refs):
         if kept:
             best = max(n for _k, n in kept)
             first = [k for k, n in kept if n == best]
+        blanks = []
     elif dim0.get("order"):
         rank = {k: i for i, k in enumerate(dim0["order"])}
-        kept = sorted(pairs, key=lambda p: (rank.get(p[0], len(rank)), str(p[0])))
-        _all, first, tied = fi_rank([p for p in pairs if p[1]] or pairs)
+        kept = sorted(ranked, key=lambda p: (rank.get(p[0], len(rank)), str(p[0]))) + blanks
+        # 只有没单的等级（A+、A、B、C 都是 0，单都没填等级）时没有第一
+        _all, first, tied = fi_rank([p for p in ranked if p[1]])
         if top:
-            kept, first, tied = fi_rank(pairs, top)
+            kept, first, tied = fi_rank(ranked, top)
+            kept = kept + blanks
     else:
-        kept, first, tied = fi_rank(pairs, top)
+        kept, first, tied = fi_rank(ranked, top)
         if not top and len(kept) > A["table_rows"]:
-            kept, first, tied = fi_rank(pairs, A["table_rows"])
+            kept, first, tied = fi_rank(ranked, A["table_rows"])
+        kept = kept + blanks
+    ranked_kept = [(k, n) for k, n in kept if k not in un]
     metrics = [m for m in A["metrics"] if m in ("未结案数", "占比", "结案周期", "停线时长")]
     grand = sum(len(v) for _d, v, _x in parts)
     # 每域一列是该域的单数，最后一列「单数」是三域合计（总述「表格列名」）
@@ -501,12 +550,12 @@ def ag_cross_dim(parts, A, C, P, refs):
     multi = any(d.get("multi") for _dom, _v, d in parts)
     blank = sum(int(len(v) - len({i for ids in groups[dom].values() for i in ids})) for dom, v, _d in parts)
     facts = {"总单数": grand, "各域单数": [[dom, int(len(v))] for dom, v, _d in parts],
-             "按" + title: [[k, n] for k, n in kept], "第一": first, "第一并列": len(first) > 1}
+             "按" + title: [[k, n] for k, n in ranked_kept], "第一": first, "第一并列": len(first) > 1}
     if tied:
         facts["并列"] = tied
         facts["并列名次"] = int(top) if top else int(A["table_rows"])
-    if len([k for k in keys if totals[k]]) > len(kept):
-        facts["分组总数"] = len([k for k in keys if totals[k]])
+    if len([k for k, n in ranked if n]) > len(ranked_kept):
+        facts["分组总数"] = len([k for k, n in ranked if n])
     if multi:
         facts["各组合计（一单可计入多组）"] = summed
     caliber = {"多值归属": multi, "各组合计": summed, "跨域归并": dim0.get("name")}
@@ -515,12 +564,16 @@ def ag_cross_dim(parts, A, C, P, refs):
     if dim0.get("period"):
         caliber["样本少"] = ag_small_sample([(dom, len(v)) for dom, v, _d in parts], A, P)
     refs["top1"] += [x for x in first if x not in refs["top1"]]
-    refs["top_values"] += [x for x in ag_top_values([k for k, _n in kept], first, A) if x not in refs["top_values"]]
+    refs["top_values"] += [x for x in ag_top_values([k for k, _n in ranked_kept], first, A)
+                           if x not in refs["top_values"]]
+    blank_info = ag_blank_info(title, dim0.get("name"), blanks, ranked, first,
+                               [(v, groups[dom]) for dom, v, _d in parts])
     return {"domain": "、".join(dom for dom, _v, _d in parts), "domains": [dom for dom, _v, _d in parts],
             "kind": "group", "cross": True, "title": title, "name": dim0.get("name"), "multi": multi,
             "table": {"columns": columns, "rows": rows},
             "chart": {"dimension": title, "rows": chart, "series": [C["count"]]},
-            "groups": len(rows), "found": grand, "facts": fi_with_counts(facts), "caliber": caliber}
+            "groups": len(rows), "found": grand, "facts": fi_with_counts(facts), "caliber": caliber,
+            "unranked": blank_info}
 
 
 def ag_cross(timed, A, C, P, refs):

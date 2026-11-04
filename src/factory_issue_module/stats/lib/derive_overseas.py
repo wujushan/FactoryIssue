@@ -158,6 +158,8 @@ def os_view(data, E, desc_text):
             "_restarted": stop_code == E["restarted"],
             "_not_stopped": stop_code not in (E["stopped"], E["restarted"]), "_stop_code": None,
             "_stages": [status_text], "_machines": machines, "_series": [],
+            # 大机型有值但一段都对不上产品主数据：按机型统计时归「未识别机型」，不归「未填」（与清单显示一致）
+            "_machines_unknown": machine_text == "未识别机型",
             "_current_ids": current_ids, "_current_names": current_names,
             "_follower_ids": follower_ids, "_follower_names": followers, "_responsible_ids": current_ids,
             "_follow_dept_ids": [] if dept_id is None else [dept_id], "_resp_dept_ids": [], "_resp_material": False,

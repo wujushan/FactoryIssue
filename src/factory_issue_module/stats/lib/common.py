@@ -199,6 +199,28 @@ def fi_rank(pairs, top=None):
     return rows, first, tied
 
 
+#: 不参加排名的取值（总述「排名、长清单与导出」，G87、G88）；与 `domains/base.py::UNRANKED` 同一份，单测比对
+FI_UNRANKED = ("未填", "未识别机型", "其他（未识别）")
+
+
+def fi_rank_named(pairs, top=None):
+    """分布（按问题类型、按加工厂）→ (排名的, 不参加排名的)：占位取值（`FI_UNRANKED`）不参加排名，按 `FI_UNRANKED`
+    的顺序另给，交写结论的模型时放在「不参加排名的 X」里，免得它把「未填」说成最多。"""
+    named = [p for p in pairs if p[0] not in FI_UNRANKED and not fi_blank(p[0])]
+    blanks = sorted([list(p) for p in pairs if p[0] in FI_UNRANKED], key=lambda p: FI_UNRANKED.index(p[0]))
+    ranked, _f, _t = fi_rank(named, top)
+    return ranked, blanks
+
+
+def fi_named_facts(facts, key, title, pairs, top=None):
+    """把一个分布写进事实：「按 X」只放排名的，占位取值放「不参加排名的 X」（有才写）。返回排名的。"""
+    ranked, blanks = fi_rank_named(pairs, top)
+    facts[key] = [list(p) for p in (ranked[:top] if top else ranked)]
+    if blanks:
+        facts["不参加排名的" + title] = blanks
+    return ranked
+
+
 def fi_with_counts(facts):
     """`facts` 里每个列表附上项数，键名为「列表名（项数）」（设计 §8.1）。只处理 dict 里的列表值，递归。"""
     if isinstance(facts, dict):

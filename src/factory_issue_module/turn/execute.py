@@ -704,15 +704,21 @@ def _add_caliber(C: cal.Caliber, run: StepRun, seg: dict[str, Any], dims: Sequen
 
 async def _conclude(T: Turn, table_text: str | None, note: str | None, facts: dict[str, Any], fallback: str,
                     time_text: str | None, found: Mapping[str, Any] | None, *,
-                    segs: Sequence[Mapping[str, Any]] = (), must: Sequence[str] = (), guide: str | None = None) -> str:
+                    segs: Sequence[Mapping[str, Any]] = (), must: Sequence[str] = (), guide: str | None = None,
+                    after: str = "", use_llm: bool = True) -> str:
     """结论：加粗的结论句 + 要点 + 需关注（总述「先给结论」「结论里的要点与需关注的单」）。要点与需关注的单是沙箱
     给的（`found` = 结果里的 `insights`）；结论句与要点由模型照着写、逐句核数，不合格的用模板句（`narrative.write_points`）；
-    需关注由程序写（`present/insights.py`）。"""
+    需关注由程序写（`present/insights.py`）。
+
+    `after`：程序写的、接在结论句后面的话（统计「另有 N 张没填机型」，G87）。`use_llm=False`：结论句与要点都用模板句。"""
     found = found or {}
     facts = {"时间范围": time_text or "不限建单时间", **facts}
     points = list(found.get("points") or [])
-    head, bullets = await narrative.write_points(getattr(T.ctx, "llm", None), T.query, table_text, note or None, facts,
+    llm = getattr(T.ctx, "llm", None) if use_llm else None
+    head, bullets = await narrative.write_points(llm, T.query, table_text, note or None, facts,
                                                  points, T.entities, fallback, must=must, guide=guide)
+    if after and head:  # 加粗收尾的「**」后面紧跟汉字不算收尾（CommonMark），隔一个空格
+        head = f"{head} {after}"
     focus = list(found.get("focus") or [])
     descs = await insights.describe(T.ctx, focus, segs, T.access.text_search) if focus else {}
     return insights.assemble(head, bullets, insights.focus_block(focus, descs, T.sites))
@@ -958,6 +964,10 @@ async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], t
         openings: list[str] = []
         facts: dict[str, Any] = {}
         must: list[str] = []
+        #: 「另有 N 张没填机型」那句（G87）：程序写在结论句后面，也作【说明】交写结论的模型，免得它再写一遍
+        blank_lines: list[str] = []
+        #: 每段都只有「未填」一类、没有可以排名的取值：结论句用模板句，不调模型（免得它把「未填」说成第一）
+        only_blank = True
         for seg in members:
             got, narr, opening = _present_agg(run, T, seg, time_text, C, dims, metrics)
             sections += got
@@ -967,11 +977,18 @@ async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], t
                 facts = narr[1] if len(members) == 1 else {**facts, seg.get("domain", ""): narr[1]}
                 if ranking:
                     must += [str(x) for x in (seg.get("facts") or {}).get("第一") or []]
+                only_blank = only_blank and bool((seg.get("unranked") or {}).get("only"))
+            label = str(seg.get("domain") or "") if len(members) > 1 else ""
+            line = aggregate.unranked_note(seg, label, ranking)
+            if line:
+                blank_lines.append(line)
         fallback = layout.sentences(openings)
-        text = fallback
+        extra = layout.sentences(blank_lines)
+        text = layout.sentences([fallback, extra])
         if described:
-            text = await _conclude(T, "；".join(described), note, facts, fallback, time_text, pending,
-                                   must=list(dict.fromkeys(must)))
+            text = await _conclude(T, "；".join(described), layout.sentences([note, extra]), facts, fallback,
+                                   time_text, pending, must=list(dict.fromkeys(must)), after=extra,
+                                   use_llm=not only_blank)
             pending = {}
         events += [Event.delta(text), *sections]
     return events

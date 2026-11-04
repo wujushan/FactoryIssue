@@ -360,7 +360,9 @@ async def test_chained_steps_pass_top_values_by_reference():
     assert text.startswith("### 1. ") and "\n\n### 2. " in text and text.count("统计口径") == 1
     assert "\n\n---\n\n**统计口径**" in text
     tables = _tables(events)
-    assert tables[0]["rows"] == [["A920", 2]]
+    # 「未填」照常列一行、排在最后、不占前 1 名的名额；物料单本来不挂机型（G87）
+    assert tables[0]["rows"] == [["A920", 2], ["未填", 1]]
+    assert "另有 1 张没填机型（其中物料单 1 张），不参加排名。" in text
     assert [r[0] for r in tables[1]["rows"]] == ["ZC9901001", "ZC9901003"]
 
 
@@ -379,6 +381,8 @@ async def test_parallel_fetch_keeps_query_recording():
         await asyncio.gather(*(base.fetch(h.ctx, spec) for _ in range(4)))
     assert len(recs) == 7 and all(r["source"] == "info" for r in recs)
     QuerySpec.model_validate(spec)
+
+
 async def test_chained_top_values_without_top_is_the_first_only():
     """只说「最多的」、没给名次数：表格照给前 10 名，后一步引用 `top_values` 只接第一名（规划提示「步骤之间的引用」）。"""
     s1 = step("aggregate", "s1", domains=CN, time=RECENT30, group_by=["机型"], ranking=True)
@@ -408,3 +412,18 @@ async def test_chained_step_stops_when_reference_has_no_value():
     assert _tables(events) == []
 
 
+async def test_parallel_fetch_keeps_query_recording():
+    """§6.1：`fetch` 放进 `asyncio.to_thread` 并行，平台的取数录制列表照常收到每一条（`queries.json` 归档）。"""
+    h = make_harness(scopes.account_jia())
+
+    def recorded(sql: str, params: dict) -> pd.DataFrame:
+        record_query(source="info", sql=sql, params=params, rows=0, duration_ms=0)
+        return pd.DataFrame()
+
+    h.connectors["info"].frames["Employee"] = recorded
+    spec = {"source": "info", "from": "info.dbo.Employee", "select": ["ID", "Name"]}
+    with record_queries() as recs:
+        await base.fetch_in(h.ctx, spec, "ID", list(range(2500)))  # 3 块并行
+        await asyncio.gather(*(base.fetch(h.ctx, spec) for _ in range(4)))
+    assert len(recs) == 7 and all(r["source"] == "info" for r in recs)
+    QuerySpec.model_validate(spec)

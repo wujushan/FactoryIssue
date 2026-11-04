@@ -163,6 +163,8 @@ def br_view(data, E, desc_text):
             "_not_stopped": not is_stop, "_stop_code": None,
             "_stop_label": stop_label,
             "_stages": [status.get(s, fi_show(s))], "_machines": machines, "_series": series,
+            # 大机型有值但一段都对不上产品主数据：按机型统计时归「未识别机型」，不归「未填」（与清单显示一致）
+            "_machines_unknown": machine_text == "未识别机型",
             "_factories": factories, "_current_ids": [], "_current_names": [],
             "_follower_ids": [] if follower_id is None else [follower_id],
             "_responsible_ids": [] if follower_id is None else [follower_id],

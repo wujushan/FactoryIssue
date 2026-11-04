@@ -12,7 +12,7 @@
 
 import pandas as pd
 
-from factory_issue_module.stats.lib.common import fi_blank, fi_rank, fi_with_counts
+from factory_issue_module.stats.lib.common import fi_blank, fi_named_facts, fi_rank, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
 from factory_issue_module.stats.lib.insights import in_insights
 from factory_issue_module.stats.lib.views import vw_breakdowns, vw_counts, vw_filter, vw_ids, vw_sorted, vw_time
@@ -25,13 +25,13 @@ LS_SORT = {"建单时间": "_add", "现场发现日期": "_found", "停线日期
 
 def ls_facts(v, P, cond_kinds, blind=()):
     """分析用的事实。`blind` 是靠没取到的主数据才写得出来的列，不按它们分（否则全是「未填」）。"""
-    pairs_type, _f, _t = fi_rank(vw_counts(v, "type"))
     unclosed = v[v["_unclosed"].astype(bool)] if len(v) else v
     stopped = v[v["_stopped_now"].astype(bool)] if len(v) else v
-    facts = {"张数": int(len(v)), "按问题类型": [list(p) for p in pairs_type]}
+    facts = {"张数": int(len(v))}
+    # 「未填」「其他（未识别）」不参加排名，另放「不参加排名的 X」（G87、G88）
+    fi_named_facts(facts, "按问题类型", "问题类型", vw_counts(v, "type"))
     if "factory" not in blind:
-        pairs_factory, _f, _t = fi_rank(vw_counts(v, "factory"))
-        facts["按加工厂"] = [list(p) for p in pairs_factory]
+        fi_named_facts(facts, "按加工厂", "加工厂", vw_counts(v, "factory"))
     if "_machines" not in blind:
         pairs_machine, _f, _t = fi_rank(vw_counts(v, "_machines", multi=True), 5)
         facts["按机型（前五）"] = [list(p) for p in pairs_machine[:5]]
