@@ -42,6 +42,7 @@ import warm_sandbox
 from factory_issue_module.declarations import ERP, INFO, MART, MODULE_CODE
 from factory_issue_module.module import FactoryIssueModule
 from factory_issue_module.present.suggest import MARKER as SUGGEST_MARKER
+from factory_issue_module.present.summaries import REASON_MARKER
 
 MANIFEST = FactoryIssueModule.manifest
 
@@ -122,6 +123,10 @@ class FakeLLM:
         #: 混进 `calls` 会让「调了几次」「最后一次是分析段」的断言都跟着变。默认照代码的默认问句挑前两条
         self.suggest_calls: list[list[dict[str, Any]]] = []
         self.suggest_reply: Any = pick_first_two
+        #: 表格里「原因与措施」一格的摘要（决策 2026-11-04）同样单独记、单独回放：清单接着问原因、文字查找每轮都可能
+        #: 有这一次。默认不给摘要（代码退回原文前约 60 个字）
+        self.reason_calls: list[list[dict[str, Any]]] = []
+        self.reason_reply: Any = {"items": []}
 
     @staticmethod
     def check_messages(messages: list[dict[str, Any]]) -> None:
@@ -138,6 +143,13 @@ class FakeLLM:
         if SUGGEST_MARKER in system:
             self.suggest_calls.append(messages)
             reply = self.suggest_reply(messages) if callable(self.suggest_reply) else self.suggest_reply
+            if isinstance(reply, Exception):
+                raise reply
+            content = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
+            return {"choices": [{"message": {"role": "assistant", "content": content}}], "usage": {}}
+        if REASON_MARKER in system:
+            self.reason_calls.append(messages)
+            reply = self.reason_reply(messages) if callable(self.reason_reply) else self.reason_reply
             if isinstance(reply, Exception):
                 raise reply
             content = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)

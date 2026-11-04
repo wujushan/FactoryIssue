@@ -507,8 +507,27 @@ async def test_text_search_export_per_domain_with_full_description():
     assert "完整 2 张见附件" in _text(events)
     ws = load_workbook(io.BytesIO(h.files.saved["按文字找到的问题单.xlsx"])).worksheets[0]
     rows = [[c.value for c in r] for r in ws.iter_rows()]
-    assert rows[0][:2] == ["问题编号", "问题描述"] and "命中处" in rows[0]
-    assert {r[0]: r[1] for r in rows[1:]}["ZC9901001"] == LONG
+    assert rows[0][:3] == ["问题编号", "机型", "问题描述"] and "命中处" in rows[0]
+    assert {r[0]: r[2] for r in rows[1:]}["ZC9901001"] == LONG
+
+
+async def test_one_or_two_hits_are_named_in_the_first_sentence():
+    """合计只有一两张时（决策 2026-11-04「表格里的原因与措施给摘要」）：结论那一句接着点名，单号带链接、括号里写机型
+    与结案没有；表格默认列带机型，原因与措施一格是摘要；答后建议有这张单的原因与措施（看全文）。"""
+    reply = plan(step("text_search", domains=CN, time=T30, mode="关键词", terms=["起火"]))
+    h = harness(replies=[reply], texts={3: {"desc": "电池起火冒烟"}}, extra={})
+    events = await run(h, "国内描述里有起火的是哪张单")
+    table = _tables(events)[0]
+    assert _numbers(table) == ["ZC9901003"]
+    assert table["columns"][:3] == ["问题编号", "机型", "问题描述"]
+    assert table["columns"][-2:] == ["命中处", "原因与措施"]
+    assert _col(table, "机型") == ["A920、A920PRO"]
+    conclusion = _text(events).split("\n\n")[1]
+    assert conclusion.endswith("的单共 1 张。单号：[ZC9901003](https://info.test.local/#/QualityManage/ProblemDetail?id=3)"
+                               "（机型 A920、A920PRO，未结案）。")
+    assert _col(table, "原因与措施") == ["这张单上和处理过程里都没有写原因与措施"]
+    queries = [b["query"] for b in _buttons(events)]
+    assert "ZC9901003 的原因与措施" in queries
 
 
 async def test_text_search_answer_follows_the_skeleton():

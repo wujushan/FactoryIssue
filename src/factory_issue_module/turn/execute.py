@@ -195,7 +195,7 @@ def _domain_needs(run: StepRun, d: Domain, got: DomainStep, failed: set[str]) ->
         got.needs |= set(A.CUSTOM_NEEDS)
         return
     if run.skill in ("list_issues", "text_search"):
-        if run.skill == "text_search":  # 表格的列（问题编号、问题描述，或用户点名的列）
+        if run.skill == "text_search":  # 表格的列（问题编号、机型、问题描述，或用户点名的列）
             keys = [k for k in text_search.table_keys(run.step, False)[0] if not k.startswith("_")]
         else:
             keys, _missing = list_issues.columns_for(run.step)
@@ -818,9 +818,7 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
         return out
     if run.skill == "list_issues":
         text_ok = [d for d in executed if d in T.access.text_search]
-        await summaries.fill_tables(T.ctx, segs, text_ok)
-        if run.add_reasons:
-            await _add_reasons(T, segs)
+        await fill_cells(T, segs, text_ok, reasons=run.add_reasons)
         head += _desc_notes(keys_by, T)
     head += _breakdown_notes(segs)
     # 提示行（决策 2026-11-03「回答骨架与排版」）：结论之上一段；也交写结论的模型看，不让它重复
@@ -1061,15 +1059,29 @@ def _rate_lists(seg: dict[str, Any], T: Turn, suffix: str) -> list[Event]:
 # ---------------------------------------------------------------------------- 详情与按号查单（S4）
 
 
+async def fill_cells(T: Turn, segs: Sequence[dict[str, Any]], text_ok: Sequence[Domain], *, desc: bool = True,
+                     reasons: bool = False) -> None:
+    """表格里问题描述换成摘要、加「原因与措施」一列，两样并行（各自读改写表格行时中间不让出，互不覆盖；
+    问题描述那一列在前，加在最后的一列不挪动它的位置）。"""
+    jobs = [*([summaries.fill_tables(T.ctx, segs, text_ok)] if desc else []),
+            *([_add_reasons(T, segs)] if reasons else [])]
+    if jobs:
+        await asyncio.gather(*jobs)
+
+
 async def _add_reasons(T: Turn, segs: Sequence[dict[str, Any]]) -> None:
-    """第 5 条前半：清单表格里列出的单（只取这几张，§13）另取叙述原文，沙箱合成「原因与措施」一格加在表格最后一列。"""
+    """第 5 条前半与文字查找：表格里列出的单（只取这几张，§13）另取叙述原文，沙箱合成「原因与措施」，浓缩成一两句后
+    加在表格最后一列（决策 2026-11-04「表格里的原因与措施给摘要」，`present/summaries.py::reason_texts`）。"""
     targets = [issue_detail.Target(domain=_BY_LABEL[str(seg["domain"])], pid=int(pid))
                for seg in segs if not seg.get("empty") and str(seg.get("domain")) in _BY_LABEL
                for pid in seg.get("ids_shown") or []]
     if not targets:
         return
     got, _denied, _failed = await issue_detail.fetch_tickets(T, targets, mode="reasons")
-    texts = {(str(x["domain"]), int(x["id"])): issue_detail.reason_cell(x, T.sites) for x in got or []}
+    items = list(got or [])
+    shorts = await summaries.reason_texts(T.ctx, [issue_detail.reason_body(x) for x in items])
+    texts = {(str(x["domain"]), int(x["id"])): issue_detail.reason_cell(x, T.sites, short)
+             for x, short in zip(items, shorts, strict=True)}
     for seg in segs:
         table = seg.get("table")
         if not table or seg.get("empty"):

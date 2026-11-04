@@ -7,13 +7,17 @@ J-P07、J-P08（没有 CAR 报告权限）在这里。计划的写法照对照�
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import s4_data
 import scopes
-from fakes import data_queries, make_harness, run
+from fakes import FakeLLM, data_queries, make_harness, run
 from forge_core.errors import TableDenied
 from forge_core.events import EventType
 
 from factory_issue_module.declarations import Domain
+from factory_issue_module.present import summaries
 from factory_issue_module.turn import errors
 
 SITES = 'issue = "info.test.local"'
@@ -283,28 +287,58 @@ async def test_rule5_detail_with_only_reasons_folds_into_the_list():
     assert "单张单详情" not in _text(events)
 
 
-async def test_rule5_folded_cell_carries_five_why_and_car_link():
-    """并进清单的「原因与措施」一格同详情一样给（总述「原因与措施怎么给」）：国内有 5Why 时附在后面，每项截到 200 字；
-    没有 CAR 报告权限时那句说明后附报告链接（链接在 `handle()` 一侧拼）。"""
+async def test_rule5_folded_cell_is_a_summary_of_five_why_and_keeps_car_link():
+    """并进清单的「原因与措施」一格给摘要（决策 2026-11-04「表格里的原因与措施给摘要」）：交模型浓缩的是与详情同样
+    合成的内容（国内有 5Why 时附在后面，每项截到 200 字）；没有 CAR 报告权限时那句说明与报告链接不进摘要，照原样接上
+    （链接在 `handle()` 一侧拼）。"""
     reply = plan(step("list_issues", domains={"value": ["国内"], "from": "user"},
                       time=[{"said": "近 30 天", "basis": "建单", "from": "user"}]),
                  step("issue_detail", "s2", issue={"value": {"ref": "s1.issues"}, "from": "previous"},
                       aspects=["原因"]))
+    h = make_harness(scopes.account_jia(), llm_replies=[reply, "共 7 张。"], config_files={"link_sites.toml": SITES})
+    s4_data.load(h)
+    five = h.connectors["info"].frames["ZCTracking_ProblemFiveWhy"]
+    five.loc[five["ID"] == 1, "Question"] = "为什么虚焊" + "长" * 300
+    seen: list[str] = []
 
-    def long_question(frames) -> None:
-        five = frames["ZCTracking_ProblemFiveWhy"]
-        five.loc[five["ID"] == 1, "Question"] = "为什么虚焊" + "长" * 300
+    def answer(messages) -> dict:
+        items = json.loads(messages[-1]["content"])
+        seen.extend(x["原因与措施"] for x in items)
+        return {"items": [{"no": x["no"], "summary": "焊点虚焊，补焊并加检"} for x in items
+                          if "焊点虚焊" in x["原因与措施"]]}
 
-    _h, events = await _go("近 30 天国内的单各是什么原因？", [reply, "共 7 张。"], privileges=scopes.account_jia(),
-                           edit=long_question)
+    h.llm.reason_reply = answer
+    events = await run(h, "近 30 天国内的单各是什么原因？")
     tables = _tables(events)
     assert len(tables) == 1 and tables[0]["columns"][-1] == "原因与措施"
     cells = {r[0].split("]")[0].lstrip("["): r[-1] for r in tables[0]["rows"]}
-    six = cells["ZC9901006"]
-    assert "焊点虚焊" in six and "5Why" in six and "为什么虚焊" in six and "长" * 300 not in six
+    assert cells["ZC9901006"] == "焊点虚焊，补焊并加检"
+    six = next(t for t in seen if "焊点虚焊" in t)
+    assert "5Why" in six and "为什么虚焊" in six and "长" * 300 not in six
     assert "为什么温度偏低" in six and "待答复" in six
+    assert not any(errors.CAR_NOT_PERMITTED in t for t in seen)
     car = cells["ZC9901002"]
     assert errors.CAR_NOT_PERMITTED in car and "VendorReportOutDetail.aspx?VendorReportOutID=5" in car
+    assert len(h.llm.calls) == 2  # 摘要那次不占规划、分析的回放
+
+
+async def test_reason_summaries_keep_short_ones_and_check_numbers():
+    """「原因与措施」摘要（`present/summaries.py::reason_texts`）：空的照空，不超过约 60 个字的照抄；更长的每 10 张
+    一次模型调用；摘要里有原文没有的数字、或模型没给的，退回原文前约 60 个字加「…」。"""
+    llm = FakeLLM()
+    llm.reason_reply = lambda m: {"items": [{"no": 1, "summary": "焊点虚焊，补焊"}, {"no": 2, "summary": "返工 99 台"}]}
+    ctx = SimpleNamespace(llm=llm)
+    long1 = "原因分析：焊点虚焊" + "，细节" * 30 + "；改善措施：补焊"
+    long2 = "原因分析：来料不良" + "，细节" * 30 + "；改善措施：返工 12 台"
+    got = await summaries.reason_texts(ctx, ["", "改善措施：更换\n屏幕", long1, long2])
+    assert got[:3] == ["", "改善措施：更换 屏幕", "焊点虚焊，补焊"]
+    assert got[3] == long2[:summaries.SHORT] + "…"
+    assert len(llm.reason_calls) == 1 and llm.calls == []
+    llm.reason_calls.clear()
+    llm.reason_reply = {"items": []}
+    got = await summaries.reason_texts(ctx, [long1] * 12)
+    assert len(llm.reason_calls) == 2 and all(t == long1[:summaries.SHORT] + "…" for t in got)
+    assert summaries.REASON_MARKER in summaries.REASON_SYSTEM
 
 
 # ---------------------------------------------------------------------------- 按号查单

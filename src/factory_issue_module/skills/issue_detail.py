@@ -272,15 +272,31 @@ def _field_line(field: Sequence[Any], sites: Any, car: tuple[Any, Any] | None) -
     return f"- **{label}**：{value}"
 
 
-def reason_cell(item: Mapping[str, Any], sites: Any) -> str:
-    """并进清单的「原因与措施」一格（沙箱 `mode=reasons` 的一项）：没有 CAR 报告权限的那句说明后附报告链接，与详情块
-    同一做法（总述「原因与措施怎么给」）。"""
+def _car_note(item: Mapping[str, Any]) -> bool:
+    return item.get("car_id") is not None and errors.CAR_NOT_PERMITTED in str(item.get("text") or "")
+
+
+def reason_body(item: Mapping[str, Any]) -> str:
+    """表格里「原因与措施」一格要浓缩的那部分（沙箱 `mode=reasons` 的一项）：要附报告链接的那句说明不在里面，
+    由 `reason_cell` 照原样接上（决策 2026-11-04「表格里的原因与措施给摘要」）。"""
     text = str(item.get("text") or "")
-    car_id = item.get("car_id")
-    if car_id is not None and errors.CAR_NOT_PERMITTED in text:
-        link = links.car(sites, item.get("car_text") or columns.shown("car"), car_id)
-        text = text.replace(errors.CAR_NOT_PERMITTED, f"{errors.CAR_NOT_PERMITTED}：{link}", 1)
-    return text
+    if not _car_note(item):
+        return text
+    parts = [p for p in text.split("；") if p.strip() and p.strip() != errors.CAR_NOT_PERMITTED]
+    return "；".join(parts)
+
+
+def reason_cell(item: Mapping[str, Any], sites: Any, body: str | None = None) -> str:
+    """表格里「原因与措施」一格：`body` 是摘要（不给时用沙箱合成的原文）；没有 CAR 报告权限时那句说明后附报告链接，
+    与详情块同一做法（总述「原因与措施怎么给」）。"""
+    text = str(item.get("text") or "") if body is None else body
+    if not _car_note(item):
+        return text
+    link = links.car(sites, item.get("car_text") or columns.shown("car"), item.get("car_id"))
+    note = f"{errors.CAR_NOT_PERMITTED}：{link}"
+    if errors.CAR_NOT_PERMITTED in text:
+        return text.replace(errors.CAR_NOT_PERMITTED, note, 1)
+    return f"{text}；{note}" if text else note
 
 
 def _table_event(table: dict[str, Any], title: str, sites: Any) -> Event:

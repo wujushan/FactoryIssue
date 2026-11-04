@@ -6,8 +6,9 @@
 3. 各域按条件取数（与清单同一个取数单元），另读本域分段表（预筛过）与文字表要比的列（`text/keyword.py`）。
 4. ② 沙箱按词匹配、按单归组（`stats/tasks/keyword_match.py`），同时给出本步范围内的单（按意思一路限定候选）。
 5. ③④ 按意思找（`text/semantic.py`）；⑤「可能相关」与类似问题交模型逐张判断（`text/judge.py`）。
-6. ⑥ 沙箱收拢、计数、排序（`stats/tasks/text_merge.py`）；问题描述摘要（`present/summaries.py`）、原因与措施（只取
-   表格里列出的单，§13）；提示行、结论、各域一节、统计口径「文字查找」一项、按钮。
+6. ⑥ 沙箱收拢、计数、排序（`stats/tasks/text_merge.py`）；问题描述摘要与原因与措施摘要（`present/summaries.py`，
+   原因与措施只取表格里列出的单，§13），两样并行；提示行、结论（合计一两张时点名单号、机型、结案没有）、各域一节、
+   统计口径「文字查找」一项、按钮。
 
 事件顺序（决策 2026-11-03「回答骨架与排版」）：提示行（无权与未计入的域、本次按哪些说法找）→ 结论（模型写，看得到
 每域前几张单的内容；模板句是 `fallback`）→ 每域一节（小标题写张数、`table`、表格下面几句）→ 要增减说法、候选太多
@@ -33,7 +34,7 @@ from factory_issue_module.declarations import SEGMENTATION, TOPIC_TERMS, Domain
 from factory_issue_module.domains import base, enums
 from factory_issue_module.plan import clarify
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import columns, export, insights, layout, summaries, tables
+from factory_issue_module.present import columns, export, insights, layout, links, summaries, tables
 from factory_issue_module.skills import list_issues
 from factory_issue_module.stats import runner
 from factory_issue_module.text import judge, keyword, semantic, terms
@@ -52,12 +53,17 @@ NARRATIVE_ROWS = 5
 #: 交写结论的模型看的每格文字最多几个字
 NARRATIVE_CELL = 150
 CONTEXT_MAX = 120
+#: 用户没点名列时表格的列（「命中处」「原因与措施」另加）
+DEFAULT_KEYS = ("number", "machine", "desc")
+#: 合计不超过这么多张时结论那一句点名每一张（总述「先给结论」：结果只有一两张时）
+NAME_MAX = 2
 #: 统计口径里的找法（总述「统计口径说明」文字查找一行）
 METHODS = {"关键词": "关键词搜索", "话题": "涉及某个话题", "类似问题": "类似问题", "点名字段": "点名字段",
            "做法": "问做法"}
 #: 国内停线状态为这两种时，重启方案与处理步骤里重启那三个环节不参与匹配（国内「停线」）
 RESTART_HEADS = ("停线重启", "停线重启审核", "停线重启发起", "责任人填写重启方案")
 STEP_COLUMNS = ("f_step_result", "f_step_opinion", "f_step_content")
+_BY_LABEL = {d.label: d for d in Domain}
 
 
 def _clip(text: str) -> str:
@@ -79,13 +85,14 @@ def _labels(tp: TermPlan) -> tuple[dict[str, str], bool]:
 
 
 def table_keys(step: dict, show_group: bool) -> tuple[list[str], bool]:
-    """表格的列（内部键）与要不要加「原因与措施」：用户点名了列按用户说的，「命中处」照加。"""
+    """表格的列（内部键）与要不要加「原因与措施」：用户点名了列按用户说的，「命中处」照加。默认是问题编号、机型、
+    问题描述、命中处、原因与措施（总述「表格列名」，决策 2026-11-04「表格里的原因与措施给摘要」）。"""
     p = step.get("params") or {}
     if p.get("columns"):
         keys, _missing = list_issues.columns_for(step)
         reasons = False
     else:
-        keys = ["number", "desc"]
+        keys = list(DEFAULT_KEYS)
         reasons = True
     keys = [k for k in keys if k != "number"]
     head = ["number", "_group"] if show_group else ["number"]
@@ -243,14 +250,44 @@ def captions(tp: TermPlan, seg: Mapping[str, Any], counts: Mapping[str, Any]) ->
     return out
 
 
-def fallback(tp: TermPlan, segs: Sequence[Mapping[str, Any]], scope: str, counts: Mapping[str, Any]) -> str:
-    """结论的模板句：只有一两张不写分析、模型没写出合格的结论时用（张数、单号都来自沙箱）。"""
+def named(res: Mapping[str, Any], segs: Sequence[Mapping[str, Any]], sites: Any) -> str:
+    """合计只有一两张时结论那一句点名的单（总述「先给结论」）：「[ZC…](链接)（机型 A920，已结案）」，几张用「、」连。
+    编号、机型、结案没有都取自沙箱给的表格行；合计更多时为空。"""
+    if int((res.get("totals") or {}).get("listed") or 0) > NAME_MAX:
+        return ""
+    out: list[str] = []
+    for s in segs:
+        dom = _BY_LABEL.get(str(s.get("domain")))
+        table = s.get("table") or {}
+        if s.get("empty") or dom is None:
+            continue
+        cols = [str(c) for c in table.get("columns") or []]
+        machine = columns.shown("machine", dom)
+        at = cols.index(machine) if machine in cols else None
+        ids, opened = list(s.get("ids_shown") or []), list(s.get("open_shown") or [])
+        for k, row in enumerate(table.get("rows") or []):
+            bits: list[str] = []
+            value = str(row[at]).strip() if at is not None and at < len(row) and row[at] is not None else ""
+            if value:
+                bits.append(value if value == "物料" else (f"机型{value}" if value == "未填" else f"机型 {value}"))
+            if k < len(opened):
+                bits.append("未结案" if opened[k] else "已结案")
+            number = links.issue(sites, dom, row[0], ids[k] if k < len(ids) else None)
+            out.append(number + (f"（{'，'.join(bits)}）" if bits else ""))
+    return "、".join(out)
+
+
+def fallback(tp: TermPlan, segs: Sequence[Mapping[str, Any]], scope: str, counts: Mapping[str, Any],
+             named_text: str = "") -> str:
+    """结论的模板句：只有一两张不写分析、模型没写出合格的结论时用（张数、单号都来自沙箱）。`named_text` 是合计只有
+    一两张时要点名的单（`named`），接在这一句后面，问「单号是多少」时开头就是答案。"""
+    tail = f"单号：{named_text}。" if named_text else ""
     labels = "、".join(str(s.get("domain")) for s in segs)
     hit = [s for s in segs if not s.get("empty")]
     miss = [str(s.get("domain")) for s in segs if s.get("empty")]
     if len(segs) == 1:
         seg = segs[0]
-        return opening(tp, seg, str(seg.get("domain")), scope, counts.get(str(seg.get("domain"))) or {}) + "。"
+        return opening(tp, seg, str(seg.get("domain")), scope, counts.get(str(seg.get("domain"))) or {}) + "。" + tail
     if not hit:
         if tp.mode == "类似问题":
             return f"{labels}{scope}按现象描述都没有找到相近的问题。"
@@ -260,12 +297,12 @@ def fallback(tp: TermPlan, segs: Sequence[Mapping[str, Any]], scope: str, counts
     who = "、".join(str(s.get("domain")) for s in hit)
     if tp.mode == "类似问题":
         numbers = [str(r[0]) for s in hit for r in (s.get("table") or {}).get("rows") or []]
-        text = f"{who}{scope}有现象相近的问题" + (f"：{'、'.join(numbers)}" if len(numbers) <= 3 else "")
+        text = f"{who}{scope}有现象相近的问题" + (f"：{'、'.join(numbers)}" if len(numbers) <= 3 and not tail else "")
     else:
         total = sum(_n(s, "kw") for s in hit)
         third = sum(_n(s, "g3") for s in hit)
         text = f"{who}{scope}{_what(tp)}合计 {total} 张" + (f"，另有 {third} 张{columns.TEXT_GROUPS['3']}" if third else "")
-    return text + (f"；{'、'.join(miss)}没有找到" if miss else "") + "。"
+    return text + (f"；{'、'.join(miss)}没有找到" if miss else "") + "。" + tail
 
 
 def first_fields(seg: Any) -> str:
@@ -407,16 +444,13 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
         return out
     head += sem_notes
     keys, reasons = table_keys(run.step, _labels(tp)[1])
-    if "desc" in keys:
-        await summaries.fill_tables(T.ctx, segs, executed)
-    if reasons:
-        await X._add_reasons(T, segs)
+    await X.fill_cells(T, segs, executed, desc="desc" in keys, reasons=reasons)
     # 提示行：无权与未计入的域、本次按哪些说法找、说法清单「说明」里那种问法的那一句（决策 2026-11-03「回答骨架与排版」）
     notice = [*head, used_text(tp), tp.asked_rule]
     by_domain = counts.get("by_domain") or {}
     scope = X._scope(X._time_text(run))
     conclusion = await _narrative(T, X, tp, res, segs, run, layout.sentences(notice),
-                                  fallback(tp, segs, scope, by_domain))
+                                  fallback(tp, segs, scope, by_domain, named(res, segs, T.sites)))
     out.events += layout.para(notice)
     out.events += _present(T, tp, segs, by_domain, conclusion, crowded_hint(run.step) if crowded else "")
     _caliber(C, run, tp, segs, sem_notes, X, T.answer.similar_rows)

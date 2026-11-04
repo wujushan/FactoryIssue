@@ -7,6 +7,8 @@
   有这张单而问题描述为空的写「未填」。
 - 本域的文字查找表无权时问题描述一列写「暂不可用」（沙箱里就写好了，这里不碰）。
 - 导出文件给剥净后的全文，不给摘要（同样「新建不久，稍后可见」）。
+- 表格里「原因与措施」一格（`reason_texts`，决策 2026-11-04「表格里的原因与措施给摘要」）同一套做法：不超过约
+  60 个字的照抄，更长的每 `REASON_BATCH` 张一次模型调用、各写成一两句，核对同上，不过就退回原文前约 60 个字。
 - 只是取文字、替换表格里那一格；不算任何数。
 """
 
@@ -40,6 +42,17 @@ SUMMARY_SYSTEM = """你帮「制程问题查询助手」把问题单的问题描
 只输出一个 JSON 对象：{"items": [{"no": 序号, "summary": "摘要"}]}，每条都要给，不要别的文字。
 - 摘要里的数字只照抄原文，不做计算，不换算单位，不写原文没有的数字。
 - 每条不超过 60 个字；不加评价，不写「该单」「本问题」一类开头。"""
+
+#: 原因与措施每批几张、每张交模型看前多少个字
+REASON_BATCH = 10
+REASON_INPUT = 800
+#: 认这次调用用的一段（单测的假模型按它认）
+REASON_MARKER = "原因与措施各写成一句话"
+REASON_SYSTEM = """你帮「制程问题查询助手」把问题单的原因与措施各写成一句话，放进表格的一格：先说原因，再说怎么处理的。
+只输出一个 JSON 对象：{"items": [{"no": 序号, "summary": "摘要"}]}，每条都要给，不要别的文字。
+- 只写原文里有的内容；原文只写了原因或只写了处理办法时，就只写那一样。
+- 数字只照抄原文，不做计算，不换算单位，不写原文没有的数字。
+- 每条不超过 60 个字；不写栏目名、环节名、人名，不加评价，不写「该单」「本问题」一类开头。"""
 
 
 def _clip(text: str) -> str:
@@ -79,11 +92,12 @@ async def descriptions(ctx: Any, domain: Domain, ids: Sequence[int]) -> dict[int
     return out
 
 
-async def _summarize(llm: Any, texts: Sequence[str]) -> list[str | None]:
+async def _summarize(llm: Any, texts: Sequence[str], system: str = SUMMARY_SYSTEM, field: str = "问题描述",
+                     cut: int = 1500) -> list[str | None]:
     if llm is None or not texts:
         return [None] * len(texts)
-    body = [{"no": i, "问题描述": t[:1500]} for i, t in enumerate(texts, start=1)]
-    messages = [{"role": "system", "content": SUMMARY_SYSTEM},
+    body = [{"no": i, field: t[:cut]} for i, t in enumerate(texts, start=1)]
+    messages = [{"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(body, ensure_ascii=False)}]
     try:
         resp = await asyncio.wait_for(llm.chat(messages, **_CHAT_KW), timeout=TIMEOUT)
@@ -121,12 +135,37 @@ async def cells(ctx: Any, domain: Domain, ids: Sequence[int]) -> list[str]:
             long_at.append(k)
     if long_at:
         sources = [got[int(ids[k])] for k in long_at]
-        summaries = await _summarize(getattr(ctx, "llm", None), sources)
-        for k, source, summary in zip(long_at, sources, summaries, strict=True):
-            ok = bool(summary) and len(summary or "") <= SUMMARY_MAX and _numbers_ok(summary or "", source)
-            if summary and not ok:
-                logger.info("factory_issue_summary_rejected")
-            out[k] = summary if ok and summary else _clip(source)
+        for k, text in zip(long_at, await _shorten(getattr(ctx, "llm", None), sources), strict=True):
+            out[k] = text
+    return out
+
+
+async def _shorten(llm: Any, sources: Sequence[str], **kw: Any) -> list[str]:
+    """一次模型调用把这批长文字各浓缩成一两句；每条核对数字与长度，不过、缺了或出错就退回原文前约 60 个字。"""
+    summaries = await _summarize(llm, sources, **kw)
+    out: list[str] = []
+    for source, summary in zip(sources, summaries, strict=True):
+        ok = bool(summary) and len(summary or "") <= SUMMARY_MAX and _numbers_ok(summary or "", source)
+        if summary and not ok:
+            logger.info("factory_issue_summary_rejected")
+        out.append(summary if ok and summary else _clip(source))
+    return out
+
+
+async def reason_texts(ctx: Any, texts: Sequence[str]) -> list[str]:
+    """表格里「原因与措施」一格的摘要，顺序同 `texts`（决策 2026-11-04「表格里的原因与措施给摘要」）：空的照空，
+    不超过约 60 个字的照抄，更长的每 `REASON_BATCH` 张一次模型调用、各批并行。"""
+    out = [re.sub(r"\s+", " ", t or "").strip() for t in texts]
+    long_at = [k for k, t in enumerate(out) if len(t) > SHORT]
+    if not long_at:
+        return out
+    llm = getattr(ctx, "llm", None)
+    batches = [long_at[i:i + REASON_BATCH] for i in range(0, len(long_at), REASON_BATCH)]
+    results = await asyncio.gather(*(_shorten(llm, [texts[k] for k in b], system=REASON_SYSTEM, field="原因与措施",
+                                              cut=REASON_INPUT) for b in batches))
+    for b, got in zip(batches, results, strict=True):
+        for k, text in zip(b, got, strict=True):
+            out[k] = text
     return out
 
 
