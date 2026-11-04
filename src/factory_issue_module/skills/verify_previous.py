@@ -5,6 +5,7 @@
 
 事件顺序：`delta`（复核结论：一致，或各域张数怎么变、哪些单多了少了）→ 有变化时 `table`（变化的单）→ 详情照这张单
 现在的样子重新给出 → `delta`（当时按什么理解、按什么口径算）→ `suggestions`（上一轮的其他理解）。
+「当时按什么理解」是上一轮开头写的那几句（工作区 `turn.notes`），不是规划器的 `understanding` 原文。
 
 - 比对在沙箱里做（`stats/tasks/verify.py`）：存下的单 ID、张数与重查的逐步逐域比，只比本轮可查的域。文字查找
   （S6b）同样比，有模型逐张判断的一组时另说一句：那几张的出入不一定是数据变了。
@@ -21,7 +22,7 @@ from forge_core.events import Event
 from factory_issue_module.declarations import DOMAINS
 from factory_issue_module.domains.base import Ask
 from factory_issue_module.plan import clarify
-from factory_issue_module.present import columns, links
+from factory_issue_module.present import columns, layout, links
 from factory_issue_module.stats import runner
 from factory_issue_module.turn import errors, execute, workspace
 
@@ -132,7 +133,14 @@ async def run(T: execute.Turn, turn: Mapping[str, Any], results: Mapping[str, An
             events.append(Event.delta("\n\n单张单详情按这张单现在的情况重新给出：\n\n"))
             events += out.events
     tail = []
-    if plan.get("understanding"):
+    notes = turn.get("notes")
+    if isinstance(notes, list):
+        # 当时开头写的「按 X 理解」那几句，原样再说一遍（决策 2026-11-04「按什么理解写在开头」）；当时没写就不说，
+        # 条件在统计口径里。照存下的带回本轮记录，再质疑一次还说得出
+        T.record.notes = [str(x) for x in notes if str(x).strip()]
+        if T.record.notes:
+            tail.append("上一轮开头写明：" + layout.sentences(T.record.notes))
+    elif plan.get("understanding"):  # 没有 `notes` 的旧记录
         tail.append(f"上一轮按「{str(plan['understanding']).rstrip('。')}」理解。")
     if got.caliber.counted:
         tail.append(got.caliber.text())

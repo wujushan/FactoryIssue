@@ -482,7 +482,8 @@ async def _present(run: Any, T: Any, result: Mapping[str, Any], res: Mapping[str
         facts = {"总单数": res.get("total", 0), "各域单数": [[d, (res.get("found") or {}).get(d, 0)] for d in ds],
                  "临时统计的结果": {"列": table["columns"], "行": table["rows"]}}
         text = await X._conclude(T, tables.describe(heading(res, ds), table, None), layout.sentences(notice), facts,
-                                 fallback, time_text, res.get("insights"))
+                                 fallback, time_text, res.get("insights"), reading=X.reading_of(run),
+                                 cover=X.cover_of(run, T))
     events = [*layout.para(notice), Event.delta(text), layout.heading(heading(res, ds)), tables.event(table, "")]
     if item is not None:
         T.record.charts.append(dict(item))

@@ -47,7 +47,8 @@ class PlanResult:
     #: 什么日期理解，并给另一种理解的按钮
     check_errors: list[str] = field(default_factory=list)
     hits: list[RuleHit] = field(default_factory=list)
-    #: 第 7 条按库里的取值定的类。呈现（S2 起）在开头写「按 X 理解」，模型本来就放对了类时同样要写
+    #: 第 7 条按库里的取值定的类、第 20 条助手按意思定的取值与张数。呈现在开头写「按 X 理解」，模型本来就放对了
+    #: 类时同样要写
     inferred: list[Inferred] = field(default_factory=list)
     calls: int = 0
 
@@ -66,6 +67,8 @@ class PlanInputs:
     #: 可查的域的机型名称：号码直通不把写了连字符的机型当 PN / PO（S2 起由主数据给）
     machines: Collection[str] | None = None
     today: date | None = None
+    #: 第 20 条：没说要几张时列几张（模块配置 `top_n`）；None 用内置默认
+    default_limit: int | None = None
 
 
 def _content(resp: Any) -> str:
@@ -143,7 +146,7 @@ class Planner:
         out = normalize.apply(plan, normalize.Context(
             query=inputs.query, previous=inputs.previous_plan, previous_outcome=inputs.previous_outcome,
             earlier_query=inputs.earlier_query, classes=inputs.classes, topics=self.topics,
-            today=inputs.today, hits=done.hits, inferred=done.inferred))
+            today=inputs.today, hits=done.hits, inferred=done.inferred, default_limit=inputs.default_limit))
         if out is not None:
             done.plan = out
         return done
@@ -232,5 +235,9 @@ class Planner:
         missed = normalize.values_not_in_query(done.plan, inputs.query)
         if missed:
             logger.info("factory_issue_plan_rule", rule=16, action="只记日志", fields=missed)
+        if done.plan.get("alternatives") and not done.inferred:
+            # 规划器给了其他理解，开头却没有可写的「按 X 理解」（每一项在原话里都有依据）：只记日志，看日志再定
+            # （开发者 2026-11-04 定，决策 2026-11-04「按什么理解写在开头」）
+            logger.info("factory_issue_plan_rule", rule=20, action="只记日志", reason="有其他理解、开头没写")
         result.plan, result.hits, result.inferred = done.plan, done.hits, done.inferred
         return result

@@ -10,7 +10,8 @@
   - `turn`：只有取过数的轮次覆盖：问句原话、执行计划（`plan` 是规整后、并过之后、直填过的计划，与对照集里
     「上一轮计划」同一形状，交给规划器；`steps` 是每步实际查了哪些域、换算出的起止日期连同原话、各域张数，
     只给执行层用：质疑重查、换图、沿用上一轮的时间；临时统计的步骤另记要算什么与模型写的那份脚本（`custom`，
-    S7，版本号随之为 3），质疑、换图时照它重算，不调模型）、时间。
+    S7，版本号随之为 3），质疑、换图时照它重算，不调模型）、开头写的「按 X 理解」那几句（`notes`，质疑重查照它说
+    当时按什么理解；没有这个键的旧记录照旧用计划的 `understanding`）、时间。
   - `results`：每步每域的结果单 ID 与问题编号（每域至多 `ID_CAP` 个），与 `turn` 一起写；文字查找的步骤另记
     找的是什么与用的说法（`texts`，S6b 加，版本号随之为 2）。
   - `charts`：本轮各段图的数据行（沙箱产出，原样），换图用。
@@ -41,7 +42,7 @@ from forge_core.errors import WorkspaceQuotaExceeded
 from factory_issue_module.domains import base
 from factory_issue_module.domains.base import Ask
 from factory_issue_module.plan import names, schema
-from factory_issue_module.plan.normalize import Inferred
+from factory_issue_module.plan.normalize import KIND_CLASS, Inferred
 from factory_issue_module.plan.timespan import Span
 
 logger = structlog.get_logger(__name__)
@@ -194,6 +195,9 @@ class TurnRecord:
     ask: Ask | None = None
     #: 导出链接那几句（统计口径之后发）
     exports: list[str] = field(default_factory=list)
+    #: 本轮开头写的「按 X 理解」、沿用了哪些条件那几句：质疑重查时照它说「当时按什么理解」，不用规划器的原文
+    #: （决策 2026-11-04「按什么理解写在开头」）
+    notes: list[str] = field(default_factory=list)
     #: 本轮的结局：有没有查到结果、是不是整轮都失败（`last.outcome`）
     found: bool = False
     failed: bool = False
@@ -217,7 +221,7 @@ def _capped(results: Mapping[str, Any]) -> dict[str, Any]:
 
 async def write_turn(ctx: Any, query: str, plan: dict, record: TurnRecord) -> None:
     """取过数的轮次：覆盖 `turn`、`results`、`charts`；有新的单独说到的单时覆盖 `focus`。"""
-    await write(ctx, TURN, {"query": query, "plan": plan, "steps": record.steps,
+    await write(ctx, TURN, {"query": query, "plan": plan, "steps": record.steps, "notes": list(record.notes),
                             "at": datetime.now().isoformat(timespec="seconds")})
     await write(ctx, RESULTS, {"steps": _capped(record.results), "texts": record.texts})
     await write(ctx, CHARTS, {"items": record.charts})
@@ -404,8 +408,8 @@ async def write_pending(ctx: Any, *, query: str, plan: dict, ask: Ask, recommend
         return False
     return await write(ctx, PENDING, {"query": query, "plan": plan, "question": ask.question, "reason": ask.reason,
                                       "options": options,
-                                      "inferred": [{"step": x.step, "field": x.field, "values": list(x.values)}
-                                                   for x in inferred],
+                                      "inferred": [{"step": x.step, "field": x.field, "values": list(x.values),
+                                                    "kind": x.kind, "said": x.said} for x in inferred],
                                       "check_errors": list(check_errors)})
 
 
@@ -423,7 +427,8 @@ def fill(pending: Mapping[str, Any] | None, query: str) -> Filled | None:
         logger.info("factory_issue_fill_missed", kind=(option.get("patch") or {}).get("kind"))
         return None
     logger.info("factory_issue_fill", kind=option["patch"].get("kind"), reason=pending.get("reason"))
-    inferred = [Inferred(step=str(x.get("step")), field=str(x.get("field")), values=tuple(x.get("values") or ()))
+    inferred = [Inferred(step=str(x.get("step")), field=str(x.get("field")), values=tuple(x.get("values") or ()),
+                         kind=str(x.get("kind") or KIND_CLASS), said=str(x.get("said") or ""))
                 for x in pending.get("inferred") or [] if isinstance(x, Mapping)]
     patch = option["patch"]
     scopes: tuple[dict[str, Any], ...] = ()

@@ -1,6 +1,7 @@
 """按条件列清单（设计 §4.3 清单一行、§6.3、§9.2；总述「清单默认列」「跨域规则」清单呈现）。
 
-事件顺序（决策 2026-11-03「回答骨架与排版」）：提示行（无权的域、「按 X 理解」）→ 结论 → 每域一节（小标题写张数、
+事件顺序（决策 2026-11-03「回答骨架与排版」）：提示行（无权的域、「按 X 理解」，含规整第 20 条的「没说要几张，
+按不良率从高到低列出前 10 张」）→ 结论 → 每域一节（小标题写张数，只列了前几张时写列的是哪几张、
 `table`、表格下面一句）→ 统计口径（整轮合并，放最后）→ 导出链接（用户明说导出，或某域超过导出阈值时，
 `turn/execute.py::_export_lists`）。问题描述一列在文字查找表无权的域写「暂不可用」。
 """
@@ -13,7 +14,7 @@ from typing import Any
 from factory_issue_module.config.files import AnswerParams
 from factory_issue_module.declarations import Domain
 from factory_issue_module.domains import enums
-from factory_issue_module.plan import schema
+from factory_issue_module.plan import normalize, schema
 from factory_issue_module.present import columns
 from factory_issue_module.skills import aggregate
 
@@ -132,7 +133,9 @@ def no_conditions(step: dict) -> bool:
     return not (p.get("domains") or p.get("time") or p.get("filters") or p.get("within"))
 
 
-_DATE_SORTS = ("建单时间", "现场发现日期", "停线日期", "结案时间")
+_DATE_SORTS = normalize.DATE_SORTS
+#: 只列前几张时是哪几张：按这一项从高到低时说「最高的」还是「最多的」
+_TOP_WORDS = {"不良率": ("最高", "最低"), "不良数量": ("最多", "最少"), "影响数量": ("最多", "最少")}
 
 
 def order_text(step: dict) -> str | None:
@@ -140,19 +143,37 @@ def order_text(step: dict) -> str | None:
     sort = (step.get("params") or {}).get("sort")
     if not isinstance(sort, dict) or not sort.get("by"):
         return None
-    by, asc = str(sort["by"]), sort.get("order") == "升序"
-    if by == "建单时间" and not asc:
+    if sort["by"] == "建单时间" and sort.get("order") != "升序":
         return None
+    return normalize.sort_text(sort)
+
+
+def top_phrase(step: dict) -> str:
+    """只列前几张时是哪几张：「不良率最高的」「最新建单的」（没写排序为建单时间从新到旧）。"""
+    sort = (step.get("params") or {}).get("sort")
+    sort = sort if isinstance(sort, dict) else {}
+    by, asc = str(sort.get("by") or "建单时间"), sort.get("order") == "升序"
+    if by == "建单时间":
+        return "最早建单的" if asc else "最新建单的"
     if by in _DATE_SORTS:
-        return f"按{by}从{'旧到新' if asc else '新到旧'}"
-    return f"按{by}从{'低到高' if asc else '高到低'}"
+        return f"{by}最{'早' if asc else '近'}的"
+    high, low = _TOP_WORDS.get(by, ("最高", "最低"))
+    return f"{by}{low if asc else high}的"
 
 
-def heading(seg: dict[str, Any], label: str) -> str:
-    """一域一节的小标题：这一域有几张（决策 2026-11-03「回答骨架与排版」；张数来自沙箱）。"""
+def listing_text(seg: dict[str, Any], step: dict) -> str:
+    """列出的是哪些：「列出不良率最高的 10 张」（只列了前几张时），或「列出全部 31 张」（张数来自沙箱）。"""
+    if seg.get("limited"):
+        return f"列出{top_phrase(step)} {seg.get('listed', 0)} 张"
+    return f"列出全部 {seg.get('found', 0)} 张"
+
+
+def heading(seg: dict[str, Any], label: str, step: dict | None = None) -> str:
+    """一域一节的小标题：这一域有几张，只列了前几张时写明列的是哪几张（决策 2026-11-03「回答骨架与排版」、
+    决策 2026-11-04「按什么理解写在开头」；张数来自沙箱）。张数是不是用户说的，在开头那句写，这里不写。"""
     found = seg.get("found", 0)
     if seg.get("limited"):
-        return f"{label}问题单（共 {found} 张，按要求列出前 {seg.get('listed', 0)} 张）"
+        return f"{label}问题单（共 {found} 张，{listing_text(seg, step or {})}）"
     return f"{label}问题单（{found} 张）"
 
 
@@ -170,22 +191,31 @@ def domain_counts(by_domain: Sequence[Sequence[Any]]) -> str:
     return "、".join(f"{d} {n} 张" for d, n in by_domain)
 
 
-def conclusion(res: dict[str, Any], segs: Sequence[dict[str, Any]], scope: str, future: str = "") -> str:
+def conclusion(res: dict[str, Any], segs: Sequence[dict[str, Any]], scope: str, future: str = "", *,
+               subject: str = "", step: dict | None = None) -> str:
     """结论的模板句：只有一两张不写分析、模型没写出合格的结论时用（数字取自沙箱）。各域张数在小标题上，这里只给
-    合计；只有一域时给张数、最多的问题类型与未结案几张。"""
+    合计；只有一域时给张数、最多的问题类型与未结案几张。
+
+    `subject` 是助手按意思定的条件（「问题等级为 A+、A 的单」，开头写了「按 X 理解」的那几条），照它称呼这些单。
+    只列了前几张时先说一共几张、列了哪几张，问题类型与未结案按列出的这些单说（与沙箱事实同一批，不混两组数）。"""
     labels = "、".join(str(s.get("domain")) for s in segs)
     if all(s.get("empty") for s in segs):
         return f"{labels}{scope}{'都' if len(segs) > 1 else ''}没有查到单{future}。"
     if len(segs) > 1:
-        return f"{labels}{scope}合计 {res.get('found_total', 0)} 张。"
+        return f"{labels}{scope}{subject}合计 {res.get('found_total', 0)} 张。"
     seg = segs[0]
     facts = seg.get("facts") or {}
-    text = f"{labels}{scope}共 {seg.get('found', 0)} 张"
+    text = f"{labels}{scope}{subject}共 {seg.get('found', 0)} 张"
     # 「按问题类型」只有参加排名的；「未填」「其他（未识别）」在「不参加排名的问题类型」，不点名为最多（G87、G88）
     types = facts.get("按问题类型") or []
-    if types:
-        text += f"，最多的问题类型是{types[0][0]}（{types[0][1]} 张）"
-        text += aggregate.distribution_blanks(facts, "问题类型")
+    type_text = (f"最多的问题类型是{types[0][0]}（{types[0][1]} 张）" + aggregate.distribution_blanks(facts, "问题类型")
+                 if types else "")
+    if seg.get("limited"):
+        text += f"，{listing_text(seg, step or {})}"
+        tail = [x for x in (type_text, f"未结案 {facts['未结案']} 张" if facts.get("未结案") else "") if x]
+        return text + ("，这些单里" + "，".join(tail) if tail else "") + "。"
+    if type_text:
+        text += "，" + type_text
     if facts.get("未结案"):
         text += f"，其中未结案 {facts['未结案']} 张"
     return text + "。"

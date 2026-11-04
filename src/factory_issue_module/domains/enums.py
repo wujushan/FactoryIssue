@@ -178,7 +178,8 @@ def code_of(table: dict[int, str], said: object) -> list[int]:
 #: 「状态」条件的说法 → 判据。判据由沙箱按派生字段算（`stats/lib/derive_domestic.py::status_match`）。
 #: 巴西、海外「停线」表里的原话（从未停线、停线已重启、停线后已恢复生产）也在这里，不靠规划提示改写
 _STATUS_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("未结案", ("未结案", "没结案", "未结", "没结", "进行中", "没完成", "未完成", "未关闭", "处理中", "在处理")),
+    ("未结案", ("未结案", "没结案", "未结", "没结", "进行中", "没完成", "未完成", "未关闭", "没关", "未关", "处理中",
+                "在处理")),
     ("已结案", ("已结案", "结案", "已完成", "完成", "已关闭", "关闭", "结了")),
     ("停线中", ("停线中", "目前停线", "正在停线", "还在停线", "停线未重启", "停线且未重启", "还没重启", "未重启", "没重启")),
     ("曾经停线", ("停线", "停过线", "曾经停线", "发生过停线", "有停线记录", "停产")),
@@ -196,8 +197,8 @@ CN_ONLY_KINDS = ("重启审核通过", "重启审核中", "责任人填写重启
 BR_STAGES: tuple[str, ...] = tuple(v for k, v in BR_STATUS.items() if k != BR_DELETED)
 OS_STAGES: tuple[str, ...] = tuple(v for k, v in OS_STATUS.items() if k != OS_DONE)
 #: 环节的同义说法：巴西草稿即待提交；海外环节「IQC填写意见」即状态「IQC意见」
-_STAGE_SYNONYMS = {_key(k): v for k, v in
-                   {"草稿": "待提交", "未提交": "待提交", "终止": "已终止", "IQC填写意见": "IQC意见"}.items()}
+_STAGE_SYNONYM_WORDS = {"草稿": "待提交", "未提交": "待提交", "终止": "已终止", "IQC填写意见": "IQC意见"}
+_STAGE_SYNONYMS = {_key(k): v for k, v in _STAGE_SYNONYM_WORDS.items()}
 
 
 def status_kind(said: object, stages: tuple[str, ...] = CN_STAGES) -> tuple[str, str] | None:
@@ -217,6 +218,20 @@ def status_kind(said: object, stages: tuple[str, ...] = CN_STAGES) -> tuple[str,
     if k in index:
         return "环节", index[k]
     return None
+
+
+def status_sayings(value: object) -> tuple[str, ...]:
+    """「状态」的一个取值在问句里可能怎么说：取值本身、它的判据种类的全部说法（`_STATUS_WORDS`）、环节名与它的
+    同义说法。规整第 20 条拿它在问句里找依据，与对库认说法是同一张表；认不出的只有取值本身。"""
+    out = [str(value)]
+    got = status_kind(value) or status_kind(value, BR_STAGES) or status_kind(value, OS_STAGES)
+    if got is not None:
+        kind, stage = got
+        if kind == "环节":
+            out += [stage, *(w for w, v in _STAGE_SYNONYM_WORDS.items() if v == stage)]
+        else:
+            out += next((list(words) for k, words in _STATUS_WORDS if k == kind), [])
+    return tuple(dict.fromkeys(out))
 
 
 def status_options() -> list[str]:

@@ -670,7 +670,8 @@ async def _narrative(T: Any, X: Any, tp: TermPlan, res: Mapping[str, Any], segs:
     # 结论句 + 要点 + 需关注（决策 2026-11-03「结论的要点与需关注的单」）：要点与需关注的单由沙箱按直接找到的单给；
     # 类似问题给它专用的要点、没有需关注（同一决策的补记，G86）
     return await X._conclude(T, described, note, facts, fallback_text, X._time_text(run), res.get("insights"),
-                             segs=shown, guide=SIM_GUIDE if sim else None)
+                             segs=shown, guide=SIM_GUIDE if sim else None, reading=X.reading_of(run),
+                             cover=X.cover_of(run, T))
 
 
 def _caliber(C: cal.Caliber, run: Any, tp: TermPlan, segs: Sequence[dict[str, Any]], sem_notes: Sequence[str],
