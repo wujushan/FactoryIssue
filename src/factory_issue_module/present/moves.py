@@ -744,8 +744,16 @@ def _after_lookup(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
 def _after_text(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
     if not d.found:
         return
-    for number in _numbers(d.refs.get("issues") or {})[:DRILL_LIST_MAX]:
+    numbers = _numbers(d.refs.get("issues") or {})
+    for number in numbers[:DRILL_LIST_MAX]:
         add(_drill_issue(number, "找到的单里排在前面的"))
+    # 表格里的原因与措施只有一两句摘要（用户没点名列时才有这一列）：给排在最前那张的全文（决策 2026-11-04
+    # 「表格里的原因与措施给摘要」）
+    if numbers and not (d.step.get("params") or {}).get("columns"):
+        name, aspects, block = next(x for x in DETAIL_ASPECTS if x[2] == "reasons")
+        add(Candidate(move=ASPECT, key=detail_key(numbers[0], block), query=f"{numbers[0]} 的{name}",
+                      must=(numbers[0],), hint="表格里的原因与措施只有一两句摘要",
+                      plan=detail_plan(numbers[0], aspects)))
     if d.deferred:
         return
     first = _carried(d.step)
