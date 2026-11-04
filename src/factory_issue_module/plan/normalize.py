@@ -245,6 +245,23 @@ def _found(value: str, group: str, classes: NameClasses) -> bool:
     return any(v == _name_key(c, group) for c in classes.get(group, ()))
 
 
+#: 自己的规则里有名称包含的几类（总述「某加工厂」「部门名称怎么对」「某供应商」）；人员、系列只认整串相同
+_CONTAINS_GROUPS = ("工厂", "部门", "供应商")
+
+
+def _contained(value: str, group: str, classes: NameClasses) -> bool:
+    """这一类照自己的包含规则对得上（「鸿展光电」之于某家供应商的全称），G91。
+
+    只用来定类：巴西工厂整段相等，合在工厂一类里也按包含看，真正对库仍照各域自己的规则（§6.5）。
+    """
+    if group not in _CONTAINS_GROUPS:
+        return False
+    v = _name_key(value, group)
+    if len(v) < 2:
+        return False
+    return any(v in _name_key(c, group) for c in classes.get(group, ()))
+
+
 def _move(p: dict, f: dict, group: str) -> None:
     new_field = NAME_GROUPS[group][0]
     old_field = f.get("field")
@@ -266,6 +283,17 @@ def _regroup(step: dict, query: str | None, classes: NameClasses,
     def note(f: dict, values: list[str]) -> None:
         if inferred is not None:
             inferred.append(Inferred(str(step.get("id")), str(f.get("field")), tuple(values)))
+
+    def by_contains(f: dict, group: str, values: list[str]) -> None:
+        """一类都没有完全相同的（G91）：所选那一类照自己的包含规则对得上就照它，对不上而另外恰好只有一类对得上就
+        改过去，两种都写「按 X 理解」。模型爱把没说类别的公司简称放进加工厂，供应商主数据又多是全称。"""
+        if all(_contained(v, group, classes) for v in values):
+            note(f, values)
+            return
+        hit = [g for g in NAME_GROUPS if g != group and all(_contained(v, g, classes) for v in values)]
+        if len(hit) == 1:
+            _move(p, f, hit[0])
+            note(f, values)
 
     words = _class_words_in(norm(query))
     p = step.get("params") or {}
@@ -292,6 +320,8 @@ def _regroup(step: dict, query: str | None, classes: NameClasses,
                 if matched[0] != group:
                     _move(p, f, matched[0])
                 note(f, values)
+            elif not matched:
+                by_contains(f, group, values)
             continue
         if all(_found(v, group, classes) for v in values):
             continue
@@ -302,6 +332,8 @@ def _regroup(step: dict, query: str | None, classes: NameClasses,
         if len(others) == 1:
             _move(p, f, others[0])
             note(f, values)
+        elif not others and not own:
+            by_contains(f, group, values)
     return None
 
 

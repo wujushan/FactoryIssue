@@ -278,6 +278,21 @@ async def test_inferred_class_is_said_in_opening():
     assert "Factory" in main.sql and "05" in main.params.values()
 
 
+async def test_short_supplier_name_put_in_factory_is_queried_as_supplier():
+    """G91：「普瑞特今年问题单」模型放进加工厂，供应商库里是全称 → 按供应商查、开头写明，不答「没有找到加工厂」。"""
+    reply = plan(step("aggregate", domains=CN, time=[{"said": "今年", "basis": "建单", "from": "user"}],
+                      filters=[{"field": "加工厂", "op": "是", "value": "普瑞特", "from": "user"}]))
+    h = make_harness(scopes.account_jia(), llm_replies=[reply, "共 0 张。"])
+    cn_data.load(h)
+    h.connectors["info"].frames["tbIQCvendor"] = pd.DataFrame(
+        [{"ferpcode": "V97", "fname": "深圳市普瑞特电子有限公司"}, {"ferpcode": "V99", "fname": "测试供应商"}])
+    events = await run(h, "国内普瑞特今年问题单")
+    text = _text(events)
+    assert "「普瑞特」按供应商理解" in text and "没有找到加工厂" not in text
+    main = next(q for q in data_queries(h) if q.tables[0] == "ZCTracking_ProblemList")
+    assert "VenCode" in main.sql and "V97" in main.params.values()
+
+
 async def test_rule13_still_mismatched_opens_with_basis_and_offers_other_reading():
     """第 13 条修一次仍不一致：按计划执行，开头写明按什么日期理解，并给另一种理解的按钮。"""
     bad = plan(step("aggregate", domains=CN, time=[{"said": "今年", "basis": "建单", "from": "user"}]))
