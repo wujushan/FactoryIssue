@@ -67,7 +67,8 @@ POINTS_SYSTEM = """你是「制程问题查询助手」的回答撰写人。程�
 3. 第一行不逐域报张数（各域张数程序写在小标题上），需要时说合计或点名最多的域。
 4. 用业务说法，不出现英文代码、数据库表名或字段名。
 5. 不写统计口径，不写需关注的单，程序会另附。
-6. 【说明】是程序已经写在你这段上面的提示（如按什么理解、哪个域没计入），不要重复，但结论要与它一致。"""
+6. 【说明】是程序已经写在你这段上面的提示（如按什么理解、哪个域没计入），不要重复，但结论要与它一致。
+7. 有【写法】时按【写法】写。"""
 
 _CHAT_KW: dict[str, Any] = {"temperature": 0.2}
 
@@ -300,8 +301,10 @@ async def write(llm: Any, manifest: ModuleManifest, question: str, table: str | 
 # ---------------------------------------------------------------------------- 结论句与要点（决策 2026-11-03「结论的要点与需关注的单」）
 
 
-def points_user(question: str, table: str | None, note: str | None, facts: Any, points: Sequence[Any]) -> str:
-    return narrative_user(question, table, note, facts) + "\n【要点】" + json.dumps(list(points), ensure_ascii=False)
+def points_user(question: str, table: str | None, note: str | None, facts: Any, points: Sequence[Any],
+                guide: str | None = None) -> str:
+    return (narrative_user(question, table, note, facts, guide=guide) + "\n【要点】"
+            + json.dumps(list(points), ensure_ascii=False))
 
 
 _BULLET = re.compile(r"^\s*(?:[-*•·]|\d+[.、])\s*")
@@ -337,7 +340,7 @@ def _ok(question: str, note: str | None, table: str | None, facts: Any, text: st
 
 async def write_points(llm: Any, question: str, table: str | None, note: str | None, facts: Any,
                        points: Sequence[Mapping[str, Any]], entities: Mapping[str, Sequence[str]], fallback: str,
-                       *, must: Sequence[str] = ()) -> tuple[str, list[str]]:
+                       *, must: Sequence[str] = (), guide: str | None = None) -> tuple[str, list[str]]:
     """结论句（加粗）与各条要点。
 
     - 结论句逐句核数，`must` 里的名字（问「哪个最多」时的第一名）要点全；不过时带着错处重写一次，仍不过用 `fallback`。
@@ -351,7 +354,7 @@ async def write_points(llm: Any, question: str, table: str | None, note: str | N
         return head_fallback, templates
     scope = {**facts, "要点": list(points)} if isinstance(facts, dict) else {"事实": facts, "要点": list(points)}
     messages = [{"role": "system", "content": POINTS_SYSTEM},
-                {"role": "user", "content": points_user(question, table, note, facts, points)}]
+                {"role": "user", "content": points_user(question, table, note, facts, points, guide)}]
     bullets = templates
     for attempt in (1, 2):
         try:

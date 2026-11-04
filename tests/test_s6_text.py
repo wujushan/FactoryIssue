@@ -19,7 +19,7 @@ from structlog.testing import capture_logs
 
 from factory_issue_module.config import files as config_files
 from factory_issue_module.declarations import ANSWER_PARAMS, MART, TOPIC_TERMS, Domain
-from factory_issue_module.present import summaries
+from factory_issue_module.present import narrative, summaries
 from factory_issue_module.skills import text_search
 from factory_issue_module.stats.lib import textmatch as tm
 from factory_issue_module.text import judge, keyword, semantic, terms
@@ -323,6 +323,21 @@ async def test_similar_lists_only_judged_close_and_above_the_floor():
     assert got[0]["floor"] == 0.2 and got[0]["listed"] == 1
     assert got[0]["scores"] == [[0.9, 0.8, 1], [0.5, 0.8, 0], [0.1, 0.8, 1]]
     assert all("sem_scores" not in str(e.data) for e in events)
+
+
+async def test_similar_conclusion_has_its_own_points_and_no_focus():
+    """类似问题的结论：加粗的结论句 + 时间、共同点、未结案这类专用要点，没有需关注；各单的原因与措施只在表格里
+    （决策 2026-11-03「结论的要点与需关注的单」补记，G86）。"""
+    reply = plan(step("text_search", domains=CN, mode="类似问题", phenomenon="开机时屏幕出现花屏"))
+    h = harness(replies=[reply, "**国内以前出现过相近的现象，列出 4 张。**\n- 时间：乱写一通"])
+    h.retrieval.hits = [[s6_data.hit(1 + k % 4, "desc", f"问题描述：第 {k} 段", rerank=0.9) for k in range(4)]]
+    h.llm.routes[SIM_MARK] = _related(*[True] * 4)
+    events = await run(h, "国内有没有出现过开机花屏")
+    conclusion = next(e.data["text"] for e in events if e.type is EventType.DELTA and "**国内以前" in e.data["text"])
+    assert conclusion.lstrip("\n").startswith("**国内以前出现过相近的现象，列出 4 张。**")
+    assert "\n- **时间**：最早一次建单" in conclusion and "**需关注**" not in conclusion
+    call = next(c for c in h.llm.calls if c[0]["content"] == narrative.POINTS_SYSTEM)
+    assert "【写法】" in call[1]["content"] and "【列出的单】" not in call[1]["content"]
 
 
 async def test_similar_says_none_found_when_nothing_is_close():

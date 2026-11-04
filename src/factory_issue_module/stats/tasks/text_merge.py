@@ -14,7 +14,7 @@ import pandas as pd
 
 from factory_issue_module.stats.lib.common import fi_int, fi_num, fi_rank, fi_round, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
-from factory_issue_module.stats.lib.insights import in_insights
+from factory_issue_module.stats.lib.insights import in_insights, in_similar
 from factory_issue_module.stats.lib.views import vw_counts, vw_filter, vw_sorted, vw_time
 
 PARAMS = {}
@@ -102,6 +102,7 @@ def run(data):
     labels = T["labels"]
     segments, frames, by_domain = [], {}, []
     direct = []
+    similar = []
     pending = {}
     totals = {"kw": 0, "g1": 0, "g2": 0, "g3": 0, "listed": 0}
     for dom in P["domains"]:
@@ -137,6 +138,7 @@ def run(data):
         order = {iid: k for k, (iid, _c) in enumerate(sem)}
         ctx3 = dict(sem)
         v3 = v[v["_id"].apply(lambda x: int(x) in order)].copy() if len(v) else v.copy()
+        similar.append((dom, v3))
         if len(v3):
             v3["_grp"] = 3
             v3["_group"] = labels.get("3", "")
@@ -168,7 +170,7 @@ def run(data):
             "shown_kw": int(len(head_k)), "shown_g1": shown_g1, "shown_g2": shown_g2,
             "cut_g1": shown_g1 < g1, "cut_g2": shown_g2 < g2,
             "ids_shown": [int(x) for x in shown["_id"].tolist()] if len(shown) else [],
-            # 表格每行是否未结案（与行同序）：交写结论的模型看，点名时说清结案没有（决策 2026-11-03「回答骨架与排版」）
+            # 表格每行是否未结案（与行同序）：合计一两张时那一句写结案没有（总述「先给结论」）
             "open_shown": [bool(x) for x in shown["_unclosed"].tolist()] if len(shown) else [],
             "truncated": int(len(head_k)) < n_kw, "empty": listed == 0, "few": listed <= 2,
             "exported": False, "facts": facts, "caliber": {"未计入": missing},
@@ -189,8 +191,11 @@ def run(data):
                 frames["export_" + s["domain"]] = pd.DataFrame(tm_rows(everything, cols),
                                                                 columns=[names[c] for c in cols])
     refs = {"count": totals["listed"], "found": {s["domain"]: s["found"] for s in segments}}
-    # 结论的要点与需关注的单：只看直接找到的单，「可能相关」一组不算；类似问题不给（决策 2026-11-03「结论的要点与
-    # 需关注的单」）
-    insights = in_insights([] if T.get("sim") else direct, P.get("insight"), P.get("blind"), P.get("traits"))
+    # 结论的要点与需关注的单：只看直接找到的单，「可能相关」一组不算；类似问题看列出的相近问题，给它专用的要点
+    # （决策 2026-11-03「结论的要点与需关注的单」及其补记）
+    if T.get("sim"):
+        insights = in_similar(similar, P.get("insight"), P.get("blind"))
+    else:
+        insights = in_insights(direct, P.get("insight"), P.get("blind"), P.get("traits"))
     return {"segments": segments, "refs": refs, "totals": totals, "by_domain": by_domain, "insights": insights,
             "exported": [[s["domain"], s["found"]] for s in segments if s["exported"]], **frames}

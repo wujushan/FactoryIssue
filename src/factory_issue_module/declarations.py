@@ -239,7 +239,8 @@ CONFIG_FILES: list[ConfigFileSpec] = [
             "similar_rows（类似问题每域列几张，默认 5，最多 10）、custom_stats_enabled（是否允许临时统计）、"
             "points_max（结论至多几条要点，默认 4，写 0 即不给）、focus_max（「需关注」至多几张，默认 3，写 0 即不给）、"
             "concentrate_share（「集中」的占比门槛，百分数，默认 40）、repeat_min（「重复」至少几张，默认 3）、"
-            "trend_months（「时间」至少跨几个月，默认 3）、close_min（「时效」某域至少几张已结案的单，默认 5）"
+            "trend_months（「时间」至少跨几个月，默认 3）、close_min（「时效」某域至少几张已结案的单，默认 5）、"
+            "similar_common_min（类似问题的「共同点」至少几张，默认 2）"
         ),
     ),
     ConfigFileSpec(

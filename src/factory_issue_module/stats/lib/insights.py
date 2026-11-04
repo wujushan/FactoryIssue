@@ -222,6 +222,97 @@ def in_focus(parts, Q, today, traits):
     return out
 
 
+def in_day(ts):
+    return None if ts is None or pd.isna(ts) else ts.strftime("%Y-%m-%d")
+
+
+def in_sim_dates(parts):
+    stamps = [x for _dom, v in parts for x in v["_add"].tolist() if x is not None and not pd.isna(x)]
+    if len(stamps) < 2 or min(stamps).normalize() == max(stamps).normalize():
+        return None
+    return {"发现": "相近时间", "名称": "时间", "最早一次建单": in_day(min(stamps)), "最近一次建单": in_day(max(stamps))}
+
+
+def in_sim_recur(parts):
+    """同一域里某张单结案之后又建了相近的单：每域取之后建的张数最多的一张（并列取结案早的）。"""
+    found = []
+    for dom, v in parts:
+        rows = v.to_dict("records")
+        best = None
+        for a in rows:
+            close = a.get("_close")
+            if not bool(a.get("_done")) or close is None or pd.isna(close):
+                continue
+            later = sorted([b for b in rows if b.get("_add") is not None and not pd.isna(b.get("_add"))
+                            and b["_add"] > close], key=lambda b: (b["_add"], str(b.get("_number"))))
+            if not later:
+                continue
+            key = (-len(later), close, str(a.get("_number")))
+            if best is None or key < best[0]:
+                best = (key, {"域": dom, "结案的单": a.get("_number"), "结案日期": in_day(close),
+                              "之后又建的相近单": [b.get("_number") for b in later], "张数": len(later)})
+        if best is not None:
+            found.append(best[1])
+    if not found:
+        return None
+    return {"发现": "结案后又出现", "名称": "结案后又出现", "各域": found}
+
+
+#: 类似问题的共同点：(说法, 视图里靠主数据写出的列名，没取到主数据时这一域不看)
+IN_COMMON = (("供应商", "ven_name"), ("机型", "_machines"), ("加工厂", "factory"), ("原因分类", "reason_class"))
+
+
+def in_sim_common(parts, Q, blind):
+    skip = set(Q.get("skip") or [])
+    total = sum(int(len(v)) for _dom, v in parts)
+    out = {"发现": "共同点", "名称": "共同点", "列出的张数": total}
+    for what, col in IN_COMMON:
+        if what in skip:
+            continue
+        counts = {}
+        for dom, v in parts:
+            if col in (blind.get(dom) or []):
+                continue
+            if what == "原因分类":
+                if "reason_class" not in v.columns:
+                    continue
+                values = [[x] for x in v["reason_class"].tolist()]
+            else:
+                values = in_values(v, what)
+            for vals in values:
+                for x in dict.fromkeys(vals):
+                    if not fi_blank(x) and x not in ("未填", "—", "未识别机型", "物料"):
+                        counts[x] = counts.get(x, 0) + 1
+        ranked, first, _t = fi_rank(list(counts.items()))
+        if ranked and ranked[0][1] >= int(Q.get("common") or 2):
+            out[what] = [[k, ranked[0][1]] for k in first]
+    return out if len(out) > 3 else None
+
+
+def in_sim_open(parts):
+    items = []
+    for dom, v in parts:
+        u = v[v["_unclosed"].astype(bool)]
+        for r in u.to_dict("records"):
+            stages = [s for s in (r.get("_stages") or []) if not fi_blank(s)]
+            items.append({"域": dom, "问题编号": r.get("_number"), "停在的环节": stages})
+    if not items:
+        return None
+    return {"发现": "未结案", "名称": "未结案", "未结案的单": items}
+
+
+def in_similar(parts, Q, blind=None):
+    """类似问题的要点（总述「结论里的要点与需关注的单」末「类似问题的要点」，G86）：时间、结案后又出现、共同点、
+    未结案，按这个顺序、至多 `points` 条；没有需关注。`parts`：[(域, 列出的相近问题)]，只陈述数据。"""
+    if not Q:
+        return {"points": [], "focus": []}
+    parts = [(dom, v) for dom, v in parts if v is not None and len(v)]
+    if sum(int(len(v)) for _dom, v in parts) < 2:
+        return {"points": [], "focus": []}
+    found = [in_sim_dates(parts), in_sim_recur(parts), in_sim_common(parts, Q, blind or {}), in_sim_open(parts)]
+    return {"points": [x for x in found if x][: int(Q["points"])], "focus": []}
+
+
 def in_insights(parts, Q, blind=None, traits=None):
     """要点（`points`，按表的顺序、至多 `points` 条）与需关注的单（`focus`）。`parts`：[(域, 视图)]。"""
     if not Q:

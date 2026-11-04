@@ -669,20 +669,9 @@ def _add_caliber(C: cal.Caliber, run: StepRun, seg: dict[str, Any], dims: Sequen
         C.item(cal.small_sample(str(d), int(n)))
 
 
-async def _narrate(T: Turn, table_text: str | None, note: str | None, facts: dict[str, Any], fallback: str,
-                   time_text: str | None, *, rows: str | None = None, guide: str | None = None, dims: bool = True,
-                   must: Sequence[str] = ()) -> str:
-    """一段的结论（决策 2026-11-03「回答骨架与排版」）：模型写，核数不过、没点全第一名时用 `fallback`（程序的模板句）。
-    `note` 是程序写在结论上面的提示行，交模型看、不让它重复。"""
-    facts = {"时间范围": time_text or "不限建单时间", **facts}
-    text = await narrative.write(getattr(T.ctx, "llm", None), T.manifest, T.query, table_text, note or None, facts,
-                                 T.entities, fallback, rows=rows, guide=guide, dims=dims, must=must)
-    return text.strip()
-
-
 async def _conclude(T: Turn, table_text: str | None, note: str | None, facts: dict[str, Any], fallback: str,
                     time_text: str | None, found: Mapping[str, Any] | None, *,
-                    segs: Sequence[Mapping[str, Any]] = (), must: Sequence[str] = ()) -> str:
+                    segs: Sequence[Mapping[str, Any]] = (), must: Sequence[str] = (), guide: str | None = None) -> str:
     """结论：加粗的结论句 + 要点 + 需关注（总述「先给结论」「结论里的要点与需关注的单」）。要点与需关注的单是沙箱
     给的（`found` = 结果里的 `insights`）；结论句与要点由模型照着写、逐句核数，不合格的用模板句（`narrative.write_points`）；
     需关注由程序写（`present/insights.py`）。"""
@@ -690,7 +679,7 @@ async def _conclude(T: Turn, table_text: str | None, note: str | None, facts: di
     facts = {"时间范围": time_text or "不限建单时间", **facts}
     points = list(found.get("points") or [])
     head, bullets = await narrative.write_points(getattr(T.ctx, "llm", None), T.query, table_text, note or None, facts,
-                                                 points, T.entities, fallback, must=must)
+                                                 points, T.entities, fallback, must=must, guide=guide)
     focus = list(found.get("focus") or [])
     descs = await insights.describe(T.ctx, focus, segs, T.access.text_search) if focus else {}
     return insights.assemble(head, bullets, insights.focus_block(focus, descs, T.sites))
