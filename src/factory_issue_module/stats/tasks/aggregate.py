@@ -117,6 +117,12 @@ def ag_rate_list(v, P, dom, C):
     return vw_rate_list(v, P["names"][dom], P["agg"]["table_rows"])
 
 
+def ag_top_values(kept, first, A):
+    """引用值 `top_values`：用户给了名次数（`top`）时是表里的前 N 名（含第 N 名并列的），没给时同 `top1`（规划提示
+    「步骤之间的引用」）。只说「哪个最多」时表格给前 10 名，后一步却只该接第一名。"""
+    return list(kept) if A.get("top") else list(first)
+
+
 def ag_ordered_keys(groups, dim, v_list, period_bounds):
     """时间维度按这一期的起始日期排（不按标签的字典序），从起点到终点补齐没有单的月份。"""
     order = vw_period_range(period_bounds[0], period_bounds[1], dim["period"]) if period_bounds else []
@@ -333,7 +339,7 @@ def ag_single(dom, v, missing, dims, A, C, P, refs):
             facts["分取值"] = breakdowns
         caliber = {"未计入": missing, **caliber, **mcal}
         refs["top1"] += [x for x in first if x not in refs["top1"]]
-        refs["top_values"] += [x for x in kept if x not in refs["top_values"]]
+        refs["top_values"] += [x for x in ag_top_values(kept, first, A) if x not in refs["top_values"]]
         if dim.get("period"):
             caliber["样本少"] = ag_small_sample([(dom, found)], A, P)
         out.append({"domain": dom, "kind": "group", "title": dim["title"], "multi": bool(dim.get("multi")),
@@ -509,7 +515,7 @@ def ag_cross_dim(parts, A, C, P, refs):
     if dim0.get("period"):
         caliber["样本少"] = ag_small_sample([(dom, len(v)) for dom, v, _d in parts], A, P)
     refs["top1"] += [x for x in first if x not in refs["top1"]]
-    refs["top_values"] += [x for x, _n in kept if x not in refs["top_values"]]
+    refs["top_values"] += [x for x in ag_top_values([k for k, _n in kept], first, A) if x not in refs["top_values"]]
     return {"domain": "、".join(dom for dom, _v, _d in parts), "domains": [dom for dom, _v, _d in parts],
             "kind": "group", "cross": True, "title": title, "name": dim0.get("name"), "multi": multi,
             "table": {"columns": columns, "rows": rows},

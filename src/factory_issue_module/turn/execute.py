@@ -175,6 +175,37 @@ def _uses_refs(step: dict) -> bool:
     return any(isinstance(f, dict) and schema.is_ref(f.get("value")) for f in schema.as_list(p.get("filters")))
 
 
+def _ref_gaps(step: dict, refs: Mapping[str, Any]) -> list[str]:
+    """本步引用前一步结果的条件里，前一步没给出取值的条件名（前一步没有可以排名的取值、没算出来或没执行）。
+
+    各域对库时取值为空的条件会被跳过，这一步就成了不带这个条件、查全部（「问题最多的机型的单」列出全部机型的单），
+    所以在执行之前拦下，停在这一步（设计 §8「一问多段」：引用的 `top1` 为空时写明并停在这一步）。"""
+    gaps: list[str] = []
+    for f in schema.as_list((step.get("params") or {}).get("filters")):
+        if not isinstance(f, dict) or not schema.is_ref(f.get("value")):
+            continue
+        if not base.values_of(refs.get(f["value"]["ref"], [])):
+            name = "、".join(str(x) for x in schema.as_list(f.get("field")) if x) or "条件"
+            if name not in gaps:
+                gaps.append(name)
+    return gaps
+
+
+def _ref_gap_out(gaps: Sequence[str], later_depends: bool) -> StepOut:
+    """前一步没给出取值：写明并停在这一步，不取数（见 `_ref_gaps`）。"""
+    tail = "这一步和后面依赖它的步骤都不再查" if later_depends else "这一步不再查"
+    out = StepOut(ok=True, empty=True, stopped=True)
+    out.events.append(Event.delta(f"前一步没有得出可以承接的{'、'.join(gaps)}，{tail}。"))
+    return out
+
+
+def _later_depends(later: Sequence[StepRun]) -> bool:
+    """后面的步骤里有没有引用前面结果的（条件引用前一步的取值，或详情引用前一步的单）。"""
+    return any(schema.is_ref(f.get("value")) for s in later for f in
+               schema.as_list((s.step.get("params") or {}).get("filters")) if isinstance(f, dict)) or any(
+        schema.is_ref(issue_detail.issue_value(s.step)) for s in later if s.skill == "issue_detail")
+
+
 def _group_by(step: dict) -> list[str]:
     return [str(g) for g in schema.as_list((step.get("params") or {}).get("group_by"))]
 
@@ -487,6 +518,8 @@ class StepOut:
     buttons: list[dict[str, str]] = field(default_factory=list)
     #: 这一步没有结果、但已经用业务话说明了（临时统计关掉、没算出来、一轮里的第二个）：整轮都没有结果时不再发整轮失败
     handled: bool = False
+    #: 引用的前一步没给出取值，这一步没执行、已写明停在这里（`_ref_gaps`）：后面依赖它的步骤不执行，不再另说一句
+    stopped: bool = False
     #: 答后建议要看的本步产物（§9.5，`present/moves.py`）：清单、统计的各段（`segs`）；详情给出的单与块
     #: （`tickets`、`shown`）。只在本轮内存里用，不进工作区
     digest: dict[str, Any] = field(default_factory=dict)
@@ -1589,7 +1622,12 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             notes, month_noted = [*notes, month[0]], True
             if month[1] is not None:
                 alternatives.append(month[1])
-        if r.skill == "issue_detail":
+        dep = _later_depends(shown[i:])
+        gaps = _ref_gaps(r.step, refs)
+        if gaps:  # 引用的前一步没给出取值：不带这个条件查就成了查全部，停在这一步
+            logger.info("factory_issue_ref_gap", sid=r.sid, fields=gaps)
+            out = _ref_gap_out(gaps, dep)
+        elif r.skill == "issue_detail":
             for ev in spaced(layout.para(notes)):
                 yield ev
             out = await _run_detail(r, T, refs, C)
@@ -1632,12 +1670,10 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             suggesting = _start_suggest(T, done, said)
         for ev in spaced(out.events):
             yield ev
-        dep = any(schema.is_ref(f.get("value")) for s in shown[i:] for f in
-                  schema.as_list((s.step.get("params") or {}).get("filters")) if isinstance(f, dict)) or any(
-            schema.is_ref(issue_detail.issue_value(s.step)) for s in shown[i:] if s.skill == "issue_detail")
         if out.empty and dep:
-            for ev in spaced([Event.delta("这一步没有结果，后面依赖它的步骤不再执行。")]):
-                yield ev
+            if not out.stopped:
+                for ev in spaced([Event.delta("这一步没有结果，后面依赖它的步骤不再执行。")]):
+                    yield ev
             break
     T.record.found = any_found
     if suggesting is None and not no_conditions:  # 最后一步没走到（条件不成立、依赖的那步没有结果）
@@ -1737,6 +1773,8 @@ async def replay(plan: dict, spans: Mapping[str, list[Span]], T: Turn, previous_
             continue
         when = r.step.get("when")
         if schema.is_ref(when) and not refs.get(when["ref"]):
+            continue
+        if _ref_gaps(r.step, refs):  # 同 `run()`：引用的前一步没给出取值，不去掉条件查全部
             continue
         if r.skill == "issue_detail":
             out = await _run_detail(r, T, refs, C)
