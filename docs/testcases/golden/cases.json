@@ -13,6 +13,7 @@
     "2026-10-29：XC-029 近 30 天三域都是 0 张，不要求未结案、停线和近 90 天、今年按钮；仍查近 30 天、截至今天、三域、A920（开发者实测）。",
     "2026-10-29：XC-037 机型对库后显示 A920Pro，不锁用户原话的大写。近 30 天不写死起止日期；这次没有单，不强制出表。",
     "2026-10-29：XC-039 上上周没有单，不强制出表。上上周是相对的自然周，不写死起止日期；仍查按建单时间、国内、不是截至今天（开发者实测）。",
+    "2026-11-04：CN-046 问句时间由「上个月」改为「上半年」。上个月实库没有单。没写年份的上半年指今年 1 月 1 日至 6 月 30 日，今年这段还没结束时止于今天（开发者要求）。",
     "2026-11-02：XC-020 问句时间由「上个月」改为「2026 年上半年」，窗口 [2026-01-01, 2026-07-01)（开发者要求）。",
     "2026-11-02：XC-016 问句时间由「上个月」改为「6 月份」。没写年份、今年 6 月已过，窗口 [2026-06-01, 2026-07-01)（开发者要求）。",
     "2026-11-02：XC-015 改为两轮（先打开 ZC2609012，再问能否结案）。第 2 轮仍不取数，断言锁固定只读话术。BR-012、CN-053 补上各轮说明，最后一轮锁口径里的固定说法（开发者要求）。",
@@ -313,7 +314,7 @@
           "ZC2606037"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-008.sql"
@@ -446,7 +447,7 @@
           "ZC2604021"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-012.sql"
@@ -477,7 +478,7 @@
           "ZC2507021"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-013.sql"
@@ -772,7 +773,7 @@
           ]
         },
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-020.sql"
@@ -878,7 +879,7 @@
         ],
         "suggestions": true,
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-023.sql"
@@ -1466,7 +1467,7 @@
           "外壳开裂"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-038.sql"
@@ -1494,7 +1495,7 @@
           "ProblemId"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ],
         "anywhere_contains": [
           "音频",
@@ -1565,7 +1566,7 @@
           "问题描述"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-041.sql"
@@ -1686,7 +1687,7 @@
     },
     {
       "id": "CN-046",
-      "query": "把上个月国内的问题全部导出给我",
+      "query": "把上半年国内的问题全部导出给我",
       "target": "FACTORY_ISSUE",
       "batch": "其余",
       "level": "P1",
@@ -2120,7 +2121,7 @@
           "ProblemId"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ],
         "anywhere_contains": [
           "非接",
@@ -2161,7 +2162,7 @@
           "漏电流"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-056.sql"
@@ -2192,7 +2193,7 @@
           "打印"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-057.sql"
@@ -2224,7 +2225,7 @@
           "改善措施"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ]
       },
       "note": "参考 SQL：docs/testcases/golden/sql/CN-058.sql"
@@ -4083,7 +4084,7 @@
           "ProblemId"
         ],
         "answer_contains": [
-          "统计口径"
+          "查找说明"
         ],
         "anywhere_contains": [
           "非接",
