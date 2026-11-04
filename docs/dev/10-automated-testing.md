@@ -442,6 +442,8 @@ export FORGE_TEST_API_KEY=fdt_xxxxxxxx.yyyyyyyy
 uv run python scripts/qa_test.py docs/testcases/golden/cases.example.json
 ```
 
+用例上写了非空的 `skip`（一句话原因）时，runner 不发请求，报告里单列「跳过」，不算通过也不算失败。`--only` 点名它同样跳过。去掉这个字段即恢复。
+
 最小调用（自己写 runner 时的核心就这几行）：
 
 ```python

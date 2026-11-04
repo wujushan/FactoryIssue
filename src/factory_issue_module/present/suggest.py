@@ -4,7 +4,8 @@
 - 输出：挑哪几条、每条的问句；找类似另写现象。同一个底的两条可以合成一条。
 - 每条单独核对，不过的丢掉：编号与叠加、长度、必带、数与问题编号都要在这条候选里出现过、不露表名字段名、
   不与会话里问过推荐过的相同（离不开本轮上下文的「放宽」只按意图键比，不按问句比）。按钮文字（`label`，INFO 网页
-  前端 2026-11-03 起显示它）单独核，不过时用候选的默认按钮文字或问句截断，这一条不丢。模型出错、超时、关掉、挑的全被丢掉时按代码的默认顺序取（`defaults`）；模型挑了
+  前端 2026-11-03 起显示它）单独核，不过时用候选的默认按钮文字，没有则由调用方用问句全文，这一条不丢。以省略号
+  结尾的标签不合格。模型出错、超时、关掉、挑的全被丢掉时按代码的默认顺序取（`defaults`）；模型挑了
   0 条时不给接着问。
 - 一次调用、不重试；超时由调用方给的秒数控制。system 固定（§5.6）。
 """
@@ -20,7 +21,7 @@ from typing import Any
 
 import structlog
 
-from factory_issue_module.plan import schema
+from factory_issue_module.plan import clarify, schema
 from factory_issue_module.present import moves
 from factory_issue_module.present.narrative import _LEAK
 
@@ -46,7 +47,7 @@ SYSTEM = f"""你是「制程问题查询助手」的{MARKER}。程序已经回�
 4. 问句里不要出现候选和对话里没有的数字、单号或名称，不要写统计结论或判断。
 5. 已经问过的不要再挑；几条之间意思不要重复。
 6. 「要写现象」的那条另写 phenomenon：一句不看上文也能懂的现象描述，不超过 20 个字，只写现象，不写处理办法、机型、工厂、时间。
-7. 每条另写 label：显示在按钮上的文字，不超过 15 个字。问句不超过 15 个字时 label 就照抄问句；候选给了「默认按钮」且里面有张数的，label 里要写上这个张数。
+7. 每条另写 label：显示在按钮上的文字。尽量不超过 15 个字；说不完可以写到 30 个字，必须是完整的一句，不要用省略号。问句本身不超过 30 个字时 label 可以照抄问句；候选给了「默认按钮」且里面有张数的，label 里要写上这个张数。
 8. 没有合适的就少挑，可以一条都不挑。
 
 只输出一个 JSON 对象，不要输出其他内容：{{"suggestions": [{{"ids": ["c1"], "query": "问句", "label": "按钮文字", "phenomenon": "只有要写现象的那条才写"}}]}}"""
@@ -60,11 +61,11 @@ class Chosen:
     key: str
     query: str
     plan: dict
-    #: 按钮上显示的文字（INFO 网页前端 2026-11-03 起显示它）；空时按问句截断
+    #: 按钮上显示的文字（INFO 网页前端 2026-11-03 起显示它）；空时用问句全文
     label: str = ""
 
 
-LABEL_MAX = 15
+LABEL_MAX = clarify.LABEL_MAX
 
 
 def _clip(text: Any, n: int) -> str:
@@ -148,10 +149,10 @@ def check(item: Mapping[str, Any], by_id: Mapping[str, moves.Candidate], pool: m
 
 
 def _label(raw: Any, got: moves.Candidate, source: str) -> str:
-    """模型写的按钮文字单独核，不过不丢这一条：1–15 个字，数与单号要在这条候选里出现过，不露表名字段名；带张数的
-    候选要写上张数。不过时用候选的默认按钮文字（空时调用方按问句截断）。"""
+    """模型写的按钮文字单独核，不过不丢这一条：1–30 个字、不以省略号结尾，数与单号要在这条候选里出现过，不露表名
+    字段名；带张数的候选要写上张数。不过时用候选的默认按钮文字（空时调用方用问句全文）。"""
     label = _clean(raw)
-    ok = (bool(label) and len(label) <= LABEL_MAX and _numbers(label) <= _numbers(source)
+    ok = (bool(label) and not label.endswith("…") and len(label) <= LABEL_MAX and _numbers(label) <= _numbers(source)
           and set(moves.issue_numbers(label)) <= set(moves.issue_numbers(source)) and not _LEAK.search(label)
           and (got.count is None or str(got.count) in _numbers(label)))
     return label if ok else got.label

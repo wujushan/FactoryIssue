@@ -9,6 +9,9 @@
     # 只跑某几条 / 失败时看 SQL 明细
     uv run python scripts/qa_test.py cases.json --only mat-001 --trace
 
+    # 用例上写了非空的 skip（一句话原因）就先不跑，报告里单列，不算失败。
+    # 平台修好后删掉这个字段即恢复。--only 点名它同样跳过。
+
     # 并发跑，最多 4 个（默认 1，即串行）：多轮用例内部仍按顺序发，输出始终按用例顺序打印
     uv run python scripts/qa_test.py docs/testcases/golden/cases.json --jobs 4
 
@@ -48,6 +51,28 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     if not isinstance(cases, list):
         raise SystemExit(f"用例集格式不对：{path} 应是数组或 {{\"cases\": [...]}}")
     return cases
+
+
+def skip_reason(case: dict[str, Any]) -> str:
+    """非空字符串表示这条先不跑。空、缺省都照常跑。"""
+    reason = case.get("skip")
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip()
+    return ""
+
+
+def split_skipped(
+    cases: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], str]]]:
+    active: list[dict[str, Any]] = []
+    skipped: list[tuple[dict[str, Any], str]] = []
+    for case in cases:
+        reason = skip_reason(case)
+        if reason:
+            skipped.append((case, reason))
+        else:
+            active.append(case)
+    return active, skipped
 
 
 # Markdown 链接的地址。巴西、海外问题编号的页面路径里含 BrazilProblem、OverseasProblem，
@@ -308,7 +333,7 @@ def _result_of(future: Future[CaseResult]) -> CaseResult:
     return future.result()
 
 
-def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool, jobs: int) -> int:
+def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool, jobs: int, skipped: int = 0) -> int:
     client = httpx.Client(
         base_url=base.rstrip("/"),
         headers={"Authorization": f"Bearer {key}"},
@@ -347,7 +372,8 @@ def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool, jobs: 
         raise
     pool.shutdown()
 
-    print(f"\n{'=' * 60}\n通过 {passed} / {len(cases)}，失败 {len(failed)}")
+    skip_note = f"，跳过 {skipped}" if skipped else ""
+    print(f"\n{'=' * 60}\n通过 {passed} / {len(cases)}{skip_note}，失败 {len(failed)}")
     if trace and failed:
         print("\n失败用例的 SQL/LLM 明细：")
         for result in failed:
@@ -386,20 +412,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not args.base_url or not args.api_key:
-        raise SystemExit(
-            "缺少平台地址或 api-key：设置 FORGE_TEST_BASE_URL / FORGE_TEST_API_KEY "
-            "（key 由平台管理员在 Admin Console「测试」页签发，见 docs/dev/10-automated-testing.md）"
-        )
-
     cases = load_cases(args.cases)
     if args.only:
         wanted = set(args.only)
         cases = [c for c in cases if c.get("id") in wanted]
         if not cases:
             raise SystemExit(f"--only 没匹配到任何用例：{sorted(wanted)}")
+    cases, skipped = split_skipped(cases)
+    for case, reason in skipped:
+        print(f"○ {case.get('id', '?')}  跳过：{reason}")
+    if not cases:
+        print(f"\n{'=' * 60}\n通过 0 / 0，跳过 {len(skipped)}，失败 0")
+        return 0
+    if not args.base_url or not args.api_key:
+        raise SystemExit(
+            "缺少平台地址或 api-key：设置 FORGE_TEST_BASE_URL / FORGE_TEST_API_KEY "
+            "（key 由平台管理员在 Admin Console「测试」页签发，见 docs/dev/10-automated-testing.md）"
+        )
     try:
-        return run(cases, base=args.base_url, key=args.api_key, trace=args.trace, jobs=args.jobs)
+        return run(
+            cases, base=args.base_url, key=args.api_key, trace=args.trace, jobs=args.jobs, skipped=len(skipped)
+        )
     except KeyboardInterrupt:
         print("\n已中断：不再发还没开始的用例和后面的轮次，正在进行的请求返回后退出", file=sys.stderr)
         return 130

@@ -189,7 +189,7 @@ def test_alternatives_become_switch_to_that_understanding():
     """其他理解的按钮不拼本轮原话（INFO 网页前端把 `query` 当按钮文字，设计 §19）：「换个理解：这条理解」。"""
     recs = clarify.alternative_recommendations(["「普瑞特」指物料名称", "", "按供应商为普瑞特查物料问题的单。"])
     assert [r["query"] for r in recs] == ["换个理解：「普瑞特」指物料名称", "换个理解：按供应商为普瑞特查物料问题的单"]
-    assert all(set(r) == {"id", "name", "label", "query"} and len(r["label"]) <= 15 for r in recs)
+    assert all(set(r) == {"id", "name", "label", "query"} and len(r["label"]) <= 30 for r in recs)
     assert clarify.alternative_recommendations(None) == []
 
 
@@ -216,7 +216,15 @@ def test_unknown_time_option_replaces_the_phrase():
 
 def test_labels_are_short_and_at_most_four():
     recs = clarify.recommendations({"reason": "现象太泛", "options": [f"选项{i}" * 5 for i in range(6)]}, "q")
-    assert len(recs) == 4 and all(len(r["label"]) <= 15 for r in recs)
+    assert len(recs) == 4 and all(len(r["label"]) <= 30 for r in recs)
+
+
+def test_long_option_is_kept_whole():
+    """超过 15 字的选项整句显示，不再切成前 14 字加省略号（决策 2026-11-04）。"""
+    text = "ZC9901001 的完整处理过程"
+    assert clarify.button_label(text) == text and not text.endswith("…")
+    recs = clarify.recommendations({"reason": "接不上上一轮", "options": [text]}, "？？？")
+    assert recs[0]["label"] == text and recs[0]["query"] == text
 
 
 # ---------------------------------------------------------------- 有权限的一轮

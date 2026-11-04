@@ -26,7 +26,7 @@ from typing import Any
 
 from factory_issue_module.declarations import DOMAINS
 from factory_issue_module.domains import enums
-from factory_issue_module.plan import names, schema, timespan
+from factory_issue_module.plan import clarify, names, schema, timespan
 from factory_issue_module.present import columns
 from factory_issue_module.text import terms as text_terms
 
@@ -356,8 +356,12 @@ def compose(pool: Pool, a: Candidate, b: Candidate) -> Candidate | None:
     key = plan_key(plan) if plan else None
     if plan is None or key is None:
         return None
-    return Candidate(move=f"{a.move}+{b.move}", key=key, query=f"{a.query}，{b.query}", must=(*a.must, *b.must),
-                     hint="；".join(x for x in (a.hint, b.hint) if x), plan=plan)
+    query = f"{a.query}，{b.query}"
+    joined = f"{_face(a)}，{_face(b)}"
+    fallback = joined if len(clarify.button_label(joined)) <= clarify.LABEL_MAX else "一起看这两项"
+    return Candidate(move=f"{a.move}+{b.move}", key=key, query=query, must=(*a.must, *b.must),
+                     hint="；".join(x for x in (a.hint, b.hint) if x), plan=plan,
+                     label=_short_label(query, fallback))
 
 
 def detail_plan(number: str, aspects: Sequence[str] = ()) -> dict:
@@ -378,6 +382,17 @@ def with_phenomenon(plan: Mapping[str, Any], phenomenon: str) -> dict:
     out = copy.deepcopy(dict(plan))
     out["steps"][0]["params"]["phenomenon"] = phenomenon
     return out
+
+
+def _face(c: Candidate) -> str:
+    """按钮上的字：候选准备了短标签就用它，否则用问句。"""
+    return c.label or clarify.button_label(c.query)
+
+
+def _short_label(query: str, fallback: str) -> str:
+    """问句不超过 30 字时不另写标签（`follow_up` 用问句）；超过时用一句说完的短标签。"""
+    shown = clarify.fit_label(query, fallback)
+    return "" if shown == clarify.button_label(query) else shown
 
 
 def _words(*parts: str) -> str:
@@ -407,13 +422,13 @@ class _Adder:
         self.pool.items.append(c)
 
     def patched(self, move: str, base_id: str, patch: dict, parts: Iterable[str], query: str,
-                must: Sequence[str], hint: str = "") -> None:
+                must: Sequence[str], hint: str = "", label: str = "") -> None:
         plan = build(self.pool.bases[base_id], [patch])
         key = plan_key(plan) if plan else None
         if plan is None or key is None:
             return
         self(Candidate(move=move, key=key, query=query, must=tuple(must), hint=hint, plan=plan, base=base_id,
-                       patch=patch, parts=frozenset(parts)))
+                       patch=patch, parts=frozenset(parts), label=label))
 
 
 def _filters(step: Mapping[str, Any]) -> list[dict]:
@@ -558,7 +573,8 @@ def _after_list(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
                 if fld == "加工厂" and len(segs) > 1:  # 加工厂只在一域：域也限定到它
                     patch["domains"], parts = [str(s.get("domain"))], [*parts, "domains"]
                 query = f"只看{value}" if fld == "问题类型" else _words("只看", value, "的")
-                add.patched(NARROW, base_id, patch, parts, query, [value], f"{fact}最多的是{value}（{n} 张）")
+                add.patched(NARROW, base_id, patch, parts, query, [value], f"{fact}最多的是{value}（{n} 张）",
+                            _short_label(query, f"只看该{fld}"))
                 break
     if d.truncated and not d.exported:
         plan = build(pool.bases[base_id], [{"export": True}])
@@ -599,7 +615,8 @@ def _after_aggregate(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
             else:
                 continue
             query = _words("列出", value, "级的单") if dim == "问题等级" else _words("列出", value, "的单")
-            add.patched(DRILL, base_id, patch, parts, query, [value], f"{title}为{value}的 {n} 张")
+            add.patched(DRILL, base_id, patch, parts, query, [value], f"{title}为{value}的 {n} 张",
+                        _short_label(query, f"列出该{dim}"))
     if compare:
         _domain_moves(d, C, add, base_id)
         return
@@ -680,8 +697,9 @@ def _after_detail(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
             continue
         if not _usable(value):
             continue
+        query = _words(label, str(value), UP_TIME + "的问题")
         add.patched(UP, base_id, {"filters": [_eq(fld, str(value))]}, [f"filter:{fld}"],
-                    _words(label, str(value), UP_TIME + "的问题"), [str(value)], f"这张单的{fld}")
+                    query, [str(value)], f"这张单的{fld}", _short_label(query, f"同{fld}近 90 天"))
     if label in C.text_access:
         try:
             desc = str(values.get(columns.shown("desc", dom)) or "").strip()
@@ -689,8 +707,9 @@ def _after_detail(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
             desc = ""
         default = _phenomenon(t, values)
         if desc and desc not in PLACEHOLDERS or default:
-            add(Candidate(move=SIMILAR, key=f"类似|{number}", must=(),
-                          query=f"有没有出现过{default}的问题" if default else _words("和", number, "类似的问题"),
+            query = f"有没有出现过{default}的问题" if default else _words("和", number, "类似的问题")
+            add(Candidate(move=SIMILAR, key=f"类似|{number}", must=(), query=query,
+                          label=_short_label(query, "找类似问题"),
                           hint="这张单的问题描述：" + (desc[:120] if desc not in PLACEHOLDERS else "（未填）"),
                           plan=similar_plan(default or ""), slot=True, slot_default=default,
                           source=" ".join(x for x in (desc[:400], default or "") if x)))
@@ -831,14 +850,17 @@ def _relax_candidates(d: Done, add: _Adder) -> None:
         n, what, kind = int(x["count"]), str(x["what"]), str(x["kind"])
         if kind == "time":
             query, label, must = f"那{what}呢", f"看{what}（{n} 张）", (what,)
+            fallback = f"看这一档（{n} 张）"
         elif kind == "unlimited":
             query, label, must = f"{UNLIMITED_TIME}呢", f"{UNLIMITED_TIME}（{n} 张）", (UNLIMITED_TIME,)
+            fallback = label
         else:
             query, label, must = f"不限{what}呢", f"不限{what}（{n} 张）", (what,)
+            fallback = f"不限这项（{n} 张）"
         hint = f"{relax_text(kind, what)}有 {n} 张" + (f"（去掉「{x['value']}」）" if kind == "drop" and x.get("value")
                                                     else "")
         add(Candidate(move=RELAX, key=str(x["key"]), query=query, must=must, hint=hint, plan=x["plan"],
-                      label=label if len(label) <= 15 else "", count=n))
+                      label=clarify.fit_label(label, fallback), count=n))
 
 
 def collect(done: Sequence[Done], C: Context) -> Pool:
