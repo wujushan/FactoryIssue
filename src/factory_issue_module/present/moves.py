@@ -2,6 +2,8 @@
 
 对本轮实际执行的每一步套几种「走一步」（下钻、换角度、收窄、换时间、比较、换域、导出、看另一面、上卷、找类似、
 下一张），参数取自计划格式（`plan/schema.py`）与本轮沙箱产物，不另取数。动作作用在计划上，不按场景写模板。
+结果为空的步骤只有「放宽」一种：只放宽一项的计划由 `relax_options` 拼出，执行层预查张数（`turn/execute.py::
+_relax_neighbors`，决策 2026-11-03「结果为空时放宽一个条件」），张数不为 0 的才做成候选。
 
 - 每条候选带意图键（去重用）、点了执行的计划、默认问句、问句里必须原样出现的取值（必带）、给模型看的依据。
   依据里的数（张数、驳回次数）原样取自沙箱，这里不算。
@@ -39,8 +41,17 @@ ASPECT = "看另一面"
 UP = "上卷"
 SIMILAR = "找类似"
 NEXT = "下一张"
+#: 结果为空时只放宽一个条件（总述「结果为空时」，决策 2026-11-03「结果为空时放宽一个条件」）
+RELAX = "放宽"
 #: 默认顺序（模型出错、超时、关掉时按它取；交给模型的候选也按它截）：各动作轮流取一条
-MOVE_ORDER = (ASPECT, DRILL, ANGLE, NEXT, NARROW, EXPORT, UP, SIMILAR, COMPARE, RETIME, REDOMAIN)
+MOVE_ORDER = (RELAX, ASPECT, DRILL, ANGLE, NEXT, NARROW, EXPORT, UP, SIMILAR, COMPARE, RETIME, REDOMAIN)
+#: 问句离不开本轮的上下文（「那近 90 天呢」）：同样的字在别的轮次是另一件事，只按意图键去重，不按问句
+CONTEXT_MOVES = (RELAX,)
+#: 放宽时间：第一个把原来的时间范围包含在内的；不限时间只在这几种日期依据下试（按停线、重启、结案日期筛时，
+#: 不限时间就丢了「停过线」「重启过」「结案了」这层意思）
+RELAX_LADDER = ("近 90 天", "近半年", "近一年")
+UNLIMITED_TIME = "不限时间"
+UNLIMITED_BASES = ("建单", "现场发现", "统计日期")
 
 #: 换角度的维度（总述「初步分析维度」里能拿来分组的几个）；按月另给
 ANGLE_DIMS = ("问题类型", "加工厂", "机型", "状态", "问题等级", "跟进部门")
@@ -190,6 +201,8 @@ class Done:
     spans: list[Any] = field(default_factory=list)
     #: 条件引用了前一步的结果（不套条件类动作）
     deferred: bool = False
+    #: 结果为空时执行层预查过的放宽（张数不为 0 的）：{kind, what, value, count, plan, key}
+    relax: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _car_content(ticket: Mapping[str, Any]) -> bool:
@@ -245,6 +258,13 @@ class Candidate:
     source: str = ""
     #: 下钻到单：没用上的留给下一轮（§10 `suggest.carry`）
     carry: bool = False
+    #: 默认的按钮文字（放宽：带预先查好的张数）；张数（模型写的按钮文字里要有它）
+    label: str = ""
+    count: int | None = None
+
+    @property
+    def by_context(self) -> bool:
+        return self.move in CONTEXT_MOVES
 
     def to_carry(self) -> dict[str, Any]:
         return {"move": self.move, "key": self.key, "query": self.query, "must": list(self.must), "hint": self.hint,
@@ -381,7 +401,7 @@ class _Adder:
     def __call__(self, c: Candidate | None) -> None:
         if c is None or not c.key or c.key in self.keys:
             return
-        if c.key in self.C.seen or question_key(c.query) in self.C.seen:
+        if c.key in self.C.seen or (not c.by_context and question_key(c.query) in self.C.seen):
             return
         self.keys.add(c.key)
         self.pool.items.append(c)
@@ -735,11 +755,100 @@ _AFTER: dict[str, Callable[[Done, Context, Pool, _Adder], None]] = {
 }
 
 
+# ---------------------------------------------------------------------------- 结果为空时放宽一个条件
+
+
+@dataclass
+class Relax:
+    """结果为空时的一种放宽（只放宽一项）：点了执行的计划、意图键；没改时间时预查直接用本轮换算好的起止日期。"""
+
+    kind: str  # time / unlimited / drop
+    what: str  # 「近 90 天」「不限时间」，或去掉的条件名
+    plan: dict
+    key: str
+    keep_spans: bool
+    value: str = ""
+
+
+def _contains(outer: Any, inner: Any) -> bool:
+    return (outer is not None and inner is not None and outer.start is not None and outer.end is not None
+            and outer.start <= inner.start and outer.end >= inner.end
+            and (outer.start, outer.end) != (inner.start, inner.end))
+
+
+def relax_options(step: Mapping[str, Any], spans: Sequence[Any], today: date, seen: set[str]) -> list[Relax]:
+    """一步结果为空：时间放长一档、各去掉一个筛选条件、不限时间（按这个顺序），去掉本会话执行过、推荐过的。"""
+    p = step.get("params") or {}
+    base = _carried(step)
+    times = [t for t in schema.as_list(p.get("time")) if isinstance(t, dict) and t.get("said")]
+    single = len(times) == 1 and not p.get("compare")
+    cur = spans[0] if spans else None
+    timed = (single and cur is not None and getattr(cur, "start", None) is not None
+             and getattr(cur, "end", None) is not None and not cur.unlimited and not cur.future)
+    basis = str(times[0].get("basis") or "建单") if times else "建单"
+    out: list[Relax] = []
+
+    def add(kind: str, what: str, s: dict, keep: bool, value: str = "") -> bool:
+        plan = {"understanding": "", "alternatives": [], "steps": [s]}
+        key = plan_key(plan)
+        if schema.check_format(plan) or not key or key in seen or any(x.key == key for x in out):
+            return False
+        out.append(Relax(kind=kind, what=what, plan=plan, key=key, keep_spans=keep, value=value))
+        return True
+
+    def retimed(said: str) -> dict:
+        s = copy.deepcopy(base)
+        s["params"]["time"] = [{"said": said, "basis": basis, "from": "user"}]
+        return s
+
+    if timed:  # 第一个包含原范围、本会话又没查过的那一档（上一轮查过近 90 天时试近半年）
+        for option in RELAX_LADDER:
+            if _contains(timespan.convert(option, today), cur) and add("time", option, retimed(option), False):
+                break
+    for i, f in enumerate(schema.as_list(p.get("filters"))):
+        if not isinstance(f, dict) or schema.is_ref(f.get("value")) or f.get("value") in (None, "", []):
+            continue
+        s = copy.deepcopy(base)
+        kept = [x for j, x in enumerate(schema.as_list(s["params"].get("filters"))) if j != i]
+        if kept:
+            s["params"]["filters"] = kept
+        else:
+            s["params"].pop("filters", None)
+        name = str(f.get("column") or "其他") if f.get("field") == "其他" else str(f.get("field") or "")
+        add("drop", name, s, True, "、".join(str(v) for v in schema.as_list(f.get("value"))))
+    if timed and basis in UNLIMITED_BASES:
+        add("unlimited", UNLIMITED_TIME, retimed(UNLIMITED_TIME), False)
+    return out
+
+
+def relax_text(kind: str, what: str) -> str:
+    """「时间放到近 90 天」「不限时间」「不限加工厂」（诊断那句与依据里的说法）。"""
+    return f"时间放到{what}" if kind == "time" else (UNLIMITED_TIME if kind == "unlimited" else f"不限{what}")
+
+
+def _relax_candidates(d: Done, add: _Adder) -> None:
+    for x in d.relax:
+        n, what, kind = int(x["count"]), str(x["what"]), str(x["kind"])
+        if kind == "time":
+            query, label, must = f"那{what}呢", f"看{what}（{n} 张）", (what,)
+        elif kind == "unlimited":
+            query, label, must = f"{UNLIMITED_TIME}呢", f"{UNLIMITED_TIME}（{n} 张）", (UNLIMITED_TIME,)
+        else:
+            query, label, must = f"不限{what}呢", f"不限{what}（{n} 张）", (what,)
+        hint = f"{relax_text(kind, what)}有 {n} 张" + (f"（去掉「{x['value']}」）" if kind == "drop" and x.get("value")
+                                                    else "")
+        add(Candidate(move=RELAX, key=str(x["key"]), query=query, must=must, hint=hint, plan=x["plan"],
+                      label=label if len(label) <= 15 else "", count=n))
+
+
 def collect(done: Sequence[Done], C: Context) -> Pool:
-    """本轮各步的候选（去掉会话里执行过、推荐过的），按动作的默认顺序轮流排。"""
+    """本轮各步的候选（去掉会话里执行过、推荐过的），按动作的默认顺序轮流排。结果为空的步骤只有放宽这一种。"""
     pool = Pool()
     add = _Adder(pool, C)
     for d in done:
+        if not d.found:
+            _relax_candidates(d, add)
+            continue
         fn = _AFTER.get(d.skill)
         if fn is not None:
             fn(d, C, pool, add)

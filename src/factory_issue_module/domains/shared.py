@@ -88,6 +88,9 @@ class MasterData:
     #: 供应商：(编号, 名称)
     suppliers: list[tuple[str, str]] = field(default_factory=list)
     people: list[Person] = field(default_factory=list)
+    #: 当前用户（计划里人员条件写了「我」时按工号取，`execute.add_people`）；取过、没对上时为 None
+    me: Person | None = None
+    me_loaded: bool = False
     #: 机型 → 它的系列（「A920 系列」对不上时说明 A920 属于哪个系列）
     machine_series: dict[str, str] = field(default_factory=dict)
     frames: dict[str, pd.DataFrame] = field(default_factory=dict)
@@ -214,6 +217,33 @@ async def people_by_name(ctx: Any, names: Sequence[str], departments: Mapping[in
         if ids and name:
             out.append(Person(ids[0], str(name).strip(), departments.get(units[0], "未填") if units else "未填"))
     return out
+
+
+async def current_user(ctx: Any, departments: Mapping[int, str], failed: set[str] | None = None) -> Person | None:
+    """当前用户：平台给出的工号就是人员表的员工 ID，按 ID 取，不按姓名（总述「三域共用的说法」我跟进的一行）。
+
+    工号为空、不是数字、人员表里没有这名员工时返回 None（由调用方请用户给出姓名）；取数出错时记进 `failed`，
+    该段按「这一部分暂时没查到」答（设计 §14）。日志不记工号与姓名。"""
+    ids = base.int_keys([getattr(getattr(ctx, "user", None), "user_id", None)])
+    if not ids:
+        logger.info("factory_issue_current_user", found=False, reason="no_employee_id")
+        return None
+    spec = {"source": INFO, "from": EMPLOYEE, "select": ["ID", "Name", "Unit"]}
+    try:
+        frame = await base.fetch_in(ctx, spec, "ID", ids)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("factory_issue_master_unavailable", table="people", error=type(exc).__name__)
+        if failed is not None:
+            failed.add("people")
+        return None
+    for rid, name, unit in zip(base.column(frame, "ID"), base.column(frame, "Name"), base.column(frame, "Unit"),
+                               strict=False):
+        units = base.int_keys([unit])
+        if base.int_keys([rid]) == ids and name is not None and str(name).strip():
+            logger.info("factory_issue_current_user", found=True)
+            return Person(ids[0], str(name).strip(), departments.get(units[0], "未填") if units else "未填")
+    logger.info("factory_issue_current_user", found=False, reason="not_in_employee")
+    return None
 
 
 def _texts(frame: pd.DataFrame | None, col: str) -> list[str]:

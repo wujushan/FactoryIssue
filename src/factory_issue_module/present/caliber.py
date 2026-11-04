@@ -2,6 +2,9 @@
 
 每轮最后一段，合并各段：一项一个代码模板，数字只取沙箱给的 `caliber`，域的范围取自权限前置，条件回显取自第 6 步
 （用户原话与对上的取值）。只写与本次统计相关的项，用业务语言。
+
+一轮里只有按文字找单时这一段叫「查找说明」，不写计数单位（决策 2026-11-03「回答骨架与排版」）：哪一步记进来的
+由 `domains(…, kind=…)` 标明。
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ class Caliber:
     not_counted: list[str] = field(default_factory=list)
     filters: list[str] = field(default_factory=list)
     items: list[str] = field(default_factory=list)
+    #: 记进来的是哪几种问法：「text」按文字找单，「stat」其余（清单、统计、临时统计、详情与按号查单的合计）
+    kinds: set[str] = field(default_factory=set)
 
     def _add(self, bucket: list[str], text: str) -> None:
         if text and text not in bucket:
@@ -30,11 +35,17 @@ class Caliber:
     def time(self, text: str) -> None:
         self._add(self.times, text)
 
-    def domains(self, counted: Iterable[str], not_counted: Iterable[str]) -> None:
+    def domains(self, counted: Iterable[str], not_counted: Iterable[str], *, kind: str = "stat") -> None:
+        self.kinds.add(kind)
         for d in counted:
             self._add(self.counted, d)
         for t in not_counted:
             self._add(self.not_counted, t)
+
+    @property
+    def search_only(self) -> bool:
+        """一轮里只有按文字找单：结尾叫「查找说明」。"""
+        return self.kinds == {"text"}
 
     def condition(self, name: str, value: str) -> None:
         self._add(self.filters, f"{name}：{value}")
@@ -43,18 +54,27 @@ class Caliber:
         self._add(self.items, text)
 
     def text(self) -> str:
-        lines = ["**统计口径**"]
+        search = self.search_only
+        lines = [f"**{SEARCH_TITLE if search else TITLE}**"]
         lines.append(f"- 时间范围：{'；'.join(self.times) or '不限建单时间'}")
         scope = "、".join(self.counted) or "无"
         if self.not_counted:
             scope += "；" + "；".join(self.not_counted)
-        lines.append(f"- 统计范围：{scope}")
-        lines.append("- 计数单位：按问题单张数计，一张单计一次")
-        lines.append("- 排除：已删除的单未计入")
+        if search:
+            lines.append(f"- 查找范围：{scope}；已删除的单不查")
+        else:
+            lines.append(f"- 统计范围：{scope}")
+            lines.append("- 计数单位：按问题单张数计，一张单计一次")
+            lines.append("- 排除：已删除的单未计入")
         if self.filters:
             lines.append(f"- 筛选条件：{'；'.join(self.filters)}")
         lines += [f"- {t}" for t in self.items]
         return "\n".join(lines)
+
+
+#: 结尾那一段的标题（总述「统计口径说明」）
+TITLE = "统计口径"
+SEARCH_TITLE = "查找说明"
 
 
 def time_range(spans_text: str | None, basis: str, missing: Iterable[tuple[str, int]] = (),

@@ -36,9 +36,12 @@ TASK_FILES = {"list": "stats/tasks/list.py", "aggregate": "stats/tasks/aggregate
               "keyword_match": "stats/tasks/keyword_match.py", "text_merge": "stats/tasks/text_merge.py",
               "custom_frame": "stats/tasks/custom_frame.py", "custom_run": "stats/tasks/custom_run.py"}
 #: 只有某个任务要的公共库（详情的各块只在详情脚本里拼，清单与统计的脚本不带它；按词匹配只拼进按词一路；
-#: 临时统计的整理与口径函数只拼进临时统计的两次调用）
+#: 临时统计的整理与口径函数只拼进临时统计的两次调用；结论的要点只拼进清单、文字查找收拢、统计与临时统计 ①）
 TASK_LIBS = {"detail": ("stats/lib/detail.py",), "keyword_match": ("stats/lib/textmatch.py",),
-             "custom_frame": ("stats/lib/custom.py",)}
+             "custom_frame": ("stats/lib/custom.py", "stats/lib/insights.py"),
+             # 结论里的要点与需关注的单（决策 2026-11-03「结论的要点与需关注的单」）
+             "list": ("stats/lib/insights.py",), "text_merge": ("stats/lib/insights.py",),
+             "aggregate": ("stats/lib/insights.py",)}
 #: 临时统计第二次调用拼进的公共库：口径函数要的几份，不带三域派生（输入帧已经整理好）
 CUSTOM_RUN_LIBS = ("textnorm.py", "stats/lib/common.py", "stats/lib/views.py", "stats/lib/custom.py")
 #: 模型写的 `run` 在拼接时改成这个名字，外壳的 `run` 才是 harness 认的入口（设计 §5.5）

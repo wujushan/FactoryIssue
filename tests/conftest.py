@@ -11,3 +11,10 @@ def _fresh_config_cache():
     files._cache.clear()
     yield
     files._cache.clear()
+
+
+def pytest_sessionfinish() -> None:
+    """常驻沙箱跟整次 pytest 走，结束时关掉，避免留下子进程。"""
+    import warm_sandbox
+
+    warm_sandbox.close()

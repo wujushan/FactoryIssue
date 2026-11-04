@@ -3,7 +3,8 @@
 - 输入：最近几轮对话、本轮问句、本轮回答的开头、代码列的候选（`present/moves.py`，至多 `POOL_MAX` 条）。
 - 输出：挑哪几条、每条的问句；找类似另写现象。同一个底的两条可以合成一条。
 - 每条单独核对，不过的丢掉：编号与叠加、长度、必带、数与问题编号都要在这条候选里出现过、不露表名字段名、
-  不与会话里问过推荐过的相同。模型出错、超时、关掉、挑的全被丢掉时按代码的默认顺序取（`defaults`）；模型挑了
+  不与会话里问过推荐过的相同（离不开本轮上下文的「放宽」只按意图键比，不按问句比）。按钮文字（`label`，INFO 网页
+  前端 2026-11-03 起显示它）单独核，不过时用候选的默认按钮文字或问句截断，这一条不丢。模型出错、超时、关掉、挑的全被丢掉时按代码的默认顺序取（`defaults`）；模型挑了
   0 条时不给接着问。
 - 一次调用、不重试；超时由调用方给的秒数控制。system 固定（§5.6）。
 """
@@ -45,9 +46,10 @@ SYSTEM = f"""你是「制程问题查询助手」的{MARKER}。程序已经回�
 4. 问句里不要出现候选和对话里没有的数字、单号或名称，不要写统计结论或判断。
 5. 已经问过的不要再挑；几条之间意思不要重复。
 6. 「要写现象」的那条另写 phenomenon：一句不看上文也能懂的现象描述，不超过 20 个字，只写现象，不写处理办法、机型、工厂、时间。
-7. 没有合适的就少挑，可以一条都不挑。
+7. 每条另写 label：显示在按钮上的文字，不超过 15 个字。问句不超过 15 个字时 label 就照抄问句；候选给了「默认按钮」且里面有张数的，label 里要写上这个张数。
+8. 没有合适的就少挑，可以一条都不挑。
 
-只输出一个 JSON 对象，不要输出其他内容：{{"suggestions": [{{"ids": ["c1"], "query": "问句", "phenomenon": "只有要写现象的那条才写"}}]}}"""
+只输出一个 JSON 对象，不要输出其他内容：{{"suggestions": [{{"ids": ["c1"], "query": "问句", "label": "按钮文字", "phenomenon": "只有要写现象的那条才写"}}]}}"""
 
 _ROLE = {"user": "用户", "assistant": "助手"}
 
@@ -58,6 +60,11 @@ class Chosen:
     key: str
     query: str
     plan: dict
+    #: 按钮上显示的文字（INFO 网页前端 2026-11-03 起显示它）；空时按问句截断
+    label: str = ""
+
+
+LABEL_MAX = 15
 
 
 def _clip(text: Any, n: int) -> str:
@@ -76,6 +83,8 @@ def user_text(query: str, history: Sequence[Mapping[str, Any]], answer: str,
     bases: dict[str, str] = {}
     for cid, c in items:
         parts = [cid, c.move, f"默认问句：{c.query}"]
+        if c.label:
+            parts.append(f"默认按钮：{c.label}")
         if c.hint:
             parts.append(f"依据：{c.hint}")
         if c.must:
@@ -123,8 +132,9 @@ def check(item: Mapping[str, Any], by_id: Mapping[str, moves.Candidate], pool: m
         return "单号"
     if _LEAK.search(query):
         return "字段名"
-    if moves.question_key(query) in taken:
+    if moves.question_key(query) in taken and not all(c.by_context for c in cands):
         return "重复"
+    label = _label(item.get("label"), got, source)
     plan = got.plan
     slot = next((c for c in cands if c.slot), None)
     if slot is not None:
@@ -134,7 +144,17 @@ def check(item: Mapping[str, Any], by_id: Mapping[str, moves.Candidate], pool: m
         if not _numbers(phenomenon) <= _numbers(slot.source):
             return "现象"
         plan = moves.with_phenomenon(plan, phenomenon)
-    return Chosen(move=got.move, key=got.key, query=query, plan=plan)
+    return Chosen(move=got.move, key=got.key, query=query, plan=plan, label=label)
+
+
+def _label(raw: Any, got: moves.Candidate, source: str) -> str:
+    """模型写的按钮文字单独核，不过不丢这一条：1–15 个字，数与单号要在这条候选里出现过，不露表名字段名；带张数的
+    候选要写上张数。不过时用候选的默认按钮文字（空时调用方按问句截断）。"""
+    label = _clean(raw)
+    ok = (bool(label) and len(label) <= LABEL_MAX and _numbers(label) <= _numbers(source)
+          and set(moves.issue_numbers(label)) <= set(moves.issue_numbers(source)) and not _LEAK.search(label)
+          and (got.count is None or str(got.count) in _numbers(label)))
+    return label if ok else got.label
 
 
 def defaults(items: Sequence[moves.Candidate], n: int, taken: set[str]) -> list[Chosen]:
@@ -143,14 +163,14 @@ def defaults(items: Sequence[moves.Candidate], n: int, taken: set[str]) -> list[
     for c in items:
         if len(out) >= n:
             break
-        if c.plan is None or c.key in taken or moves.question_key(c.query) in taken:
+        if c.plan is None or c.key in taken or (not c.by_context and moves.question_key(c.query) in taken):
             continue
         plan = c.plan
         if c.slot:
             if not c.slot_default:
                 continue
             plan = moves.with_phenomenon(plan, c.slot_default)
-        out.append(Chosen(move=c.move, key=c.key, query=c.query, plan=plan))
+        out.append(Chosen(move=c.move, key=c.key, query=c.query, plan=plan, label=c.label))
         taken = taken | {c.key, moves.question_key(c.query)}
     return out
 

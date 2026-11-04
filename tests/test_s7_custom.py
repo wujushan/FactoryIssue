@@ -319,13 +319,15 @@ def test_crowded_hint_names_only_missing_conditions():
 async def test_custom_stats_answers_with_table_chart_and_caliber():
     h = harness(plan(step(time=T30)), NARR, script_replies=[WEEKDAY])
     events = await run(h, "近 30 天的问题按星期几分布看看")
-    # 先给结论再给表与图（开发者 2026-11-02 定）；接着问只有换时间（§9.5）
-    assert _types(events) == [EventType.DELTA, EventType.DELTA, EventType.TABLE, EventType.CHART, EventType.DELTA,
-                              EventType.SUGGESTIONS]
+    # 提示行（以下为临时统计）→ 结论 → 小标题 → 表 → 图 → 统计口径（决策 2026-11-03「回答骨架与排版」）；
+    # 接着问只有换时间（§9.5）
+    assert _types(events) == [EventType.DELTA, EventType.DELTA, EventType.DELTA, EventType.TABLE, EventType.CHART,
+                              EventType.DELTA, EventType.SUGGESTIONS]
     assert [r["query"] for r in events[-1].data["recommendations"]] == ["换成近 90 天看看", "换成今年看看"]
+    assert events[0].data["text"] == f"{errors.CUSTOM_HEAD}。"
     assert NARR.split("。")[0] in events[1].data["text"]
+    assert events[2].data["text"] == "\n\n**临时统计结果（计入 10 张单：国内 4 张、巴西 4 张、海外 2 张）**"
     text = _text(events)
-    assert text.startswith(f"{errors.CUSTOM_HEAD}。国内、巴西、海外，") and "共 10 张单（国内 4 张、巴西 4 张、海外 2 张）" in text
     table = _tables(events)[0]
     assert table["columns"] == ["星期", "单数"] and len(table["rows"]) == 7
     assert "统计口径" in text and errors.CUSTOM_METHOD in text and "按建单时间" in text
@@ -432,7 +434,9 @@ async def test_empty_recent_offers_relaxed_time_counted_without_a_script():
     events = await run(h, "国内最近的问题按星期几分布看看")
     assert "没有查到单" in _text(events) and script_calls(h) == []
     labels = [r["label"] for r in next(e for e in events if e.type is EventType.SUGGESTIONS).data["recommendations"]]
-    assert labels == ["看近 90 天（4 张）", "看今年（4 张）"]
+    # 2026-11-03 起：只放宽一个条件（总述「结果为空时」）；临时统计不写「最近建单的一张」
+    assert labels == ["看近 90 天（4 张）", "不限时间（4 张）"]
+    assert "只放宽一个条件时：时间放到近 90 天有 4 张；不限时间有 4 张。" in _text(events)
 
 
 async def test_second_custom_stats_in_one_turn_is_asked_again():

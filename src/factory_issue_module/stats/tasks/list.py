@@ -7,12 +7,14 @@
 （20 万字符上限）。
 结果单（后一步的 `issues` 引用、工作区 `results`）同样作为明细帧回传（`ids_<域>`：单 ID、问题编号）。
 引用值另给各域张数（`found`），工作区存下供质疑重查比对（设计 §10）。
+结论的要点与需关注的单（`insights`）按列出的单算（`limit` 之后，`stats/lib/insights.py`）。
 """
 
 import pandas as pd
 
 from factory_issue_module.stats.lib.common import fi_blank, fi_rank, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
+from factory_issue_module.stats.lib.insights import in_insights
 from factory_issue_module.stats.lib.views import vw_breakdowns, vw_counts, vw_filter, vw_ids, vw_sorted, vw_time
 
 PARAMS = {}
@@ -57,6 +59,7 @@ def run(data):
     L = P["list"]
     segments, issues, missing_domains = [], {}, []
     found_by, exports = {}, {}
+    listed_views = []
     total_all = 0
     best = None
     for dom in P["domains"]:
@@ -73,6 +76,7 @@ def run(data):
         found = int(len(v))
         if L.get("limit"):
             v = v.head(int(L["limit"]))
+        listed_views.append((dom, v))
         cols = L["columns"][dom]
         head = v.head(int(L["table_rows"]))
         rows = [[r[c] for c in cols] for _, r in head.iterrows()]
@@ -126,6 +130,7 @@ def run(data):
     # 三域一起列清单时开头给各域张数与合计（总述「跨域规则」清单呈现）
     by_domain = [[s["domain"], s["found"]] for s in segments]
     found_total = sum(n for _d, n in by_domain)
+    insights = in_insights(listed_views, P.get("insight"), P.get("blind"), P.get("traits"))
     return {"segments": segments, "refs": refs, "missing_domains": missing_domains, "total": total_all,
-            "found_total": found_total, "by_domain": by_domain, "few_total": found_total <= 2,
+            "found_total": found_total, "by_domain": by_domain, "few_total": found_total <= 2, "insights": insights,
             "exported": [[s["domain"], s["listed"]] for s in segments if s["exported"]], **exports, **issues}

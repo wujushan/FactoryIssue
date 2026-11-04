@@ -26,7 +26,7 @@ from functools import lru_cache
 from typing import Any
 
 from factory_issue_module.config.files import TopicTerms
-from factory_issue_module.plan import timespan
+from factory_issue_module.plan import names, timespan
 from factory_issue_module.plan.prematch import ISSUE_NUMBER, find_entities, find_numbers
 
 # ---------------------------------------------------------------------------- 归一
@@ -278,6 +278,8 @@ def _regroup(step: dict, query: str | None, classes: NameClasses,
             continue
         values = values if isinstance(values, list) else [values]
         if not all(isinstance(v, str) for v in values):
+            continue
+        if any(names.is_self(v) for v in values):  # 「我」指当前用户，不是库里的名字，不改类
             continue
         if not words:
             matched = [g for g in NAME_GROUPS if all(_found(v, g, classes) for v in values)]
@@ -648,6 +650,8 @@ def _unify(p: dict, step: dict) -> None:
         p.pop("logic", None)
     if step.get("skill") == "text_search" and not p.get("ask"):
         p["ask"] = "现象"
+    _self_values(p)
+    _status_values(p)
     issue = p.get("issue")
     if isinstance(issue, str):
         p["issue"] = {"value": issue, "from": "user"}
@@ -662,6 +666,38 @@ def _unify(p: dict, step: dict) -> None:
             and {norm(v) for v in _as_list(f.get("value"))} <= {norm(x) for x in implied})]
         if not p["filters"]:
             p.pop("filters")
+
+
+#: 人员条件（取值是员工）
+PERSON_FIELDS = ("跟进人", "当前责任人", "责任人")
+_PERSON_FIELDS = {norm_field(f) for f in PERSON_FIELDS}
+
+
+def _self_values(p: dict) -> None:
+    """人员条件里指当前用户的写法（「本人」「自己」）统一成「我」（决策 2026-11-03「『我』按当前用户查」）。"""
+    for f in _as_list(p.get("filters")):
+        if not isinstance(f, dict) or norm_field(f.get("field")) not in _PERSON_FIELDS:
+            continue
+        v = f.get("value")
+        if isinstance(v, str) and names.is_self(v):
+            f["value"] = names.SELF
+        elif isinstance(v, list) and any(isinstance(x, str) and names.is_self(x) for x in v):
+            f["value"] = list(dict.fromkeys(names.SELF if isinstance(x, str) and names.is_self(x) else x for x in v))
+
+
+#: 状态取值的同义写法（规划提示「『草稿』为 待提交」；执行层 `domains/enums.py` 同样认，这里统一成一种写法）
+_STATUS_SYNONYMS = {norm("草稿"): "待提交", norm("未提交"): "待提交"}
+
+
+def _status_values(p: dict) -> None:
+    for f in _as_list(p.get("filters")):
+        if not isinstance(f, dict) or norm_field(f.get("field")) != "状态":
+            continue
+        v = f.get("value")
+        if isinstance(v, str) and norm(v) in _STATUS_SYNONYMS:
+            f["value"] = _STATUS_SYNONYMS[norm(v)]
+        elif isinstance(v, list):
+            f["value"] = list(dict.fromkeys(_STATUS_SYNONYMS.get(norm(x), x) if isinstance(x, str) else x for x in v))
 
 
 def _rewrite_refs(obj: Any, mapping: dict[str, str]) -> Any:

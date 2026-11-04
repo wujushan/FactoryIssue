@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 import s3_data
 import scopes
-from fakes import make_harness, run
+from fakes import headed_tables, make_harness, run
 from forge_core.errors import TableDenied
 from forge_core.events import EventType
 
@@ -107,7 +107,7 @@ async def test_m2_cross_group_with_close_cycle_is_given_per_domain():
     reply = plan(step("aggregate", time=T30, group_by=["问题类型"], metrics=["结案周期"]))
     h, events = await _go("近 30 天各问题类型平均多久结案", [reply, "共 10 张。"])
     tables = _tables(events)
-    assert [t["title"].split("按")[0] for t in tables if MEAN in t["columns"]] == ["国内", "巴西", "海外"]
+    assert [head.split("按")[0] for head, t in headed_tables(events) if MEAN in t["columns"]] == ["国内", "巴西", "海外"]
     assert all("巴西" not in t["columns"] for t in tables)
 
 
@@ -120,7 +120,7 @@ async def test_a1_products_failure_is_section_failed_not_unrecognized_machine():
                           errors_by_table={"ProductName": TableDenied("拒绝", detail={})})
     text = _text(events)
     assert f"巴西：{errors.SECTION_FAILED}" in text and f"海外：{errors.SECTION_FAILED}" in text
-    assert [t["title"].split("：")[0] for t in _tables(events)] == ["国内问题单"]
+    assert [head.split("（")[0] for head, _t in headed_tables(events)] == ["国内问题单"]
     assert "未识别机型" not in str(_tables(events))
 
 

@@ -1,9 +1,9 @@
 """汇总统计（设计 §4.3 汇总一行、§6.3、§8.1、§8.2；总述「回答怎么组织」「排名、长清单与导出」「初步分析维度」
 「跨域规则」）。
 
-事件顺序：`delta`（开头：点名第一或给总数；三域一起时先给各域小计再给合计）→ `table` → `chart`（分组 2 组及以上）
-→ `delta`（分析）→ 统计口径（整轮合并，放最后）。分组、Top N、并列、增减、平均与中位数、跨域合并都由沙箱算
-（`stats/tasks/aggregate.py`）。
+事件顺序（决策 2026-11-03「回答骨架与排版」）：提示行 → 结论（模型写，第一句点名第一或给总数；模板句是
+`opening`）→ 每张表一节（小标题 `heading`、`table`、并列那句、`chart`）→ 统计口径（整轮合并，放最后）。分组、Top N、
+并列、增减、平均与中位数、跨域合并都由沙箱算（`stats/tasks/aggregate.py`）。
 """
 
 from __future__ import annotations
@@ -75,8 +75,28 @@ def _counts(pairs: Sequence[Sequence[Any]]) -> str:
     return "、".join(f"{d} {n} 张" for d, n in pairs)
 
 
-def opening(seg: dict[str, Any], label: str, scope: str) -> str:
-    """开头一句：总数、第一名或增减（数都来自沙箱的 facts）。三域一起时先给各域小计再给合计。"""
+def heading(seg: dict[str, Any], label: str) -> str:
+    """一张表一节的小标题：按什么统计、合计或总数（决策 2026-11-03「回答骨架与排版」；张数来自沙箱）。各域张数在表里。"""
+    f = seg.get("facts") or {}
+    what = f"{label}按{seg.get('title')}统计" if seg.get("kind") == "group" else f"{label}统计"
+    if seg.get("kind") == "compare":
+        return what
+    return f"{what}（{'合计' if seg.get('cross') else '共'} {f.get('总单数', 0)} 张）"
+
+
+def caption(seg: dict[str, Any]) -> str:
+    """表格下面那句：第 N 名并列、都列出时写明（总述「排名、长清单与导出」）。"""
+    f = seg.get("facts") or {}
+    tied = [str(x) for x in f.get("并列") or []]
+    first = {str(x) for x in f.get("第一") or []}
+    if seg.get("kind") == "group" and tied and f.get("并列名次") and set(tied) != first:
+        return f"第 {f['并列名次']} 名并列，{'、'.join(tied)}都列出"
+    return ""
+
+
+def opening(seg: dict[str, Any], label: str, scope: str, *, tie: bool = True) -> str:
+    """一段的模板句：总数、第一名或增减（数都来自沙箱的 facts）。三域一起时先给各域小计再给合计。模型没写出合格的
+    结论时用它；`tie=False` 时不写第 N 名并列那一句（那句另写在表格下面，`caption`）。"""
     f = seg.get("facts") or {}
     kind = seg.get("kind")
     if kind == "compare":
@@ -107,7 +127,7 @@ def opening(seg: dict[str, Any], label: str, scope: str) -> str:
         text += f"；按{title}统计，{'并列' if f.get('第一并列') else ''}最多的是{who}（{top_n} 张）"
         tied = [str(x) for x in f.get("并列") or []]
         # 第一名全体并列、又超过要的名次时，「第 N 名并列」点的是同一批名字，只说前一句（S2 复评留下的一处）
-        if tied and f.get("并列名次") and set(tied) != {str(x) for x in first}:
+        if tie and tied and f.get("并列名次") and set(tied) != {str(x) for x in first}:
             text += f"；第 {f['并列名次']} 名并列，{'、'.join(tied)}都列出"
     elif pairs:
         text += f"，按{title}分为 {f.get('按' + title + '（项数）', 0)} 组"

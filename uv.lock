@@ -141,7 +141,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "openpyxl", specifier = ">=3.1" },
-    { name = "paxsz-forge-core", specifier = ">=0.3.7", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" },
+    { name = "paxsz-forge-core", specifier = ">=0.3.8", index = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" },
 ]
 
 [package.metadata.requires-dev]
@@ -348,16 +348,16 @@ wheels = [
 
 [[package]]
 name = "paxsz-forge-core"
-version = "0.3.7"
+version = "0.3.8"
 source = { registry = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "structlog" },
 ]
-sdist = { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/e0cf51ab599d01170bea73d3834c4b37eba2b8d0d7484f6b0158d48619f8e1cb/paxsz_forge_core-0.3.7.tar.gz", hash = "sha256:e0cf51ab599d01170bea73d3834c4b37eba2b8d0d7484f6b0158d48619f8e1cb" }
+sdist = { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/8e07c53f92cf8d3051d4499d41a0c7bc2a7a94ec37903344d771f8b2782e3eef/paxsz_forge_core-0.3.8.tar.gz", hash = "sha256:8e07c53f92cf8d3051d4499d41a0c7bc2a7a94ec37903344d771f8b2782e3eef" }
 wheels = [
-    { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/67cdacb02f2f59d0f1cf9beb0110f0613c82e86fe9d2b0ed7afe111b418937d8/paxsz_forge_core-0.3.7-py3-none-any.whl", hash = "sha256:67cdacb02f2f59d0f1cf9beb0110f0613c82e86fe9d2b0ed7afe111b418937d8" },
+    { url = "http://code.paxsz.com/api/v4/projects/195/packages/pypi/files/3e1f665ba43430b3d0ddd8ec4905ba6ae9b5ebdcffab545131f70cf52a0382bd/paxsz_forge_core-0.3.8-py3-none-any.whl", hash = "sha256:3e1f665ba43430b3d0ddd8ec4905ba6ae9b5ebdcffab545131f70cf52a0382bd" },
 ]
 
 [[package]]

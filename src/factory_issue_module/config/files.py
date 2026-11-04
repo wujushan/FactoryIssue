@@ -148,6 +148,18 @@ class AnswerParams:
     #: 答后建议由模型挑（false 时按代码的默认顺序取，设计 §9.5）；等模型的秒数
     suggest_model: bool = True
     suggest_seconds: int = 5
+    #: 类似问题的重排分下限（0 到 1；写 0 即不按分数筛），只管类似问题，「可能相关」仍看 `rerank_score_threshold`
+    similar_rerank_floor: float = 0.2
+    #: 类似问题每域列几张（1 到 `SIMILAR_ROWS_MAX`，决策 2026-11-03「回答骨架与排版」）
+    similar_rows: int = 5
+    #: 结论里的要点与需关注的单（决策 2026-11-03「结论的要点与需关注的单」）：要点至多几条、需关注至多几张（写 0 即
+    #: 不给）；集中的占比门槛（%）、重复的张数门槛、时间的月数门槛、时效的张数门槛
+    points_max: int = 4
+    focus_max: int = 3
+    concentrate_share: int = 40
+    repeat_min: int = 3
+    trend_months: int = 3
+    close_min: int = 5
 
 
 # ---------------------------------------------------------------- Markdown 两种形态
@@ -381,12 +393,20 @@ def segmentation_from(data: Mapping[str, Any]) -> Segmentation:
     )
 
 
+#: 结论里的要点与需关注的单几项的取值范围（整数，含两头；决策 2026-11-03「结论的要点与需关注的单」）
+INSIGHT_RANGES: dict[str, tuple[int, int]] = {
+    "points_max": (0, 6), "focus_max": (0, 5), "concentrate_share": (1, 100), "repeat_min": (2, 1000),
+    "trend_months": (2, 120), "close_min": (1, 1000),
+}
 _ANSWER_KEYS = (
     "top_n", "export_threshold", "table_rows", "judge_max", "rerank_max",
-    "rerank_score_threshold", "custom_stats_enabled", "suggest_model", "suggest_seconds",
+    "rerank_score_threshold", "similar_rerank_floor", "similar_rows", "custom_stats_enabled", "suggest_model",
+    "suggest_seconds", *INSIGHT_RANGES,
 )
 #: 等模型挑答后建议的秒数的范围（设计 §11）
 SUGGEST_SECONDS_RANGE = (1, 30)
+#: 类似问题每域最多列几张：不超过每域逐张判断的张数（`skills/text_search.SIM_JUDGE`，单测核对两者一致），没判断过的不列
+SIMILAR_ROWS_MAX = 10
 
 
 def parse_answer_params(text: str) -> AnswerParams:
@@ -402,9 +422,8 @@ def answer_params_from(data: Mapping[str, Any]) -> AnswerParams:
     }
     threshold = merged.get("rerank_score_threshold")
     if threshold is not None:
-        if type(threshold) not in (int, float) or not 0 <= threshold <= 1:
-            raise ConfigFormatError(f"rerank_score_threshold 要写 0 到 1 之间的数，现在是 {threshold!r}")
-        threshold = float(threshold)
+        threshold = _unit("rerank_score_threshold", threshold)
+    floor = _unit("similar_rerank_floor", merged["similar_rerank_floor"])
     flags = {}
     for key in ("custom_stats_enabled", "suggest_model"):
         if type(merged[key]) is not bool:
@@ -414,7 +433,24 @@ def answer_params_from(data: Mapping[str, Any]) -> AnswerParams:
     low, high = SUGGEST_SECONDS_RANGE
     if type(seconds) is not int or not low <= seconds <= high:
         raise ConfigFormatError(f"suggest_seconds 要写 {low} 到 {high} 之间的整数（秒），现在是 {seconds!r}")
-    return AnswerParams(**ints, rerank_score_threshold=threshold, **flags, suggest_seconds=seconds)
+    rows = merged["similar_rows"]
+    if type(rows) is not int or not 1 <= rows <= SIMILAR_ROWS_MAX:
+        raise ConfigFormatError(f"similar_rows 要写 1 到 {SIMILAR_ROWS_MAX} 之间的整数，现在是 {rows!r}")
+    insight = {}
+    for key, (low, high) in INSIGHT_RANGES.items():
+        value = merged[key]
+        if type(value) is not int or not low <= value <= high:
+            raise ConfigFormatError(f"{key} 要写 {low} 到 {high} 之间的整数，现在是 {value!r}")
+        insight[key] = value
+    return AnswerParams(**ints, rerank_score_threshold=threshold, **flags, suggest_seconds=seconds,
+                        similar_rerank_floor=floor, similar_rows=rows, **insight)
+
+
+def _unit(key: str, value: Any) -> float:
+    """0 到 1 之间的数（重排分的阈值、下限）。"""
+    if type(value) not in (int, float) or not 0 <= value <= 1:
+        raise ConfigFormatError(f"{key} 要写 0 到 1 之间的数，现在是 {value!r}")
+    return float(value)
 
 
 #: issue 必须先列：brazil、attachment 不写时与它相同

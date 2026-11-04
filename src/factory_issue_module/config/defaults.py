@@ -54,7 +54,19 @@ ANSWER_PARAMS: dict[str, Any] = {
     "table_rows": 20,
     "judge_max": 30,
     "rerank_max": 100,
+    #: 类似问题的重排分下限，低于它的不列（决策 2026-11-03「类似问题逐张判断与分数下限」，探测 Z1）
+    "similar_rerank_floor": 0.2,
+    #: 类似问题每域列几张（决策 2026-11-03「回答骨架与排版」）
+    "similar_rows": 5,
     "custom_stats_enabled": True,
+    #: 结论里的要点与需关注的单（总述「结论里的要点与需关注的单」，决策 2026-11-03「结论的要点与需关注的单」）：
+    #: 要点至多几条、需关注至多几张；集中的占比门槛（%）、重复的张数门槛、时间的月数门槛、时效的张数门槛
+    "points_max": 4,
+    "focus_max": 3,
+    "concentrate_share": 40,
+    "repeat_min": 3,
+    "trend_months": 3,
+    "close_min": 5,
     #: 答后建议（设计 §9.5、决策 2026-11-02「答后建议改由模型挑」）
     "suggest_model": True,
     "suggest_seconds": 5,

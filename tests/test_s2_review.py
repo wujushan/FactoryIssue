@@ -83,7 +83,7 @@ async def test_m5_several_departments_give_per_department_counts():
 
 async def test_a1_overview_opening_has_type_distribution():
     reply = plan(step("aggregate", domains=CN, time=RECENT30))
-    h, events = await _go("国内最近咋样", [reply, "共 4 张。"])
+    h, events = await _go("国内最近咋样", [reply, RuntimeError("模型出错")])  # 模型出错：结论句用模板句
     assert "硬件问题 2 张" in _text(events).split("\n\n")[0]
 
 
@@ -109,7 +109,8 @@ async def test_a3_relax_counts_do_not_call_the_model_again():
     h, events = await _go("国内最近的问题", [reply], main=main)
     assert len(h.llm.calls) == 1
     labels = [r["label"] for r in next(e for e in events if e.type is EventType.SUGGESTIONS).data["recommendations"]]
-    assert labels == ["看近 90 天（4 张）", "看今年（4 张）"]
+    # 2026-11-03 起：只放宽一个条件（时间放长一档、不限时间），按钮带预先查好的张数（总述「结果为空时」）
+    assert labels == ["看近 90 天（4 张）", "不限时间（4 张）"]
 
 
 async def test_a4_supplier_partial_name_matching_several_clarifies():
@@ -140,8 +141,9 @@ async def test_a6_sorted_by_rate_does_not_say_latest():
     rows = [{**cn_data.main_rows()[0], "ID": i, "Numbers": f"ZC99020{i:02d}", "Rate": float(i)} for i in range(1, 26)]
     reply = plan(step("list_issues", domains=CN, time=RECENT30, sort={"by": "不良率", "order": "降序"}))
     h, events = await _go("近 30 天国内不良率最高的单", [reply, NARR], main=pd.DataFrame(rows))
-    head = _text(events).split("\n\n")[0]
-    assert "最近" not in head and "不良率从高到低" in head
+    # 表格下面那句（决策 2026-11-03「回答骨架与排版」）：按不良率排时不说「最近」
+    note = next(e.data["text"] for e in events if e.type is EventType.DELTA and "表格" in e.data["text"])
+    assert "最近" not in note and "不良率从高到低" in note
     assert _tables(events)[0]["rows"][0][0] == "ZC9902025"
 
 

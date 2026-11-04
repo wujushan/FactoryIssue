@@ -15,19 +15,22 @@ import scopes
 from fakes import FakeLLM, make_harness, run
 from forge_core.events import EventType
 from openpyxl import load_workbook
+from structlog.testing import capture_logs
 
 from factory_issue_module.config import files as config_files
-from factory_issue_module.declarations import MART, TOPIC_TERMS, Domain
+from factory_issue_module.declarations import ANSWER_PARAMS, MART, TOPIC_TERMS, Domain
 from factory_issue_module.present import summaries
+from factory_issue_module.skills import text_search
 from factory_issue_module.stats.lib import textmatch as tm
-from factory_issue_module.text import keyword, terms
-from factory_issue_module.turn import workspace
+from factory_issue_module.text import judge, keyword, semantic, terms
+from factory_issue_module.turn import errors, workspace
 
 CN = {"value": ["国内"], "from": "user"}
 T30 = [{"said": "近 30 天", "basis": "建单", "from": "user"}]
 SITES = 'issue = "info.test.local"'
 TERMS_MARK = "定按文字找单时用哪些说法"
 JUDGE_MARK = "是否与用户要找的话题有关"
+SIM_MARK = "与用户描述的问题现象是不是同一类问题"
 SUMMARY_MARK = "浓缩成一两句话"
 
 
@@ -276,6 +279,7 @@ async def test_whole_topic_judges_by_the_notes_without_listing_them():
 async def test_jp11_text_search_only_covers_permitted_domains():
     reply = plan(step("text_search", mode="类似问题", phenomenon="电池起火冒烟"))
     h = harness(replies=[reply])  # 只申请了国内
+    h.llm.routes[SIM_MARK] = _related(True, True, True)
     h.retrieval.hits = [[s6_data.hit(3, "desc", "问题描述：电池起火冒烟"), s6_data.hit(99, "desc", "问题描述：别处的单"),
                          s6_data.hit("x", "desc", "问题描述：认不出单号")]]
     events = await run(h, "以前有没有出现过电池起火冒烟")
@@ -284,9 +288,78 @@ async def test_jp11_text_search_only_covers_permitted_domains():
     assert [c["table"] for c in h.retrieval.calls] == [Domain.DOMESTIC.vec_table]  # 只检索国内向量表
     assert "restrict_ids" not in h.retrieval.calls[0]  # 没有条件：不限定候选
     text = _text(events)
-    assert "巴西、海外无权限，未计入" in text and "统计范围：国内；巴西、海外无权限，未计入" in text
-    assert "按现象描述找到 1 张相近的问题" in text and "文字查找：类似问题" in text
-    assert not h.llm.routed(JUDGE_MARK)  # 类似问题不判断
+    # 只有文字查找：结尾叫查找说明（决策 2026-11-03「回答骨架与排版」）
+    assert "巴西、海外无权限，未计入" in text and "查找范围：国内；巴西、海外无权限，未计入" in text
+    assert "统计口径" not in text and "**查找说明**" in text and "计数单位" not in text
+    assert "国内最相近的问题（1 张）" in text and "文字查找：类似问题" in text and "每域最多 5 张" in text
+    assert not h.llm.routed(JUDGE_MARK) and len(h.llm.routed(SIM_MARK)) == 1  # 按类似问题的标准判断
+
+
+# ---------------------------------------------------------------------------- 类似问题：逐张判断与分数下限
+
+
+def _sim_hits():
+    """三张候选：重排分 0.9、0.5、0.1（第三张低于默认下限 0.2）。"""
+    return [[s6_data.hit(1, "desc", "问题描述：开机后屏幕花屏", rerank=0.9),
+             s6_data.hit(2, "desc", "问题描述：开机黑屏", rerank=0.5),
+             s6_data.hit(3, "desc", "问题描述：开机花屏缺画", rerank=0.1)]]
+
+
+async def test_similar_lists_only_judged_close_and_above_the_floor():
+    reply = plan(step("text_search", domains=CN, mode="类似问题", phenomenon="开机时屏幕出现花屏"))
+    h = harness(replies=[reply])
+    h.retrieval.hits = _sim_hits()
+    h.llm.routes[SIM_MARK] = _related(True, False, True)
+    with capture_logs() as logs:
+        events = await run(h, "国内有没有出现过开机花屏")
+    assert _numbers(_tables(events)[0]) == ["ZC9901001"]  # 第 2 张判为不相近，第 3 张低于下限
+    call = h.llm.routed(SIM_MARK)[0]
+    body = _user(call)
+    assert body[judge.SIM_KEY] == "开机时屏幕出现花屏" and [c["no"] for c in body["候选"]] == [1, 2, 3]
+    assert h.retrieval.calls[0]["top_n"] == semantic.TOP_K
+    text = _text(events)
+    assert "国内最相近的问题（1 张）" in text and "逐张判断是同一类现象的才列出" in text
+    got = [x for x in logs if x["event"] == "factory_issue_sim_scores"]
+    assert got[0]["floor"] == 0.2 and got[0]["listed"] == 1
+    assert got[0]["scores"] == [[0.9, 0.8, 1], [0.5, 0.8, 0], [0.1, 0.8, 1]]
+    assert all("sem_scores" not in str(e.data) for e in events)
+
+
+async def test_similar_says_none_found_when_nothing_is_close():
+    reply = plan(step("text_search", domains=CN, mode="类似问题", phenomenon="开机后设备自动播放音乐"))
+    h = harness(replies=[reply])
+    h.retrieval.hits = _sim_hits()
+    h.llm.routes[SIM_MARK] = _related(False, False, False)
+    events = await run(h, "国内有没有开机后设备自动播放音乐的")
+    assert not _tables(events) and "国内按现象描述没有找到相近的问题" in _text(events)
+
+
+async def test_similar_floor_is_configurable_and_zero_turns_it_off():
+    reply = plan(step("text_search", domains=CN, mode="类似问题", phenomenon="开机时屏幕出现花屏"))
+    h = harness(replies=[reply], config={ANSWER_PARAMS: "similar_rerank_floor = 0\n"})
+    h.retrieval.hits = _sim_hits()
+    h.llm.routes[SIM_MARK] = _related(True, False, True)
+    assert _numbers(_tables(await run(h, "国内有没有出现过开机花屏"))[0]) == ["ZC9901001", "ZC9901003"]
+
+
+async def test_similar_falls_back_to_listing_when_judging_fails():
+    reply = plan(step("text_search", domains=CN, mode="类似问题", phenomenon="开机时屏幕出现花屏"))
+    h = harness(replies=[reply])
+    h.retrieval.hits = _sim_hits()
+    h.llm.routes[SIM_MARK] = lambda _m: TimeoutError("超时")
+    events = await run(h, "国内有没有出现过开机花屏")
+    assert _numbers(_tables(events)[0]) == ["ZC9901001", "ZC9901002"]  # 照列，下限照样筛
+    assert errors.SIMILAR_UNJUDGED in _text(events)
+
+
+async def test_similar_judges_only_the_closest_few_and_the_topic_threshold_does_not_apply():
+    reply = plan(step("text_search", domains=CN, mode="类似问题", phenomenon="开机时屏幕出现花屏"))
+    h = harness(replies=[reply], config={ANSWER_PARAMS: "rerank_score_threshold = 0.95\n"})
+    h.retrieval.hits = [[s6_data.hit(1 + k % 4, "desc", f"问题描述：第 {k} 段", rerank=0.9) for k in range(12)]]
+    h.llm.routes[SIM_MARK] = _related(*[True] * 12)
+    events = await run(h, "国内有没有出现过开机花屏")
+    assert [len(_user(c)["候选"]) for c in h.llm.routed(SIM_MARK)] == [text_search.SIM_JUDGE]
+    assert _tables(events)  # 「可能相关」的阈值 0.95 不管类似问题
 
 
 # ---------------------------------------------------------------------------- 域闸门、按意思一路用不了
@@ -438,17 +511,24 @@ async def test_text_search_export_per_domain_with_full_description():
     assert {r[0]: r[1] for r in rows[1:]}["ZC9901001"] == LONG
 
 
-async def test_text_search_conclusion_comes_before_the_tables():
-    """先给结论再给表（开发者 2026-11-02 定）：各组张数那句 → 分析 → 每域的表。"""
+async def test_text_search_answer_follows_the_skeleton():
+    """回答骨架（决策 2026-11-03「回答骨架与排版」）：提示行（按哪些词找）→ 结论 → 每域一节（小标题写张数、表）
+    → 查找说明。模型出错时结论句退回模板句，要点、需关注照常给（决策 2026-11-03「结论的要点与需关注的单」）；张数
+    不在开头逐域再说一遍。"""
     reply = plan(step("text_search", domains=CN, time=T30, mode="关键词", terms=["排线", "开裂", "NFC"], logic="或"))
-    h = harness(replies=[reply, "共 3 张。", "共 3 张。"])
+    h = harness(replies=[reply, RuntimeError("模型出错")])
     events = await run(h, "国内描述里有排线、开裂或 NFC 的单")
     types = [e.type for e in events]
-    # 分析段：模型写的，或核数不过时退回的那句（`text_search._narrative`）；这里只看位置
-    at = next(i for i, e in enumerate(events) if e.type is EventType.DELTA
-              and (e.data["text"].strip() == "共 3 张。" or "以上是按文字找到的单" in e.data["text"]))
-    assert 0 < at < types.index(EventType.TABLE)
-    assert "张" in events[at - 1].data["text"]  # 前面是各组张数那句
+    table_at = types.index(EventType.TABLE)
+    before = [e.data["text"] for e in events[:table_at] if e.type is EventType.DELTA]
+    assert len(before) == 3
+    assert before[0].startswith("按这些词找（出现任一个）：排线、开裂、NFC")  # 提示行在最前
+    assert "共 3 张" in before[1] and before[1].startswith("\n\n**国内，")  # 结论（模板句）
+    assert "\n- **" in before[1] and "**需关注**" in before[1]  # 要点与需关注照常给
+    assert before[2] == "\n\n**国内比对范围内的文字里出现任一个词「排线」、「开裂」、「NFC」的单（3 张）**"  # 小标题写张数
+    after = "".join(e.data["text"] for e in events[table_at:] if e.type is EventType.DELTA)
+    assert "**查找说明**" in after and "排线、开裂、NFC" not in after  # 说法在提示行，结尾不重复
+    assert all("；\n" not in e.data["text"] for e in events if e.type is EventType.DELTA)
 
 
 async def test_lookup_table_desc_uses_the_text_table_too():

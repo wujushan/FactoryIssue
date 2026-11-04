@@ -39,6 +39,8 @@ TEXT_SEARCH_UNAVAILABLE = "暂不可用"
 EXPORT_FAILED = "完整清单导出失败，请稍后再试"
 #: 按意思一路用不了（`ctx.retrieval` 为 None、检索或重排服务出错，§14）：类似问题与「可能相关」答暂不可用
 SEMANTIC_UNAVAILABLE = "按意思找暂不可用"
+#: 类似问题逐张判断那一批出错或超时（§14）：那几张按相近程度照列
+SIMILAR_UNJUDGED = "这次没能逐张判断是否同一类现象，类似问题按相近程度列出，可能混有不相近的单"
 #: 候选太多、去掉限定检索（`RetrievalRestrictTooLarge`，§14）
 SEMANTIC_PARTIAL = "符合条件的单太多，按意思找的部分不保证完整"
 

@@ -61,6 +61,8 @@ METRIC_NEEDS = {"结案周期": "steps"}
 SORT_NEEDS = {"结案时间": "steps"}
 #: 临时统计的输入帧要的帧（结案时间看处理步骤，§5.5）
 CUSTOM_NEEDS = frozenset({"steps"})
+#: 结论的要点要的帧：时效看结案时间（处理步骤）；处理环节是主表状态（决策 2026-11-03「结论的要点与需关注的单」）
+INSIGHT_NEEDS = frozenset({"steps"})
 
 
 def enum_params() -> dict[str, Any]:
@@ -128,9 +130,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
     p = step.get("params") or {}
     base.time_conditions(step, spans, out, label=LABEL, add_col="m.AddDate", bases=BASES, needs=_BASIS_NEEDS)
     m = R.master
-    for f in schema.as_list(p.get("filters")):
-        if not isinstance(f, dict):
-            continue
+    for f in base.each_filter(p, out):
         fld = str(f.get("field") or "")
         kind = schema.OP_KINDS.get(str(f.get("op") or "是"), "eq")
         neg = kind in ("ne", "nhas")
@@ -164,7 +164,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 left, note = rest
                 out.notes.append(note)
                 out.sql.append(cond("m.Factory2", "IN", m.factory_codes(left)))
-                out.echo.append((fld, base.join(left)))
+                base.echo_as_is(out, fld, base.join(left))
                 continue
             hit = []
             for v in values:
@@ -235,6 +235,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 if isinstance(got_p, Ask):
                     return got_p
                 ids_all += got_p
+            shown = base.person_shown(values, R)
             if fld == "跟进人":
                 out.conds.append({"kind": "any_of", "col": "_follower_ids", "values": ids_all, "neg": neg})
                 out.echo.append(("问题跟进人", shown))
@@ -267,7 +268,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             if neg:
                 yn = 1 - yn
             out.sql.append(cond("m.IsDesignChange", "EQ", yn))
-            out.echo.append(("是否设计变更", "是" if yn else "否"))
+            base.echo_as_is(out, "是否设计变更", "是" if yn else "否")
         elif fld == "其他":
             domestic.other_column(f, values, neg, out, COLUMN_NEEDS, DOMAIN)
     return out

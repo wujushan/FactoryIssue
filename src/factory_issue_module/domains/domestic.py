@@ -138,6 +138,9 @@ SORT_NEEDS = {"结案时间": "steps"}
 #: 临时统计的输入帧要的帧（结案时间、重启日期、停线时长、责任人看处理步骤；当前状态、处理环节、当前责任人看待办
 #: 任务与风险订单流程；物料名称看存货，§5.5）
 CUSTOM_NEEDS = frozenset({"steps", "state", "inventory"})
+#: 结论的要点要的帧：积压看处理环节（待办任务与风险订单流程），时效看结案时间（处理步骤）（决策 2026-11-03
+#: 「结论的要点与需关注的单」）
+INSIGHT_NEEDS = frozenset({"steps", "state"})
 
 
 # ---------------------------------------------------------------------------- 第 6 步：条件对库
@@ -160,9 +163,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
     p = step.get("params") or {}
     base.time_conditions(step, spans, out, label=LABEL, add_col="m.AddDate", bases=BASES, needs=_BASIS_NEEDS)
     m = R.master
-    for f in schema.as_list(p.get("filters")):
-        if not isinstance(f, dict):
-            continue
+    for f in base.each_filter(p, out):
         fld = str(f.get("field") or "")
         kind = schema.OP_KINDS.get(str(f.get("op") or "是"), "eq")
         neg = kind in ("ne", "nhas")
@@ -200,7 +201,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 left, note = rest
                 out.notes.append(note)
                 out.sql.append(cond("m.Factory", "IN", m.factory_codes(left)))
-                out.echo.append(("加工厂", base.join(left)))
+                base.echo_as_is(out, "加工厂", base.join(left))
                 continue
             hit = []
             for v in values:
@@ -285,6 +286,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 if isinstance(got_p, Ask):
                     return got_p
                 ids_all += got_p
+            shown = base.person_shown(values, R)
             if fld == "跟进人":
                 out.sql.append(cond("m.RUser", "NOT_IN" if neg else "IN", [str(i) for i in ids_all]))
                 out.echo.append(("问题跟进人", shown))
@@ -319,7 +321,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             if neg:
                 yn = 1 - yn
             out.sql.append(cond("m.IsDesignChange", "EQ", yn))
-            out.echo.append(("是否设计变更", "是" if yn else "否"))
+            base.echo_as_is(out, "是否设计变更", "是" if yn else "否")
         elif fld == "原因分类":
             out.conds.append({"kind": "contains", "col": "reason_class", "values": values, "neg": neg})
             out.echo.append(("原因分类", shown))

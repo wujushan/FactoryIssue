@@ -266,7 +266,7 @@ async def test_detail_ref_to_max_defect_rate_issue():
                       aspects=["原因"]))
     _h, events = await _go("近 30 天国内的单，不良率最高那张的原因是什么？", [reply, "共 4 张。"])
     text = _text(events)
-    assert "**2. 单张单详情**" in text and "ZC9901001" in text and "按键弹片偏软" in text
+    assert "\n\n### 2. 单张单详情" in text and "ZC9901001" in text and "按键弹片偏软" in text
 
 
 async def test_rule5_detail_with_only_reasons_folds_into_the_list():

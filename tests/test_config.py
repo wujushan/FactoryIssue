@@ -106,6 +106,7 @@ def test_answer_params_default():
         10, 20, 20, 30, 100,
     )
     assert p.rerank_score_threshold is None and p.custom_stats_enabled is True
+    assert p.similar_rerank_floor == 0.2 and p.similar_rows == 5
 
 
 # ---------------------------------------------------------------- validate_config 正反例
@@ -215,11 +216,31 @@ def test_factory_regions_accepts_and_rejects():
 def test_answer_params_accepts_and_rejects():
     validate(ANSWER_PARAMS, "top_n = 5\nrerank_score_threshold = 0.3\ncustom_stats_enabled = false\n")
     assert files.parse_answer_params("rerank_score_threshold = 1\n").rerank_score_threshold == 1.0
+    assert files.parse_answer_params("similar_rerank_floor = 0\n").similar_rerank_floor == 0.0
+    assert files.parse_answer_params("similar_rows = 10\n").similar_rows == 10
+    # 每域列几张不超过逐张判断的张数：没判断过的不列（决策 2026-11-03「回答骨架与排版」）
+    from factory_issue_module.skills import text_search
+    assert files.SIMILAR_ROWS_MAX == text_search.SIM_JUDGE
+    # 结论里的要点与需关注的单（决策 2026-11-03「结论的要点与需关注的单」）：默认值照总述，写 0 即不给
+    p = files.parse_answer_params("points_max = 0\nfocus_max = 0\n")
+    assert (p.points_max, p.focus_max) == (0, 0)
+    d = files.parse_answer_params("")
+    assert (d.points_max, d.focus_max, d.concentrate_share, d.repeat_min, d.trend_months, d.close_min) == \
+        (4, 3, 40, 3, 3, 5)
     for text, message in [
+        ("points_max = 7\n", "0 到 6"),
+        ("concentrate_share = 0\n", "1 到 100"),
+        ("repeat_min = 1\n", "2 到 1000"),
+        ("close_min = 2.5\n", "1 到 1000"),
         ("top_n = 0\n", "正整数"),
         ("top_n = true\n", "正整数"),
         ("table_rows = 2.5\n", "正整数"),
         ("rerank_score_threshold = 1.5\n", "0 到 1"),
+        ("similar_rerank_floor = -0.1\n", "0 到 1"),
+        ("similar_rows = 0\n", "1 到 10"),
+        ("similar_rows = 11\n", "1 到 10"),
+        ("similar_rows = 2.5\n", "1 到 10"),
+        ('similar_rerank_floor = "0.2"\n', "0 到 1"),
         ('custom_stats_enabled = "yes"\n', "true 或 false"),
         ("topn = 5\n", "不认识"),
     ]:

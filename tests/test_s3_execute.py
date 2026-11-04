@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 import s3_data
 import scopes
-from fakes import data_queries, is_factory_list, make_harness, run, table_tail
+from fakes import data_queries, headed_tables, is_factory_list, make_harness, run, table_tail
 from forge_core.events import EventType
 
 from factory_issue_module.declarations import DOMAINS, LOOKUP_TABLES, Domain
@@ -23,6 +23,8 @@ BR = {"value": ["巴西"], "from": "user"}
 OS = {"value": ["海外"], "from": "user"}
 T30 = [{"said": "近 30 天", "basis": "建单", "from": "user"}]
 NARR = "近 30 天共 10 张，硬件问题最多。最需要关注的是 ZC9901001。"
+#: 写结论的模型出错：结论句用程序的模板句（`narrative.write_points`），要点照模板句给
+MODEL_DOWN = RuntimeError("模型出错")
 
 
 def plan(*steps: dict) -> dict:
@@ -98,7 +100,7 @@ async def test_brazil_draft_status_counts_as_its_own():
 async def test_jd08_usd_total_mentions_brl_only_issues():
     """J-D08：问花了多少美元时给美元合计，另说明只产生了雷亚尔费用的单数与雷亚尔合计；涉及费用的单把它计入。"""
     reply = plan(step("aggregate", domains=BR, time=T30, metrics=["费用美元", "扣款"]))
-    h, events = await _go("近 30 天巴西花了多少美元，扣款多少", [reply, "巴西共 4 张。"])
+    h, events = await _go("近 30 天巴西花了多少美元，扣款多少", [reply, MODEL_DOWN])  # 结论句用模板句
     text = _text(events)
     assert "涉及费用的单 3 张" in text and "费用合计 120 美元" in text
     assert "另有 1 张只产生了雷亚尔费用，合计 500 雷亚尔" in text
@@ -138,7 +140,7 @@ async def test_br004_cost_condition_as_the_planner_writes_it():
     """BR-004：「涉及费用」写在取值里，按费用明细合计大于 0 筛，不追问「选是还是否」。"""
     reply = plan(step("aggregate", domains=BR, time=[{"said": "今年", "basis": "建单", "from": "user"}],
                       filters=[BR004_COST], metrics=["费用美元", "扣款"]))
-    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, "巴西共 3 张。"])
+    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, MODEL_DOWN])
     assert EventType.CLARIFY not in _types(events)
     text = _text(events)
     assert "涉及费用：是（按费用明细认定）" in text and "费用合计 120 美元" in text and "扣款" in text
@@ -159,7 +161,7 @@ async def test_br004_other_plan_shapes_still_mean_has_cost(variant):
     """取值认不出时看用户原话：原话说了「涉及费用」就按费用明细合计大于 0 筛；「大于 0」没说币种也是这个意思。"""
     reply = plan(step("aggregate", domains=BR, time=[{"said": "今年", "basis": "建单", "from": "user"}],
                       filters=[{**BR004_COST, **variant}], metrics=["费用美元", "扣款"]))
-    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, "巴西共 3 张。"])
+    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, MODEL_DOWN])
     assert EventType.CLARIFY not in _types(events)
     assert "涉及费用：是（按费用明细认定）" in _text(events) and "涉及费用的单 3 张" in _text(events)
 
@@ -232,15 +234,16 @@ async def test_overseas_series_is_not_a_condition():
 
 
 async def test_cross_list_gives_counts_per_domain_and_one_analysis():
-    """总述「跨域规则」清单呈现：开头各域张数与合计，每域一张表，分析段整步一次。"""
+    """总述「跨域规则」清单呈现：各域张数在各域小标题上，每域一张表，结论整步一次、在最前（决策 2026-11-03
+    「回答骨架与排版」）。"""
     h, events = await _go("近 30 天的问题有哪些", [plan(step("list_issues", time=T30)), NARR])
     text = _text(events)
-    assert "合计 10 张：国内 4 张、巴西 4 张、海外 2 张" in text
-    # 先给结论再给表（开发者 2026-11-02 定）：分析段紧跟开头那句，在三张表之前
     types = _types(events)
-    narr_at = next(i for i, e in enumerate(events) if e.type is EventType.DELTA and NARR in e.data["text"])
-    assert narr_at == 1 and narr_at < types.index(EventType.TABLE)
-    assert [t["title"].split("：")[0] for t in _tables(events)] == ["国内问题单", "巴西问题单", "海外问题单"]
+    assert events[0].data["text"].split("\n\n")[0] == f"**{NARR}**" and types.index(EventType.TABLE) == 2
+    heads = [e.data["text"].strip() for e in events if e.type is EventType.DELTA and "问题单（" in e.data["text"]]
+    assert heads == ["**国内问题单（4 张）**", "**巴西问题单（4 张）**", "**海外问题单（2 张）**"]
+    assert "合计 10 张：" not in text  # 不在开头逐域再说一遍
+    assert [t["title"] for t in _tables(events)] == ["", "", ""]
     # S6b 起三域文字查找表都有权时问题描述取自文字表（§9.2），开头不再说「暂不可用」
     assert len(h.llm.calls) == 2 and "问题描述摘要暂不可用" not in text
     assert "统计范围：国内、巴西、海外" in text
@@ -249,7 +252,7 @@ async def test_cross_list_gives_counts_per_domain_and_one_analysis():
 async def test_cross_types_merge_by_name_with_dash_for_absent():
     """XC-002：问题类型同名合并；该域没有这个类型写「—」，有但为 0 写 0；合计按域相加。"""
     reply = plan(step("aggregate", time=T30, group_by=["问题类型"]))
-    h, events = await _go("近 30 天按问题类型统计", [reply, "共 10 张，硬件问题最多，有 4 张。"])
+    h, events = await _go("近 30 天按问题类型统计", [reply, MODEL_DOWN])  # 结论句用模板句
     table = _tables(events)[0]
     assert table["columns"] == ["问题类型", "国内", "巴西", "海外", "单数"]
     rows = {r[0]: r[1:] for r in table["rows"]}
@@ -269,7 +272,7 @@ async def test_cross_levels_list_every_level():
     rows = {r[0]: r[1:] for r in _tables(events)[0]["rows"]}
     assert list(rows) == ["A+", "A", "B", "C", "未填"] and rows["A+"] == [0, 0, 0, 0]
     assert rows["未填"] == [1, 1, 0, 2]  # 国内 NULL、巴西空串都算未填
-    assert "最多的是B（4 张）" in _text(events)
+    assert "**国内、巴西、海外按问题等级统计（合计 10 张）**" in _text(events)
 
 
 async def test_cross_overview_rows_per_domain_and_set_aside():
@@ -290,7 +293,7 @@ async def test_cross_overview_rows_per_domain_and_set_aside():
 async def test_cross_rate_is_given_per_domain():
     """XC-007：国内、巴西分母不同，分域给出不良率；海外只列原文、未汇总。"""
     reply = plan(step("aggregate", time=T30, metrics=["合计不良率"]))
-    h, events = await _go("近 30 天三个域合起来的不良率是多少", [reply, "共 10 张。"])
+    h, events = await _go("近 30 天三个域合起来的不良率是多少", [reply, MODEL_DOWN])  # 结论句用模板句
     table = _tables(events)[0]
     at = table["columns"].index("不良率（%）")
     assert [r[at] for r in table["rows"]] == [2.67, 5.83, "—", "—"]
@@ -349,7 +352,7 @@ async def test_type_only_elsewhere_excludes_domestic():
     """点名的类型国内没有（「设计问题」）：国内不计入并写明，不再把国内全部单算进来。"""
     reply = plan(step("aggregate", time=T30, filters=[{"field": "问题类型", "op": "是", "value": "设计问题",
                                                         "from": "user"}]))
-    h, events = await _go("近 30 天的设计问题有多少", [reply, "巴西共 1 张。"])
+    h, events = await _go("近 30 天的设计问题有多少", [reply, MODEL_DOWN])  # 结论句用模板句
     text = _text(events)
     assert "国内无「设计问题」类型，未计入" in text and "海外无「设计问题」类型，未计入" in text
     assert not any(q.tables[0] in ("ZCTracking_ProblemList", "OverseasProblemDetail") for q in data_queries(h))
@@ -378,7 +381,7 @@ async def test_jp01_partial_domains_no_sql_for_brazil_or_overseas():
     br_os = {table_tail(t) for d in (Domain.BRAZIL, Domain.OVERSEAS) for t in (d.master_table, *d.sub_tables)}
     br_os |= {"Brazil_Factory", "Brazil_RequestList", "ProductName", "NewProduct"}
     assert {t for q in h.queries for t in q.tables} & br_os == set()
-    assert [t["title"].split("：")[0] for t in _tables(events)] == ["国内问题单"]
+    assert [head.split("（")[0] for head, _t in headed_tables(events)] == ["国内问题单"]
     assert set(LOOKUP_TABLES) and all(d in DOMAINS for d in (Domain.BRAZIL, Domain.OVERSEAS))
 
 
@@ -407,7 +410,7 @@ async def test_stage_dims_stay_per_domain():
     """处理环节各域不同，按域分别给，每域一张，不合成跨域的环节表；分析段这一维写一次。"""
     reply = plan(step("aggregate", time=T30, group_by=["处理环节"]))
     h, events = await _go("近 30 天各环节有多少单", [reply, "国内、巴西、海外各环节都只有 1 张。没有哪一个环节明显积压。"])
-    titles = [t["title"].split("按")[0] for t in _tables(events)]
+    titles = [head.split("按")[0] for head, _t in headed_tables(events)]
     assert titles == ["国内", "巴西", "海外"] and len(h.llm.calls) == 2
     assert _text(events).count("处理环节：") == 1
 
@@ -523,7 +526,7 @@ async def test_status_column_per_domain():
     reply = plan(step("list_issues", time=T30, filters=[{"field": "状态", "op": "是", "value": "未结案",
                                                           "from": "user"}]))
     h, events = await _go("近 30 天未结案的单", [reply, NARR])
-    cols = {t["title"].split("问题单")[0]: t["columns"] for t in _tables(events)}
+    cols = {head.split("问题单")[0]: t["columns"] for head, t in headed_tables(events)}
     assert "当前状态" in cols["国内"] and "状态" in cols["巴西"] and "状态" in cols["海外"]
     assert "当前状态" not in cols["巴西"] and "当前状态" not in cols["海外"]
 
