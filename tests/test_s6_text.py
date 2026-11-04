@@ -575,7 +575,7 @@ async def test_off_list_topic_offers_first_group_only_and_the_click_names_those_
     assert _col(table, "分组") == ["问题本身涉及", "处理中提到"]
     first = next(b for b in _buttons(events) if b["label"] == "只看问题本身涉及的")
     assert first["query"] == "问题现象、问题描述、原因分析里提到排线的单"  # 规划器照点名字段写，不用改计划格式
-    assert len(first["label"]) <= 15
+    assert len(first["label"]) <= 30
     # 点了之后：规划器写成点名第一组三栏、沿用上一轮的条件
     c.h.llm.routes[JUDGE_MARK] = _related(True)
     c.h.retrieval.hits = [[s6_data.hit(3, "desc", "问题描述：电池起火冒烟")]]
@@ -616,7 +616,7 @@ async def test_approach_and_phenomenon_without_overlap_offer_two_counted_buttons
     buttons = _buttons(events)
     assert [b["label"] for b in buttons] == ["只看用换料处理过的（2 张）", "只看电池起火的（1 张）"]
     assert [b["query"] for b in buttons] == ["只看用换料处理过的", "只看电池起火的"]
-    assert all(len(b["label"]) <= 15 for b in buttons)
+    assert all(len(b["label"]) <= 30 for b in buttons)
 
 
 # ---------------------------------------------------------------------------- 多轮：工作区、递进筛选、质疑重查

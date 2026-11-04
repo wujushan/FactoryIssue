@@ -31,6 +31,7 @@ from factory_issue_module import landed
 from factory_issue_module.config import files as config_files
 from factory_issue_module.declarations import SEGMENTATION, TOPIC_TERMS, Domain
 from factory_issue_module.domains import base, enums
+from factory_issue_module.plan import clarify
 from factory_issue_module.present import caliber as cal
 from factory_issue_module.present import columns, export, insights, layout, summaries, tables
 from factory_issue_module.skills import list_issues
@@ -294,7 +295,7 @@ def buttons(tp: TermPlan, res: Mapping[str, Any], counts: Mapping[str, Any], fir
             if not n:
                 continue
             label = f"只看{what}（{n} 张）"
-            if len(label) > 15:
+            if len(label) > clarify.LABEL_MAX:
                 label = f"只看{'做法' if k == 1 else '现象'}那一边（{n} 张）"
             out.append({"id": f"t{k + 1}", "name": label, "label": label, "query": query})
     return out

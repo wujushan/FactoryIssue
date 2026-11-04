@@ -223,6 +223,46 @@ def test_bad_picks_are_dropped_with_a_reason(item, why):
     assert suggest.check(item, by_id, pool, taken) == why
 
 
+def test_ellipsis_label_falls_back_to_the_whole_query():
+    """模型用省略号把按钮文字切短：这条标签作废，按钮改用问句全文。"""
+    pool = _pool()
+    by_id = {f"c{i}": c for i, c in enumerate(pool.items, start=1)}
+    got = suggest.check({"ids": ["c1"], "query": "只看还没结案的", "label": "只看还没结案…"}, by_id, pool, set())
+    assert isinstance(got, suggest.Chosen) and got.label == ""
+    button = suggestions.follow_up(got.query, got.label)
+    assert button["label"] == "只看还没结案的" and not button["label"].endswith("…")
+
+
+def test_label_between_16_and_30_is_kept():
+    pool = _pool()
+    by_id = {f"c{i}": c for i, c in enumerate(pool.items, start=1)}
+    label = "只看还没结案的单子，先看看这一批"
+    assert 16 <= len(label) <= 30
+    got = suggest.check({"ids": ["c1"], "query": "只看还没结案的", "label": label}, by_id, pool, set())
+    assert isinstance(got, suggest.Chosen) and got.label == label
+
+
+def test_long_relax_label_keeps_the_count():
+    """16–30 字的放宽标签整句保留，张数还在。"""
+    what = "问题跟进部门名称"
+    label = f"不限{what}（12 张）"
+    assert 16 <= len(label) <= 30
+    done = moves.Done(sid="s1", skill="list_issues", step=step("list_issues"), relax=[{
+        "kind": "drop", "what": what, "value": "质量部", "count": 12, "key": "drop|部门",
+        "plan": plan(step("list_issues"))}])
+    pool = moves.Pool()
+    moves._relax_candidates(done, moves._Adder(pool, moves.Context(
+        today=date.today(), access=["国内"], text_access=[], seen=set())))
+    assert pool.items[0].label == label and "12" in pool.items[0].label
+
+
+def test_query_over_30_uses_a_complete_short_label():
+    query = "只看" + "甲" * 29
+    assert len(query) > 30
+    assert moves._short_label(query, "只看该加工厂") == "只看该加工厂"
+    assert suggestions.follow_up("ZC9901001 的完整处理过程")["label"] == "ZC9901001 的完整处理过程"
+
+
 def test_good_picks_build_the_plan_to_run():
     pool = _pool()
     by_id = {f"c{i}": c for i, c in enumerate(pool.items, start=1)}

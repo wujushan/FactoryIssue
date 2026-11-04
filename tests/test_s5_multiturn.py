@@ -556,7 +556,7 @@ async def test_alternatives_first_then_follow_ups_at_most_four():
     # 纠偏类在前，接着问在后（§9.5）；不拼本轮原话（INFO 网页前端把 `query` 当按钮文字显示，§19）
     assert [r["query"] for r in recs][:2] == ["换个理解：A920 系列", "换个理解：A920 各款"]
     assert len(recs) == 4 and [r["name"] for r in recs][2:] == [suggestions.TEMPLATE_NAME] * 2
-    assert [r["id"] for r in recs] == ["1", "2", "3", "4"] and all(len(r["label"]) <= 15 for r in recs)
+    assert [r["id"] for r in recs] == ["1", "2", "3", "4"] and all(len(r["label"]) <= 30 for r in recs)
 
 
 async def test_export_all_follow_up_when_the_table_is_cut():

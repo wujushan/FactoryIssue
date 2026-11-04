@@ -15,7 +15,8 @@
   - 第 18 条「上一轮没有结果」：选项已是更早那次的原话接上本轮原话，`label`「按更早那次的条件查」。
 - 计划的 `alternatives`（其他理解）做成答后按钮（`alternative_recommendations`）：「换个理解：这条理解」。
   规划器从历史与上一轮计划知道是哪一问（`turn/execute.py` 交 `present/suggestions.py` 合并）。
-- 按钮至多 4 个，`label` 不超过 15 个字。
+- 按钮至多 4 个。`label` 是一句说完的话，不超过 30 个字：不超过就用原文，超过则换成另一句完整短说法，
+  不用省略号截断（决策 2026-11-04「按钮文字不截断」）。
 """
 
 from __future__ import annotations
@@ -37,13 +38,20 @@ ALTERNATIVE_NAME = "其他理解"
 ALTERNATIVE_PREFIX = "换个理解："
 
 MAX_OPTIONS = 4
-LABEL_MAX = 15
+#: 按钮文字的上限。INFO 网页前端显示 `label`，截断加省略号会把选项切成读不成的半句（决策 2026-11-04）
+LABEL_MAX = 30
 _END_PUNCT = "？?。.！!，, "
 
 
 def button_label(text: str) -> str:
-    short = text.strip().rstrip(_END_PUNCT)
-    return short if len(short) <= LABEL_MAX else short[: LABEL_MAX - 1] + "…"
+    """去掉句末标点。不截断。"""
+    return text.strip().rstrip(_END_PUNCT)
+
+
+def fit_label(text: str, fallback: str) -> str:
+    """能放进 30 字就用原文，否则用一句说完的 `fallback`（调用方保证它不超过 30 字、不以省略号结尾）。"""
+    shown = button_label(text)
+    return shown if len(shown) <= LABEL_MAX else fallback
 
 
 def with_choice(query: str, choice: str) -> str:
