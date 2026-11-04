@@ -139,6 +139,19 @@ def test_issue_link_path_is_not_treated_as_shown_text():
     assert any("BrazilProblem" in item for item in qa.check(case, labeled))
 
 
+def test_skip_keeps_the_case_out_of_the_run():
+    active, skipped = qa.split_skipped(
+        [
+            {"id": "CN-001"},
+            {"id": "XC-041", "skip": "  平台侧暂时不跑  "},
+            {"id": "CN-002", "skip": ""},
+            {"id": "CN-003", "skip": "   "},
+        ]
+    )
+    assert [case["id"] for case in active] == ["CN-001", "CN-002", "CN-003"]
+    assert [(case["id"], reason) for case, reason in skipped] == [("XC-041", "平台侧暂时不跑")]
+
+
 def test_case_turns_defaults_to_one_query():
     turns = qa.case_turns({"query": "你好", "target": "FACTORY_ISSUE"})
     assert turns == [{"query": "你好", "target": "FACTORY_ISSUE"}]
