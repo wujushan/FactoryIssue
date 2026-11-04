@@ -513,16 +513,18 @@ async def test_text_search_export_per_domain_with_full_description():
 
 async def test_text_search_answer_follows_the_skeleton():
     """回答骨架（决策 2026-11-03「回答骨架与排版」）：提示行（按哪些词找）→ 结论 → 每域一节（小标题写张数、表）
-    → 查找说明。模型两次都只写一句，结论退回模板句；张数不在开头逐域再说一遍。"""
+    → 查找说明。模型出错时结论句退回模板句，要点、需关注照常给（决策 2026-11-03「结论的要点与需关注的单」）；张数
+    不在开头逐域再说一遍。"""
     reply = plan(step("text_search", domains=CN, time=T30, mode="关键词", terms=["排线", "开裂", "NFC"], logic="或"))
-    h = harness(replies=[reply, "共 3 张。", "共 3 张。"])
+    h = harness(replies=[reply, RuntimeError("模型出错")])
     events = await run(h, "国内描述里有排线、开裂或 NFC 的单")
     types = [e.type for e in events]
     table_at = types.index(EventType.TABLE)
     before = [e.data["text"] for e in events[:table_at] if e.type is EventType.DELTA]
     assert len(before) == 3
     assert before[0].startswith("按这些词找（出现任一个）：排线、开裂、NFC")  # 提示行在最前
-    assert "共 3 张" in before[1] and before[1].startswith("\n\n国内，")  # 结论（模板句）
+    assert "共 3 张" in before[1] and before[1].startswith("\n\n**国内，")  # 结论（模板句）
+    assert "\n- **" in before[1] and "**需关注**" in before[1]  # 要点与需关注照常给
     assert before[2] == "\n\n**国内比对范围内的文字里出现任一个词「排线」、「开裂」、「NFC」的单（3 张）**"  # 小标题写张数
     after = "".join(e.data["text"] for e in events[table_at:] if e.type is EventType.DELTA)
     assert "**查找说明**" in after and "排线、开裂、NFC" not in after  # 说法在提示行，结尾不重复

@@ -65,6 +65,7 @@ from factory_issue_module.present import (
     charts,
     columns,
     export,
+    insights,
     layout,
     links,
     moves,
@@ -199,12 +200,12 @@ def _domain_needs(run: StepRun, d: Domain, got: DomainStep, failed: set[str]) ->
         else:
             keys, _missing = list_issues.columns_for(run.step)
         dkeys, _absent = list_issues.domain_keys(keys, d, A.KEY_ALIAS)
-        got.needs |= list_issues.needs(dkeys, run.step, A.COLUMN_NEEDS, A.SORT_NEEDS)
+        got.needs |= list_issues.needs(dkeys, run.step, A.COLUMN_NEEDS, A.SORT_NEEDS) | set(A.INSIGHT_NEEDS)
         got.unavailable = got.unavailable or bool(blind & set(dkeys))
         return
     group_by = _group_by(run.step)
     dims, missing, more = A.dims(group_by, aggregate.basis_of(run.step))
-    got.needs |= more
+    got.needs |= more | set(A.INSIGHT_NEEDS)
     got.unavailable = got.unavailable or bool(blind & {str(x.get("col")) for x in dims})
     if group_by and not dims and not got.excluded:
         got.excluded.append(f"{d.label}不能按{'、'.join(missing)}统计，{d.label}未计入")
@@ -679,6 +680,22 @@ async def _narrate(T: Turn, table_text: str | None, note: str | None, facts: dic
     return text.strip()
 
 
+async def _conclude(T: Turn, table_text: str | None, note: str | None, facts: dict[str, Any], fallback: str,
+                    time_text: str | None, found: Mapping[str, Any] | None, *,
+                    segs: Sequence[Mapping[str, Any]] = (), must: Sequence[str] = ()) -> str:
+    """结论：加粗的结论句 + 要点 + 需关注（总述「先给结论」「结论里的要点与需关注的单」）。要点与需关注的单是沙箱
+    给的（`found` = 结果里的 `insights`）；结论句与要点由模型照着写、逐句核数，不合格的用模板句（`narrative.write_points`）；
+    需关注由程序写（`present/insights.py`）。"""
+    found = found or {}
+    facts = {"时间范围": time_text or "不限建单时间", **facts}
+    points = list(found.get("points") or [])
+    head, bullets = await narrative.write_points(getattr(T.ctx, "llm", None), T.query, table_text, note or None, facts,
+                                                 points, T.entities, fallback, must=must)
+    focus = list(found.get("focus") or [])
+    descs = await insights.describe(T.ctx, focus, segs, T.access.text_search) if focus else {}
+    return insights.assemble(head, bullets, insights.focus_block(focus, descs, T.sites))
+
+
 def _future(run: StepRun) -> str:
     return "，这段时间还没到" if any(s.future for s in run.spans) else ""
 
@@ -741,6 +758,8 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
         out.ok = (bool(label_denied) or bool(excluded)) and not problems
         return out
     P = _sandbox_params(run, executed, T.master.failed, T.access.text_search)
+    if present:  # 结论的要点与需关注的单（决策 2026-11-03「结论的要点与需关注的单」）；不呈现时不算
+        P["insight"] = insights.params(run.step, T.answer, T.today)
     time_text = _time_text(run)
     keys_by: dict[str, list[str]] = {}
     dims_by: dict[str, list[dict[str, Any]]] = {}
@@ -811,7 +830,7 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
         out.events += await _present_lists(run, T, res, segs, time_text, C, note)
         out.exported = await _export_lists(T, res, getattr(outcome, "frames", None) or {}, text_ok)
     else:
-        out.events += await _present_aggs(run, T, segs, time_text, C, all_dims, metrics, note)
+        out.events += await _present_aggs(run, T, segs, time_text, C, all_dims, metrics, note, res.get("insights"))
     return out
 
 
@@ -871,14 +890,15 @@ async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Seque
     shown = [s for s in segs if not s.get("empty")]
     if multi:
         few = bool(res.get("few_total"))
-        facts = {"合计张数": res.get("found_total", 0), "各域张数": res.get("by_domain") or [],
-                 **{s["domain"]: s.get("facts") or {} for s in shown}}
+        # 各域张数在小标题上，不交模型（结论句不逐域报张数）
+        facts = {"合计张数": res.get("found_total", 0), **{s["domain"]: s.get("facts") or {} for s in shown}}
     else:
         few = not shown or bool(shown[0].get("few"))
         facts = (shown[0].get("facts") or {}) if shown else {}
     text = fallback
     if described and not few:
-        text = await _narrate(T, "；".join(described), note, facts, fallback, time_text)
+        text = await _conclude(T, "；".join(described), note, facts, fallback, time_text, res.get("insights"),
+                               segs=segs)
     return [Event.delta(text), *sections]
 
 
@@ -899,10 +919,13 @@ def _present_list(run: StepRun, T: Turn, seg: dict[str, Any], dom: Domain, C: ca
 
 
 async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], time_text: str | None,
-                        C: cal.Caliber, dims: Sequence[dict[str, Any]], metrics: Sequence[str], note: str) -> list[Event]:
+                        C: cal.Caliber, dims: Sequence[dict[str, Any]], metrics: Sequence[str], note: str,
+                        found: Mapping[str, Any] | None = None) -> list[Event]:
     """每个维度：结论 → 每张表一节（小标题写合计或总数、表、图）。同一维度按域分别给的几张表（处理环节、状态）共用
     一段结论（决策 2026-11-03「回答骨架与排版」）。结论由模型写，问「哪个最多」时第一名（并列的全部）必须点到；
-    模型没写出来、只有概况一行时用 `aggregate.opening` 的模板句。"""
+    模型没写出来、只有概况一行时用 `aggregate.opening` 的模板句。要点与需关注的单（`found`，沙箱给的）只在第一段
+    结论里给一次（一样信息只在一处说，决策 2026-11-03「结论的要点与需关注的单」）。"""
+    pending = dict(found or {})
     events: list[Event] = []
     groups: dict[str, list[dict[str, Any]]] = {}
     for seg in segs:
@@ -927,8 +950,9 @@ async def _present_aggs(run: StepRun, T: Turn, segs: Sequence[dict[str, Any]], t
         fallback = layout.sentences(openings)
         text = fallback
         if described:
-            text = await _narrate(T, "；".join(described), note, facts, fallback, time_text,
-                                  must=list(dict.fromkeys(must)))
+            text = await _conclude(T, "；".join(described), note, facts, fallback, time_text, pending,
+                                   must=list(dict.fromkeys(must)))
+            pending = {}
         events += [Event.delta(text), *sections]
     return events
 

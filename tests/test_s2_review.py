@@ -83,7 +83,7 @@ async def test_m5_several_departments_give_per_department_counts():
 
 async def test_a1_overview_opening_has_type_distribution():
     reply = plan(step("aggregate", domains=CN, time=RECENT30))
-    h, events = await _go("国内最近咋样", [reply, "共 4 张。"])
+    h, events = await _go("国内最近咋样", [reply, RuntimeError("模型出错")])  # 模型出错：结论句用模板句
     assert "硬件问题 2 张" in _text(events).split("\n\n")[0]
 
 

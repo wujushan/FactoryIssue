@@ -14,6 +14,7 @@
 from factory_issue_module.stats.lib.common import fi_blank
 from factory_issue_module.stats.lib.custom import cs_rows, cs_sample, cs_typed
 from factory_issue_module.stats.lib.domains import dm_view
+from factory_issue_module.stats.lib.insights import in_insights
 from factory_issue_module.stats.lib.views import vw_filter, vw_ids, vw_merge_missing, vw_rate_list, vw_sorted, vw_time
 
 PARAMS = {}
@@ -25,6 +26,7 @@ def run(data):
     cols = S["columns"]
     rows, ids, found, missing, rate_lists = [], {}, {}, [], {}
     no_close = 0
+    views = []
     for dom in P["domains"]:
         v = dm_view(dom, data, P)
         if v is None:
@@ -34,6 +36,7 @@ def run(data):
             v, miss = vw_time(v, P["times"].get(dom))
             missing += miss
         v = vw_sorted(v, "_add", True)
+        views.append((dom, v))
         found[dom] = int(len(v))
         ids["ids_" + dom] = vw_ids(v)
         if len(v):
@@ -47,5 +50,8 @@ def run(data):
         frame = frame.sort_values([S["add_col"], S["number_col"]], ascending=[False, True], na_position="last",
                                   kind="mergesort").reset_index(drop=True)
     total = int(len(frame))
+    # 结论的要点与需关注的单按计入的单算（决策 2026-11-03「结论的要点与需关注的单」）
+    insights = in_insights(views, P.get("insight"), P.get("blind"), P.get("traits"))
     return {"frame": frame, **ids, "found": found, "total": total, "sample": cs_sample(frame, S["sample_rows"]),
-            "caliber": {"未计入": vw_merge_missing(missing), "没有结案时间": no_close}, "rate_lists": rate_lists}
+            "caliber": {"未计入": vw_merge_missing(missing), "没有结案时间": no_close}, "rate_lists": rate_lists,
+            "insights": insights}

@@ -14,6 +14,7 @@ import pandas as pd
 
 from factory_issue_module.stats.lib.common import fi_int, fi_num, fi_rank, fi_round, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
+from factory_issue_module.stats.lib.insights import in_insights
 from factory_issue_module.stats.lib.views import vw_counts, vw_filter, vw_sorted, vw_time
 
 PARAMS = {}
@@ -100,6 +101,7 @@ def run(data):
     T = P["tm"]
     labels = T["labels"]
     segments, frames, by_domain = [], {}, []
+    direct = []
     pending = {}
     totals = {"kw": 0, "g1": 0, "g2": 0, "g3": 0, "listed": 0}
     for dom in P["domains"]:
@@ -125,6 +127,7 @@ def run(data):
             sem_scores = [got.get(i, [None, None, None]) for i, _c, _v in every]
         sem = [(i, c) for i, c, _v in sem][: int(T["sim_max"] if sim else T["third_max"])]
         vk = v[v["_id"].apply(lambda x: int(x) in hits)].copy() if len(v) else v.copy()
+        direct.append((dom, vk))
         if len(vk):
             vk["_grp"] = [hits[int(x)][0] for x in vk["_id"].tolist()]
             vk["_group"] = [labels.get(str(g), "") for g in vk["_grp"].tolist()]
@@ -186,5 +189,8 @@ def run(data):
                 frames["export_" + s["domain"]] = pd.DataFrame(tm_rows(everything, cols),
                                                                 columns=[names[c] for c in cols])
     refs = {"count": totals["listed"], "found": {s["domain"]: s["found"] for s in segments}}
-    return {"segments": segments, "refs": refs, "totals": totals, "by_domain": by_domain,
+    # 结论的要点与需关注的单：只看直接找到的单，「可能相关」一组不算；类似问题不给（决策 2026-11-03「结论的要点与
+    # 需关注的单」）
+    insights = in_insights([] if T.get("sim") else direct, P.get("insight"), P.get("blind"), P.get("traits"))
+    return {"segments": segments, "refs": refs, "totals": totals, "by_domain": by_domain, "insights": insights,
             "exported": [[s["domain"], s["found"]] for s in segments if s["exported"]], **frames}

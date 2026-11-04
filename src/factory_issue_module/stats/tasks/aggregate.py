@@ -16,6 +16,7 @@
 
 from factory_issue_module.stats.lib.common import fi_rank, fi_round, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
+from factory_issue_module.stats.lib.insights import in_insights
 from factory_issue_module.stats.lib.views import (
     vw_bins,
     vw_breakdowns,
@@ -608,4 +609,7 @@ def run(data):
     else:
         for dom, (v, missing) in timed.items():
             segments += ag_single(dom, v, missing, A["dims"].get(dom) or [], A, C, P, refs)
-    return {"segments": segments, "refs": refs, "missing_domains": missing_domains, **ids}
+    # 结论的要点与需关注的单按计入统计的单算；比较两个时段时不给（上面已返回；决策 2026-11-03「结论的要点与需关注的单」）
+    insights = in_insights([(dom, v) for dom, (v, _m) in timed.items()], P.get("insight"), P.get("blind"),
+                           P.get("traits"))
+    return {"segments": segments, "refs": refs, "missing_domains": missing_domains, "insights": insights, **ids}

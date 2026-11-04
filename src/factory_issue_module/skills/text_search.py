@@ -32,7 +32,7 @@ from factory_issue_module.config import files as config_files
 from factory_issue_module.declarations import SEGMENTATION, TOPIC_TERMS, Domain
 from factory_issue_module.domains import base, enums
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import columns, export, layout, summaries, tables
+from factory_issue_module.present import columns, export, insights, layout, summaries, tables
 from factory_issue_module.skills import list_issues
 from factory_issue_module.stats import runner
 from factory_issue_module.text import judge, keyword, semantic, terms
@@ -46,7 +46,7 @@ THIRD_MAX = 10
 #: 类似问题每域交模型判断的张数（最相近的前几张，一批）。每域列几张是 `answer_params.toml` 的 `similar_rows`（默认 5，
 #: 决策 2026-11-03「回答骨架与排版」），不超过这里（`config/files.SIMILAR_ROWS_MAX`）：没判断过的不列
 SIM_JUDGE = 10
-#: 写结论的模型每域看表格前几张单的内容（【列出的单】）
+#: 类似问题：写结论的模型每域看表格前几张单的内容（【列出的单】）。其余找法的需关注由程序挑（`present/insights.py`）
 NARRATIVE_ROWS = 5
 #: 交写结论的模型看的每格文字最多几个字
 NARRATIVE_CELL = 150
@@ -464,6 +464,8 @@ async def _search(run: Any, T: Any, R: Ready) -> tuple[dict[str, Any], dict[str,
                 "sim_max": T.answer.similar_rows, "sim": tp.mode == "类似问题",
                 # 类似问题按自己的下限筛（只管类似问题），「可能相关」仍按 `rerank_score_threshold`（缺省不启用）
                 "threshold": T.answer.similar_rerank_floor if tp.mode == "类似问题" else T.answer.rerank_score_threshold}
+    # 结论的要点与需关注的单（类似问题不给，沙箱里判断；决策 2026-11-03「结论的要点与需关注的单」）
+    P2["insight"] = insights.params(run.step, T.answer, T.today)
     datasets = {**R.frames, **{k: v for k, v in kw_frames.items() if k.startswith("kw_")}, **sem_frames}
     outcome2 = await runner.run(T.ctx, "text_merge", datasets, P2, return_frames=True)
     if not outcome2.ok:
@@ -636,7 +638,6 @@ def listed_rows(segs: Sequence[Mapping[str, Any]]) -> str:
 SIM_GUIDE = ("用户想知道以前有没有出现过他描述的现象。【列出的单】是各域按相近程度排在最前、已经逐张看过是同一类现象的单。"
              "第一句回答有没有出现过；再点名最像的两三张：问题编号、一句话说清是什么现象、当时的原因与措施、结案没有。"
              "不按问题类型、机型分布分析。")
-ROWS_GUIDE = "【列出的单】是各域表格里排在最前的几张。点名最需要关注的单时从里面挑，说清是什么问题、结案没有。"
 
 
 async def _narrative(T: Any, X: Any, tp: TermPlan, res: Mapping[str, Any], segs: Sequence[dict[str, Any]],
@@ -659,8 +660,12 @@ async def _narrative(T: Any, X: Any, tp: TermPlan, res: Mapping[str, Any], segs:
             facts[str(s.get("domain"))] = {**f, "按词找到": _n(s, "kw"), columns.TEXT_GROUPS["3"]: _n(s, "g3")}
     described = "；".join(tables.describe(heading(tp, s, str(s.get("domain"))), s["table"], s.get("shown"))
                           for s in shown)
-    return await X._narrate(T, described, note, facts, fallback_text, X._time_text(run), rows=listed_rows(shown),
-                            guide=SIM_GUIDE if sim else ROWS_GUIDE, dims=not sim)
+    if sim:
+        return await X._narrate(T, described, note, facts, fallback_text, X._time_text(run), rows=listed_rows(shown),
+                                guide=SIM_GUIDE, dims=False)
+    # 结论句 + 要点 + 需关注（决策 2026-11-03「结论的要点与需关注的单」）：要点与需关注的单由沙箱按直接找到的单给
+    return await X._conclude(T, described, note, facts, fallback_text, X._time_text(run), res.get("insights"),
+                             segs=shown)
 
 
 def _caliber(C: cal.Caliber, run: Any, tp: TermPlan, segs: Sequence[dict[str, Any]], sem_notes: Sequence[str],

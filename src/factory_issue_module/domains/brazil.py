@@ -66,6 +66,8 @@ METRIC_NEEDS = {"费用美元": "cost", "费用雷亚尔": "cost"}
 SORT_NEEDS: dict[str, str] = {}
 #: 临时统计的输入帧要的帧（费用、扣款看费用明细；物料名称看存货，§5.5）
 CUSTOM_NEEDS = frozenset({"cost", "inventory"})
+#: 结论的要点不另要帧：处理环节是主表状态，结案时间在处理过程上（每次都取）（决策 2026-11-03「结论的要点与需关注的单」）
+INSIGHT_NEEDS: frozenset[str] = frozenset()
 
 
 def enum_params() -> dict[str, Any]:

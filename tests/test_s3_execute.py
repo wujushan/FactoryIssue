@@ -23,6 +23,8 @@ BR = {"value": ["巴西"], "from": "user"}
 OS = {"value": ["海外"], "from": "user"}
 T30 = [{"said": "近 30 天", "basis": "建单", "from": "user"}]
 NARR = "近 30 天共 10 张，硬件问题最多。最需要关注的是 ZC9901001。"
+#: 写结论的模型出错：结论句用程序的模板句（`narrative.write_points`），要点照模板句给
+MODEL_DOWN = RuntimeError("模型出错")
 
 
 def plan(*steps: dict) -> dict:
@@ -98,7 +100,7 @@ async def test_brazil_draft_status_counts_as_its_own():
 async def test_jd08_usd_total_mentions_brl_only_issues():
     """J-D08：问花了多少美元时给美元合计，另说明只产生了雷亚尔费用的单数与雷亚尔合计；涉及费用的单把它计入。"""
     reply = plan(step("aggregate", domains=BR, time=T30, metrics=["费用美元", "扣款"]))
-    h, events = await _go("近 30 天巴西花了多少美元，扣款多少", [reply, "巴西共 4 张。"])
+    h, events = await _go("近 30 天巴西花了多少美元，扣款多少", [reply, MODEL_DOWN])  # 结论句用模板句
     text = _text(events)
     assert "涉及费用的单 3 张" in text and "费用合计 120 美元" in text
     assert "另有 1 张只产生了雷亚尔费用，合计 500 雷亚尔" in text
@@ -138,7 +140,7 @@ async def test_br004_cost_condition_as_the_planner_writes_it():
     """BR-004：「涉及费用」写在取值里，按费用明细合计大于 0 筛，不追问「选是还是否」。"""
     reply = plan(step("aggregate", domains=BR, time=[{"said": "今年", "basis": "建单", "from": "user"}],
                       filters=[BR004_COST], metrics=["费用美元", "扣款"]))
-    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, "巴西共 3 张。"])
+    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, MODEL_DOWN])
     assert EventType.CLARIFY not in _types(events)
     text = _text(events)
     assert "涉及费用：是（按费用明细认定）" in text and "费用合计 120 美元" in text and "扣款" in text
@@ -159,7 +161,7 @@ async def test_br004_other_plan_shapes_still_mean_has_cost(variant):
     """取值认不出时看用户原话：原话说了「涉及费用」就按费用明细合计大于 0 筛；「大于 0」没说币种也是这个意思。"""
     reply = plan(step("aggregate", domains=BR, time=[{"said": "今年", "basis": "建单", "from": "user"}],
                       filters=[{**BR004_COST, **variant}], metrics=["费用美元", "扣款"]))
-    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, "巴西共 3 张。"])
+    h, events = await _go("巴西今年涉及费用的单子一共花了多少美元？扣款多少？", [reply, MODEL_DOWN])
     assert EventType.CLARIFY not in _types(events)
     assert "涉及费用：是（按费用明细认定）" in _text(events) and "涉及费用的单 3 张" in _text(events)
 
@@ -237,7 +239,7 @@ async def test_cross_list_gives_counts_per_domain_and_one_analysis():
     h, events = await _go("近 30 天的问题有哪些", [plan(step("list_issues", time=T30)), NARR])
     text = _text(events)
     types = _types(events)
-    assert events[0].data["text"] == NARR and types.index(EventType.TABLE) == 2
+    assert events[0].data["text"].split("\n\n")[0] == f"**{NARR}**" and types.index(EventType.TABLE) == 2
     heads = [e.data["text"].strip() for e in events if e.type is EventType.DELTA and "问题单（" in e.data["text"]]
     assert heads == ["**国内问题单（4 张）**", "**巴西问题单（4 张）**", "**海外问题单（2 张）**"]
     assert "合计 10 张：" not in text  # 不在开头逐域再说一遍
@@ -250,7 +252,7 @@ async def test_cross_list_gives_counts_per_domain_and_one_analysis():
 async def test_cross_types_merge_by_name_with_dash_for_absent():
     """XC-002：问题类型同名合并；该域没有这个类型写「—」，有但为 0 写 0；合计按域相加。"""
     reply = plan(step("aggregate", time=T30, group_by=["问题类型"]))
-    h, events = await _go("近 30 天按问题类型统计", [reply, "共 10 张，硬件问题最多，有 4 张。"])
+    h, events = await _go("近 30 天按问题类型统计", [reply, MODEL_DOWN])  # 结论句用模板句
     table = _tables(events)[0]
     assert table["columns"] == ["问题类型", "国内", "巴西", "海外", "单数"]
     rows = {r[0]: r[1:] for r in table["rows"]}
@@ -291,7 +293,7 @@ async def test_cross_overview_rows_per_domain_and_set_aside():
 async def test_cross_rate_is_given_per_domain():
     """XC-007：国内、巴西分母不同，分域给出不良率；海外只列原文、未汇总。"""
     reply = plan(step("aggregate", time=T30, metrics=["合计不良率"]))
-    h, events = await _go("近 30 天三个域合起来的不良率是多少", [reply, "共 10 张。"])
+    h, events = await _go("近 30 天三个域合起来的不良率是多少", [reply, MODEL_DOWN])  # 结论句用模板句
     table = _tables(events)[0]
     at = table["columns"].index("不良率（%）")
     assert [r[at] for r in table["rows"]] == [2.67, 5.83, "—", "—"]
@@ -350,7 +352,7 @@ async def test_type_only_elsewhere_excludes_domestic():
     """点名的类型国内没有（「设计问题」）：国内不计入并写明，不再把国内全部单算进来。"""
     reply = plan(step("aggregate", time=T30, filters=[{"field": "问题类型", "op": "是", "value": "设计问题",
                                                         "from": "user"}]))
-    h, events = await _go("近 30 天的设计问题有多少", [reply, "巴西共 1 张。"])
+    h, events = await _go("近 30 天的设计问题有多少", [reply, MODEL_DOWN])  # 结论句用模板句
     text = _text(events)
     assert "国内无「设计问题」类型，未计入" in text and "海外无「设计问题」类型，未计入" in text
     assert not any(q.tables[0] in ("ZCTracking_ProblemList", "OverseasProblemDetail") for q in data_queries(h))

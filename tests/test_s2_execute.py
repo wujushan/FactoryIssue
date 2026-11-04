@@ -55,7 +55,11 @@ async def test_domestic_list_default_columns_analysis_and_caliber():
     # 回答骨架（决策 2026-11-03「回答骨架与排版」）：结论 → 小标题（张数）→ 表 → 统计口径 → 按钮（§9.5）
     assert _types(events) == [EventType.DELTA, EventType.DELTA, EventType.TABLE, EventType.DELTA,
                               EventType.SUGGESTIONS]
-    assert events[0].data["text"] == narrative and events[1].data["text"] == "\n\n**国内问题单（4 张）**"
+    # 结论 = 加粗的结论句 + 要点 + 需关注（决策 2026-11-03「结论的要点与需关注的单」）；模型只写了一段，当作结论句，
+    # 要点条数对不上时全部用程序的模板句
+    conclusion = events[0].data["text"]
+    assert conclusion.split("\n\n")[0] == f"**{narrative}**" and "\n- **" in conclusion and "**需关注**" in conclusion
+    assert events[1].data["text"] == "\n\n**国内问题单（4 张）**"
     assert _tables(events)[0]["title"] == ""  # 小标题写在正文里，表格不另带标题
     table = _tables(events)[0]
     assert table["columns"] == ["问题编号", "机型", "问题类型", "不良率", "不良数量", "问题描述"]
@@ -92,8 +96,8 @@ async def test_domestic_aggregate_by_type_table_chart_caliber():
 async def test_aggregate_conclusion_falls_back_to_the_template_when_the_model_fails():
     reply = plan(step("aggregate", domains=CN, time=RECENT30, group_by=["问题类型"], metrics=["单数", "占比"]))
     h, events = await _go("近 30 天国内按问题类型统计", [reply, "合计 99 张。", "合计 98 张。"])
-    assert events[0].data["text"].startswith("国内，") and "最多的是硬件问题（2 张）" in events[0].data["text"]
-    assert "99" not in _text(events) and "98" not in _text(events)
+    assert events[0].data["text"].startswith("**国内，") and "最多的是硬件问题（2 张）" in events[0].data["text"]
+    assert "合计 99 张" not in _text(events) and "合计 98 张" not in _text(events)
 
 
 async def test_ranking_conclusion_must_name_the_first():
@@ -101,7 +105,7 @@ async def test_ranking_conclusion_must_name_the_first():
     reply = plan(step("aggregate", domains=CN, time=RECENT30, group_by=["问题类型"], ranking=True))
     h, events = await _go("近 30 天国内哪类问题最多", [reply, "共 4 张。物料问题和软件问题各 1 张。",
                                                   "共 4 张，硬件问题最多。物料问题和软件问题各 1 张。"])
-    assert events[0].data["text"] == "共 4 张，硬件问题最多。物料问题和软件问题各 1 张。"
+    assert events[0].data["text"].split("\n\n")[0] == "**共 4 张，硬件问题最多。物料问题和软件问题各 1 张。**"
     assert "要点名最多的：硬件问题" in h.llm.calls[-1][-1]["content"]
 
 
@@ -124,7 +128,7 @@ async def test_overview_close_cycle_and_rate():
     # 指标在概况那一行表里；结论是模型写的那段（决策 2026-11-03「回答骨架与排版」）
     overview = dict(zip(_tables(events)[0]["columns"], _tables(events)[0]["rows"][0], strict=True))
     assert overview["不良率（%）"] == 2.67 and overview["结案周期中位数（天）"] == 5
-    assert events[0].data["text"] == "共 4 张。已结案的 1 张平均 5 天结案。"
+    assert events[0].data["text"].split("\n\n")[0] == "**共 4 张。已结案的 1 张平均 5 天结案。**"
     assert "**国内统计（共 4 张）**" in text and "**国内结案周期分档**" in text
     assert "结案确认" in text and "不参与" in text
     assert any(t["columns"] == ["结案周期", "单数"] for t in _tables(events))

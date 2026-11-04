@@ -61,6 +61,8 @@ METRIC_NEEDS = {"结案周期": "steps"}
 SORT_NEEDS = {"结案时间": "steps"}
 #: 临时统计的输入帧要的帧（结案时间看处理步骤，§5.5）
 CUSTOM_NEEDS = frozenset({"steps"})
+#: 结论的要点要的帧：时效看结案时间（处理步骤）；处理环节是主表状态（决策 2026-11-03「结论的要点与需关注的单」）
+INSIGHT_NEEDS = frozenset({"steps"})
 
 
 def enum_params() -> dict[str, Any]:

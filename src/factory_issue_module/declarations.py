@@ -236,7 +236,10 @@ CONFIG_FILES: list[ConfigFileSpec] = [
             "judge_max（「可能相关」每域最多判断几张）、rerank_max（每域最多重排几张）、"
             "rerank_score_threshold（「可能相关」的重排分阈值，不写即不启用）、"
             "similar_rerank_floor（类似问题的重排分下限，默认 0.2，写 0 即不按分数筛）、"
-            "similar_rows（类似问题每域列几张，默认 5，最多 10）、custom_stats_enabled（是否允许临时统计）"
+            "similar_rows（类似问题每域列几张，默认 5，最多 10）、custom_stats_enabled（是否允许临时统计）、"
+            "points_max（结论至多几条要点，默认 4，写 0 即不给）、focus_max（「需关注」至多几张，默认 3，写 0 即不给）、"
+            "concentrate_share（「集中」的占比门槛，百分数，默认 40）、repeat_min（「重复」至少几张，默认 3）、"
+            "trend_months（「时间」至少跨几个月，默认 3）、close_min（「时效」某域至少几张已结案的单，默认 5）"
         ),
     ),
     ConfigFileSpec(

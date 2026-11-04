@@ -35,7 +35,7 @@ from factory_issue_module import landed
 from factory_issue_module.declarations import DOMAINS, Domain
 from factory_issue_module.domains import brazil, domestic, overseas
 from factory_issue_module.present import caliber as cal
-from factory_issue_module.present import columns, layout, tables
+from factory_issue_module.present import columns, insights, layout, tables
 from factory_issue_module.skills import aggregate
 from factory_issue_module.stats import custom as checks
 from factory_issue_module.stats import runner
@@ -383,6 +383,8 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
     P["cs"] = {"columns": cols, "sample_rows": SAMPLE_ROWS, "add_col": _s("add_date"), "number_col": _s("number"),
                "table_rows": T.answer.table_rows,
                "rate_text": [d.label for d in executed if _ADAPTERS[d].TRAITS.get("rate") == "text"]}
+    if mode == "full":  # 结论的要点与需关注的单（决策 2026-11-03「结论的要点与需关注的单」）
+        P["insight"] = insights.params(run.step, T.answer, T.today)
     first = await runner.run(T.ctx, "custom_frame", frames, P, return_frames=True)
     if not first.ok:
         if mode == "full":
@@ -479,8 +481,8 @@ async def _present(run: Any, T: Any, result: Mapping[str, Any], res: Mapping[str
     if len(table["rows"]) > 2:  # 只有一两行时分析就是复述（09 文档「不分析的三种情形」）
         facts = {"总单数": res.get("total", 0), "各域单数": [[d, (res.get("found") or {}).get(d, 0)] for d in ds],
                  "临时统计的结果": {"列": table["columns"], "行": table["rows"]}}
-        text = await X._narrate(T, tables.describe(heading(res, ds), table, None), layout.sentences(notice), facts,
-                                fallback, time_text)
+        text = await X._conclude(T, tables.describe(heading(res, ds), table, None), layout.sentences(notice), facts,
+                                 fallback, time_text, res.get("insights"))
     events = [*layout.para(notice), Event.delta(text), layout.heading(heading(res, ds)), tables.event(table, "")]
     if item is not None:
         T.record.charts.append(dict(item))
