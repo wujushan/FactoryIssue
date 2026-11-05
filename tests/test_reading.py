@@ -95,8 +95,54 @@ def test_degree_word_read_another_way_is_only_logged():
     assert notes == ["按状态「停线中」理解"]
     assert [(h.action, h.before) for h in hits] == [("只记日志", ("程度说法：严重",))]
     assert out["steps"][0]["params"]["filters"][0]["value"] == "停线中"
-    _out, notes, hits = _norm("国内不良率特别高的单", plan(step(domains=CN, sort=BY_RATE)))
+    # 没按不良率排：只记日志，不替它补排序
+    _out, notes, hits = _norm("国内不良率特别高的单", plan(step(domains=CN)))
     assert notes == [] and [h.before for h in hits] == [("程度说法：不良率高",)]
+
+
+@pytest.mark.parametrize("query", ["国内不良率高的单有哪些", "2026 年国内不良率特别高的单", "A920 不良率偏高的单"])
+def test_high_rate_sorted_without_a_count_gets_the_default(query):
+    """复测 2026-11-05：规划器按不良率从高到低排了、没写张数，原先全部单照排、开头也不说。现在补成默认张数并写明；
+    问句里的年份、机型号不算用户说了张数。"""
+    out, notes, hits = _norm(query, plan(step(domains=CN, sort=BY_RATE)), limit=10)
+    assert out["steps"][0]["params"]["limit"] == 10
+    assert len(notes) == 1 and notes[0].endswith("按不良率从高到低列出前 10 张（没说要几张，默认列 10 张）")
+    assert [h.action for h in hits] == ["改写"]
+
+
+@pytest.mark.parametrize(("query", "by"), [
+    ("国内不良率最高的单有哪些", "不良率"),
+    ("不良率比较突出的单", "不良率"),  # 词表里没有「突出」：看的是规划器写出的排序，不看说法
+    ("国内影响数量大的单", "影响数量"),
+    ("国内不良数量最多的单", "不良数量"),
+    ("按不良率排一下国内的单", "不良率"),  # 只要排序的也列前 10 张，开头写明、答后给「看全部」（开发者 2026-11-05 定）
+])
+def test_sorting_by_a_quantity_lists_the_top_ones_whatever_the_wording(query, by):
+    """G95：要不要只列前几张看计划结构（按不良率、不良数量、影响数量排），不看问句里的程度说法。"""
+    out, notes, _ = _norm(query, plan(step(domains=CN, sort={"by": by, "order": "降序"})), limit=10)
+    assert out["steps"][0]["params"]["limit"] == 10
+    assert notes == [f"没说要几张，按{by}从高到低列出前 10 张"]
+
+
+@pytest.mark.parametrize(("query", "limit", "want"), [
+    ("国内不良率最高的是哪张单", 1, 1),  # 单数说法：规划器写成 1，照它，不改成 10
+    ("国内不良率最高的那张单", 1, 1),
+    ("国内不良率最高的 5 张单", None, 5),  # 规划器漏写张数：照用户说的
+    ("2026 年国内不良率最高的前三张", 20, 3),  # 年份里的数不算张数
+])
+def test_count_the_user_gave_or_implied_is_kept(query, limit, want):
+    p = step(domains=CN, sort=BY_RATE) if limit is None else step(domains=CN, sort=BY_RATE, limit=limit)
+    out, notes, _ = _norm(query, plan(p), limit=10)
+    assert out["steps"][0]["params"]["limit"] == want and notes == []
+
+
+@pytest.mark.parametrize(("query", "p"), [
+    ("把国内的单按不良率排一下，全部导出", step(domains=CN, sort=BY_RATE, export=True)),  # 要全部
+    ("最早建的单有哪些", step(sort={"by": "建单时间", "order": "升序"})),  # 按日期排：清单的默认做法，列全部
+])
+def test_all_rows_stay_when_the_user_wants_them_or_sorts_by_date(query, p):
+    out, notes, _ = _norm(query, plan(p))
+    assert out["steps"][0]["params"].get("limit") is None and notes == []
 
 
 def test_numbers_in_the_question():
@@ -237,3 +283,29 @@ async def test_count_the_user_gave_is_kept_and_not_explained():
     _invariants(h, events, [])
     text = _text(events)
     assert "没说要几张" not in text and "**国内问题单（共 4 张，列出不良率最高的 3 张）**" in text
+
+
+async def test_default_count_offers_show_all_and_clicking_runs_the_stored_plan():
+    """G95：张数是程序定的、又只列了前几张时，答后给「看全部 N 张」（N 来自沙箱）；点了不重新规划，直接执行存下的
+    计划：同样的条件与排法、去掉张数、全部导出。"""
+    main = _rows({2: {"Rate": 5.0}, 4: {"Rate": 3.0}})
+    h, events = await _go("国内不良率高的单有哪些", [plan(step(domains=CN, sort=BY_RATE)), "**国内不良率最高的 2 张**"],
+                          main=main, config={"answer_params.toml": "top_n = 2"})
+    buttons = next(e.data["recommendations"] for e in events if e.type is EventType.SUGGESTIONS)
+    show_all = next(b for b in buttons if b["name"] == "看全部")
+    assert buttons[0] is show_all and show_all["label"] == "看全部 4 张"
+    assert show_all["query"] == "按不良率从高到低列出全部并导出"
+    calls = len(h.llm.calls)
+    again = await run(h, show_all["query"])
+    assert not any(c for c in h.llm.calls[calls:] if "规划器" in str(c[0].get("content")))  # 没有重新规划
+    table = next(e.data for e in again if e.type is EventType.TABLE)
+    assert [r[0] for r in table["rows"]] == ["ZC9901002", "ZC9901004", "ZC9901001", "ZC9901003"]
+    assert "没说要几张" not in _text(again) and h.files.saved  # 全部导出
+
+
+async def test_no_show_all_when_the_user_gave_the_count():
+    main = _rows({2: {"Rate": 5.0}, 4: {"Rate": 3.0}})
+    _h, events = await _go("国内不良率最高的 2 张单", [plan(step(domains=CN, sort=BY_RATE, limit=2)),
+                                                 "**国内不良率最高的 2 张**"], main=main)
+    buttons = next((e.data["recommendations"] for e in events if e.type is EventType.SUGGESTIONS), [])
+    assert not any(b["name"] == "看全部" for b in buttons)

@@ -1084,6 +1084,12 @@ _LEVEL_WORDS_IN_QUERY = ("等级", "级别", "级", "类")
 _LEVEL_SAYINGS = {"安全": ("A+",), "未填": ("未填",), "没填": ("未填",), "没有等级": ("未填",)}
 _CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 DATE_SORTS = ("建单时间", "现场发现日期", "停线日期", "结案时间")
+#: 按这几项排序的清单只列前几张（总述「程度说法怎么理解」末段「没说要几张」，G95）。看的是规划器写出的排序，
+#: 不看问句里的说法：「最高的」「突出的」「不良多的」怎么读成按不良率排，交给规划器（决策 2026-11-04 补记）。
+#: 按日期排的不算：按建单时间从新到旧列全部本来就是清单的默认做法
+TOP_SORTS = ("不良率", "不良数量", "影响数量")
+#: 问句里说张数的写法：数后面跟量词，或前面是「前」（「前十张」「5 条」「三个」）；年份、机型号里的数不算
+_COUNT = re.compile(r"前\s*(\d+|[一二两三四五六七八九十百]+)|(\d+|[一二两三四五六七八九十百]+)\s*(?:张|条|个|单|份)")
 
 
 def sort_text(sort: Any) -> str:
@@ -1117,6 +1123,18 @@ def numbers_in(text: str) -> set[int]:
         value = _cn_int(token)
         if value is not None:
             out.add(value)
+    return out
+
+
+def counts_in(text: str) -> list[int]:
+    """问句里说的张数（「前十张」「5 条」），按出现的先后；年份、机型号里的数不算。"""
+    plain = unicodedata.normalize("NFKC", text or "")
+    out: list[int] = []
+    for m in _COUNT.finditer(plain):
+        token = m.group(1) or m.group(2)
+        value = int(token) if token.isdigit() else _cn_int(token)
+        if value:
+            out.append(value)
     return out
 
 
@@ -1165,9 +1183,12 @@ def reading_rule(plan: dict, query: str | None, default_limit: int, inferred: li
 
     - 问题等级、状态、问题类型的取值，本轮说的（不是沿用上一轮的），有一个在问句里找不到依据，就把这一条条件记成
       助手按意思定的（`KIND_VALUE`）；「严重」读成 A+、A 时带上原话。
-    - 清单的张数在问句里找不到（用户没说要几张），改成 `default_limit`，记成 `KIND_COUNT`；按不良率从高到低排时
-      带上「不良率高」一类的原话。判据可证明（问句里有没有这个数），所以改写，开头写明（设计 §5.3 准入准则）。
-    - 认出了程度说法、计划却没按落盘的读法写（「严重」没写成 A+、A，「不良率高」没按不良率从高到低列前几张）：
+    - 清单张数（G92、G95）。要不要只列前几张看计划结构：规划器写了张数，或按 `TOP_SORTS` 里的一项排序（升降都算）、
+      又没要全部（`export`）。几张：问句里说了张数（`counts_in`），用它；规划器写的张数在问句里出现过，或是 1（「哪张」
+      「那一单」这类单数说法，模型写成 1；它自己定的数是 10、20 这类），照它；其余改成 `default_limit`，记成
+      `KIND_COUNT`，开头写明。判据都在计划与问句里、可证明，按设计 §5.3 准入准则改写。不看问句里的程度说法：
+      「最高的」「突出的」怎么读成按不良率排，交给规划器；词表只用来在开头带上原话（「不良率高」一类）。
+    - 认出了程度说法、计划却没按落盘的读法写（「严重」没写成 A+、A，「不良率高」没按不良率从高到低排）：
       只记日志，不改不打回。
     """
     if not query:
@@ -1175,6 +1196,7 @@ def reading_rule(plan: dict, query: str | None, default_limit: int, inferred: li
     raw = unicodedata.normalize("NFKC", query)
     levels = levels_in(query)
     numbers = numbers_in(query)
+    counts = counts_in(query)
     severe_ok = high_rate_ok = False
     for step in plan.get("steps") or []:
         if not isinstance(step, dict) or step.get("skill") not in schema.COND_SKILLS:
@@ -1204,9 +1226,18 @@ def reading_rule(plan: dict, query: str | None, default_limit: int, inferred: li
             continue
         sort = p.get("sort") if isinstance(p.get("sort"), dict) else {}
         by_rate = sort.get("by") == "不良率" and sort.get("order", "降序") != "升序"
+        high_rate_ok = high_rate_ok or by_rate
         lim = p.get("limit")
-        high_rate_ok = high_rate_ok or (by_rate and lim is not None)
-        if not isinstance(lim, int) or isinstance(lim, bool) or lim <= 0 or lim in numbers:
+        given = isinstance(lim, int) and not isinstance(lim, bool) and lim > 0
+        # 要不要只列前几张：看计划结构，不看问句里的说法（复测 2026-11-05：「不良率高的单有哪些」规划器只写了排序）
+        top = given or (sort.get("by") in TOP_SORTS and p.get("export") is not True)
+        if not top:
+            continue
+        if counts:  # 用户说了几张（规划器漏写也照用户的）
+            if lim != counts[0]:
+                p["limit"] = counts[0]
+            continue
+        if given and (lim in numbers or lim == 1):
             continue
         p["limit"] = default_limit
         m = HIGH_RATE.search(raw) if by_rate else None

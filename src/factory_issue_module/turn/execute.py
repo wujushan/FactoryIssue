@@ -509,9 +509,12 @@ class StepOut:
     domains: list[str] = field(default_factory=list)
     #: 沙箱给的各段（换图、重查要用；只在不呈现时带回）
     segs: list[dict[str, Any]] = field(default_factory=list)
-    #: 清单：表格没列全、已导出（模板按钮「导出全部」看它）
+    #: 清单：表格没列全、已导出（模板按钮「导出全部」看它）；只列了前几张（`limit` 小于符合条件的张数，
+    #: 「看全部」按钮看它）与符合条件的合计张数（沙箱给的）
     truncated: bool = False
     exported: bool = False
+    limited: bool = False
+    found_total: int = 0
     #: 要另记进工作区的（文字查找：{"text": {"key": 找的是什么, "terms": 用的说法, "judged": 有没有模型判断的一组}}）
     extra: dict[str, Any] = field(default_factory=dict)
     #: 这一步自己的可点选项（文字查找的最小版按钮；临时统计关掉、没算出来时的能力介绍按钮），排在模板按钮的位置
@@ -877,6 +880,8 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
     out.empty = all((s.get("found") or 0) == 0 for s in segs)
     out.found_any = not out.empty
     out.truncated = any(s.get("truncated") for s in segs)
+    out.limited = any(s.get("limited") for s in segs)
+    out.found_total = int(res.get("found_total") or 0)
     out.digest = {"segs": [{k: s.get(k) for k in ("domain", "kind", "title", "name", "found", "empty", "facts")}
                            for s in segs]}
     out.refs = {f"{run.sid}.{k}": v for k, v in (res.get("refs") or {}).items()}
@@ -1603,9 +1608,11 @@ def _start_suggest(T: Turn, done: Sequence[moves.Done], said: Sequence[str]) -> 
 
 
 def _offer(T: Turn, recs: Sequence[Mapping[str, str]], chosen: Sequence[suggest.Chosen], done: Sequence[moves.Done],
-           pool: moves.Pool | None) -> None:
+           pool: moves.Pool | None, *, planned: Mapping[str, dict] | None = None) -> None:
     """发出去的按钮记进 `T.record`：问句与意图键进 `seen`，接着问连同计划进 `offered`；清单、文字查找的轮次把
-    没用上的下钻到单留给下一轮（`carry`），统计、临时统计的轮次清空，详情、按号查单的轮次留着（§10）。"""
+    没用上的下钻到单留给下一轮（`carry`），统计、临时统计的轮次清空，详情、按号查单的轮次留着（§10）。
+
+    `planned`：代码直出、点了也直接执行的按钮（「看全部」，问句 → 计划），同样进 `offered`。"""
     by_query = {c.query: c for c in chosen}
     for rec in recs:
         q = str(rec.get("query") or "")
@@ -1614,6 +1621,10 @@ def _offer(T: Turn, recs: Sequence[Mapping[str, str]], chosen: Sequence[suggest.
         if c is not None:
             T.record.seen.append(c.key)
             T.record.offered.append({"query": q, "key": c.key, "move": c.move, "plan": c.plan})
+        elif planned and q in planned:
+            key = "导出|" + moves.cond_sig(planned[q]["steps"][0])
+            T.record.seen.append(key)
+            T.record.offered.append({"query": q, "key": key, "move": moves.EXPORT, "plan": planned[q]})
     keys = {c.key for c in chosen}
     if any(d.skill in ("list_issues", "text_search") for d in done):
         items = pool.items if pool is not None else []
@@ -1624,6 +1635,24 @@ def _offer(T: Turn, recs: Sequence[Mapping[str, str]], chosen: Sequence[suggest.
 
 def _texts(events: Iterable[Event]) -> list[str]:
     return [str(ev.data.get("text") or "") for ev in events if ev.type is EventType.DELTA]
+
+
+#: 「看全部」按钮（G95）：张数是程序定的、又只列了前几张时给，纠偏类，点了直接执行存下的计划
+SHOW_ALL_NAME = "看全部"
+
+
+def show_all_button(T: Turn, r: StepRun, out: StepOut) -> tuple[dict[str, str], dict] | None:
+    """张数是规整第 20 条定的（`KIND_COUNT`）、这一步又只列了前几张：(按钮, 点了执行的计划)。按钮上的张数是沙箱给的
+    符合条件的合计；问句写排法，存下的计划读不到时照它重新规划也说得通。"""
+    if r.skill != "list_issues" or not out.limited or not step_readings(T, r.sid, normalize.KIND_COUNT):
+        return None
+    plan = moves.show_all_plan(r.step)
+    if plan is None:
+        return None
+    sort = (r.step.get("params") or {}).get("sort")
+    query = f"{normalize.sort_text(sort)}列出全部并导出"
+    label = f"看全部 {out.found_total} 张" if out.found_total else SHOW_ALL_NAME
+    return {"id": "", "name": SHOW_ALL_NAME, "label": label, "query": query}, plan
 
 
 def plan_alternatives(T: Turn) -> list[dict[str, str]]:
@@ -1653,6 +1682,9 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     #: 这一步自己的可点选项（文字查找的最小版、临时统计没算出来时的能力介绍），纠偏类
     step_buttons: list[dict[str, str]] = []
     alternatives: list[dict[str, str]] = []
+    #: 「看全部」按钮与它们点了执行的计划（问句 → 计划）
+    show_all: list[dict[str, str]] = []
+    show_all_plans: dict[str, dict] = {}
     month_noted = False
     #: 答后建议（§9.5）：执行完的各步、本轮正文、候选与那次模型调用
     done: list[moves.Done] = []
@@ -1725,6 +1757,10 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         refs |= out.refs
         _record(T, r, out)
         done.append(_done(r, out))
+        got_all = show_all_button(T, r, out)
+        if got_all is not None:
+            show_all.append(got_all[0])
+            show_all_plans[got_all[0]["query"]] = got_all[1]
         if r.skill in ("text_search", "custom_stats"):
             step_buttons += list(out.buttons)
         any_ok = any_ok or out.ok
@@ -1765,15 +1801,15 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
         T.record.seen += [k for d in done for k in moves.asked_keys(d)] + [moves.question_key(T.query)]
         step_buttons = greeting.buttons(T.access)
     seen = suggesting.seen if suggesting is not None else set()
-    fixed = [r for r in suggestions.merge(alternatives, plan_alternatives(T), _alternative_buttons(T), widened,
-                                          step_buttons) if moves.question_key(r["query"]) not in seen]
+    fixed = [r for r in suggestions.merge(alternatives, show_all, plan_alternatives(T), _alternative_buttons(T),
+                                          widened, step_buttons) if moves.question_key(r["query"]) not in seen]
     chosen: list[suggest.Chosen] = []
     if suggesting is not None:
         chosen = await suggesting.result(min(suggestions.MODEL_MAX, suggestions.MAX_BUTTONS - len(fixed)))
     recs = suggestions.merge(fixed, [suggestions.follow_up(c.query, c.label) for c in chosen])
     if recs:
         yield Event.suggestions(recs)
-    _offer(T, recs, chosen, done, suggesting.pool if suggesting is not None else None)
+    _offer(T, recs, chosen, done, suggesting.pool if suggesting is not None else None, planned=show_all_plans)
 
 
 # ---------------------------------------------------------------------------- 重放上一轮（质疑重查、换图，S5）

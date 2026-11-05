@@ -309,6 +309,14 @@ def _carried(step: Mapping[str, Any]) -> dict:
     return {"id": "s1", "skill": str(step.get("skill")), "when": None, "params": p}
 
 
+def show_all_plan(step: Mapping[str, Any]) -> dict | None:
+    """「看全部」按钮点了执行的计划（张数是程序定的那一步，规整第 20 条，G95）：同样的条件与排法，去掉张数、全部
+    导出。条件标沿用上一轮，开头会写明沿用了哪些。"""
+    base = _carried(step)
+    base["params"].pop("limit", None)
+    return build(base, [{"export": True}])
+
+
 def build(base: Mapping[str, Any], patches: Sequence[Mapping[str, Any]]) -> dict | None:
     """底加上几处改动 → 一步的计划；过不了 `check_format` 时 None。有分组、指标、比较时是统计。"""
     step = copy.deepcopy(dict(base))
