@@ -35,7 +35,7 @@
 - [ ] **G4b 编码实现**（进行中，S0–S7 已提交；下一步 G4b 收尾；新会话从 `docs/handoffs/2026-10-28-G4b编码启动指令.md` 起步，分片、完成标准与进度见 `docs/handoffs/2026-10-27-G4b编码任务单.md`）：照 G4a 的设计写 manifest（intents/keywords/dependencies/**data_sources**/field_mappings）+ tools + 流式事件；**偏离设计要回改 G4a 文档**，别让代码与设计各说各话。data_sources 别名须与 G1 各表 `source` 并集一致、且平台侧 data_sources.json 已登记（否则平台启动时把本助手隔离下线，platform 0.3.7 实测）。**回给用户的内容按 [docs/dev/09 答案呈现规范](docs/dev/09-answer-presentation.md) 自检**：无意义字段（自增 ID 等）不返回、表名/字段名不外露、数据之外给合理分析、寒暄（「你好」「你能做什么」）报本板块能力与常用场景
 - [ ] **G5 评测与对拍**：golden 集达标（`uv run python scripts/qa_test.py docs/testcases/golden/cases.json`，接真实测试数据）+ 数字口径对拍 + 人工测试手册验收
 - [ ] **G6 发布**：tag 触发 CI 发 wheel → 平台装配仓 bump 版本 → 部署
-  - **发布前必做**：按 `docs/2_landed/privileges.md`「上线前核对」，用权限平台准备的四类真实账号逐条核对权限配置（自动化测试通道不验权限）。
+  - **发布前必做**：按 `docs/2_landed/privileges.md`「上线前核对」，用权限平台准备的四类真实账号逐条核对权限配置（自动化测试通道不验权限）。给 INFO 的下发说明在 `docs/handoffs/2026-11-05-INFO权限联调说明.md`，INFO 返回结果用 `scripts/privileges_check.py` 核对。
 
 ## 落盘文档目录规范（谁能改）
 
