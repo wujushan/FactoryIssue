@@ -67,6 +67,8 @@ ANSWER_PARAMS: dict[str, Any] = {
     "repeat_min": 3,
     "trend_months": 3,
     "close_min": 5,
+    #: 类似问题的「共同点」至少几张（决策 2026-11-03「结论的要点与需关注的单」补记，G86）
+    "similar_common_min": 2,
     #: 答后建议（设计 §9.5、决策 2026-11-02「答后建议改由模型挑」）
     "suggest_model": True,
     "suggest_seconds": 5,

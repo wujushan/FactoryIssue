@@ -7,12 +7,13 @@
 （20 万字符上限）。
 结果单（后一步的 `issues` 引用、工作区 `results`）同样作为明细帧回传（`ids_<域>`：单 ID、问题编号）。
 引用值另给各域张数（`found`），工作区存下供质疑重查比对（设计 §10）。
-结论的要点与需关注的单（`insights`）按列出的单算（`limit` 之后，`stats/lib/insights.py`）。
+结论的要点与需关注的单（`insights`）按列出的单算（`limit` 之后，`stats/lib/insights.py`）。分析用的事实同样按列出的
+单算；只列了前几张时「张数」改为「符合条件的张数」与「列出的张数」两项。
 """
 
 import pandas as pd
 
-from factory_issue_module.stats.lib.common import fi_blank, fi_rank, fi_with_counts
+from factory_issue_module.stats.lib.common import fi_blank, fi_named_facts, fi_rank, fi_with_counts
 from factory_issue_module.stats.lib.domains import dm_view
 from factory_issue_module.stats.lib.insights import in_insights
 from factory_issue_module.stats.lib.views import vw_breakdowns, vw_counts, vw_filter, vw_ids, vw_sorted, vw_time
@@ -25,13 +26,13 @@ LS_SORT = {"建单时间": "_add", "现场发现日期": "_found", "停线日期
 
 def ls_facts(v, P, cond_kinds, blind=()):
     """分析用的事实。`blind` 是靠没取到的主数据才写得出来的列，不按它们分（否则全是「未填」）。"""
-    pairs_type, _f, _t = fi_rank(vw_counts(v, "type"))
     unclosed = v[v["_unclosed"].astype(bool)] if len(v) else v
     stopped = v[v["_stopped_now"].astype(bool)] if len(v) else v
-    facts = {"张数": int(len(v)), "按问题类型": [list(p) for p in pairs_type]}
+    facts = {"张数": int(len(v))}
+    # 「未填」「其他（未识别）」不参加排名，另放「不参加排名的 X」（G87、G88）
+    fi_named_facts(facts, "按问题类型", "问题类型", vw_counts(v, "type"))
     if "factory" not in blind:
-        pairs_factory, _f, _t = fi_rank(vw_counts(v, "factory"))
-        facts["按加工厂"] = [list(p) for p in pairs_factory]
+        fi_named_facts(facts, "按加工厂", "加工厂", vw_counts(v, "factory"))
     if "_machines" not in blind:
         pairs_machine, _f, _t = fi_rank(vw_counts(v, "_machines", multi=True), 5)
         facts["按机型（前五）"] = [list(p) for p in pairs_machine[:5]]
@@ -91,6 +92,10 @@ def run(data):
                 caliber["停线中且已完成"] = int(v[v["_stopped_now"].astype(bool)]["_done"].astype(bool).sum())
         breakdowns = vw_breakdowns(v, P.get("breakdowns", {}).get(dom))
         facts = ls_facts(v, P, cond_kinds, P.get("blind", {}).get(dom) or []) if len(v) else {"张数": 0}
+        if int(len(v)) < found:
+            # 只列了前几张：事实按列出的单算，两个张数分开给，免得把列出的张数说成一共有几张
+            # （决策 2026-11-04「按什么理解写在开头」）
+            facts = {"符合条件的张数": found, "列出的张数": facts.pop("张数", int(len(v))), **facts}
         if breakdowns:
             facts["分取值"] = breakdowns
         if len(v):  # 要不要导出在各域都列完之后定（列出的每个域都进文件）

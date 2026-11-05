@@ -307,6 +307,48 @@ def not_found(kind: str, said: str, entities: Mapping[str, Sequence[str]], skip:
                missing=f"没有{kind}「{said}」", said=said, fill=FILL_KIND)
 
 
+#: 「没填」的说法（总述「通用筛选规则」按「没填」筛，G89）：用户自己说的条件取值是这些时不去对库
+_BLANK_WORDS = ("未填", "未填写", "没填", "没有填", "没填写", "空", "空的", "为空", "是空的", "空白", "未识别机型")
+#: 这几个条件按「未填」筛是支持的（问题等级「未填」可与具体等级同时选，总述「问题等级」）
+BLANK_OK = ("问题等级",)
+
+
+def blank_said(values: Sequence[str]) -> str | None:
+    """用户说的取值里第一个「没填」的说法；没有返回 None。"""
+    from factory_issue_module.plan import names
+
+    words = {names.key(w) for w in _BLANK_WORDS}
+    return next((v for v in values if names.key(v) in words), None)
+
+
+def blank_ask(fld: str, said: str) -> Ask:
+    """按「没填」筛（问题等级除外）：说明目前不能筛，不请用户核对名称（G89）。带 `missing`：几个域一起时各域都这样，
+    不加域名前缀。"""
+    return Ask(f"目前不能筛出没填{fld}的单（单上的「未填」表示没填）。", [], reason="不能按没填筛",
+               missing=f"不能筛出没填{fld}的单", said=said, fill=FILL_NONE)
+
+
+def from_ref(raw: Any) -> bool:
+    """条件取值来自前一步（`{"ref": …}`）。"""
+    from factory_issue_module.plan import schema
+
+    return schema.is_ref(raw)
+
+
+def ref_misses(out: DomainStep, label: str, fld: str, hit: Sequence[str], miss: Sequence[str]) -> bool:
+    """取值来自前一步时（G90，总述「一问多段」）：本域对不上的写进开头，一个都对不上时本域不计入。
+
+    返回 True 表示本域不计入（调用方跳过这一条件，`excluded` 里有一条就不取数）。"""
+    if not miss:
+        return False
+    names_text = "「" + "」「".join(miss) + "」"
+    if not hit:
+        out.excluded.append(f"{label}没有{fld}{names_text}，{label}未计入")
+        return True
+    out.notes.append(f"{label}没有{fld}{names_text}")
+    return False
+
+
 def yes_no(said: str) -> int | None:
     """「是 / 否」说法 → 1 / 0；认不出返回 None。"""
     from factory_issue_module.plan import names
@@ -584,6 +626,10 @@ def problem_types(values: Sequence[str], known: Sequence[str], label: str, neg: 
 # ---------------------------------------------------------------------------- 分组维度（三域共用的拼法）
 
 PERIOD_DIMS = ("年", "季度", "月", "周")
+#: 不参加排名的分组取值（总述「排名、长清单与导出」，G87、G88）：照常列一行、排在表格最后，不参加第一、前 N 名、
+#: 并列与「哪些增加了」，后一步也不接它。「未识别机型」是大机型有值但对不上产品主数据，「其他（未识别）」是海外问题
+#: 类型对不上已知类型（`enums.OS_UNKNOWN_TYPE`；这里写字面量，免得 base 依赖 enums）
+UNRANKED = ("未填", "未识别机型", "其他（未识别）")
 
 
 def build_dims(group_by: Sequence[str], basis: str | None, table: Mapping[str, dict[str, Any]],
@@ -593,7 +639,8 @@ def build_dims(group_by: Sequence[str], basis: str | None, table: Mapping[str, d
     """计划的分组维度 → 沙箱的维度说明；返回 (维度, 本域没有的维度, 要额外取的帧)。
 
     维度说明里 `merge` 为真的，三域一起统计时按名称同名合并成一张表（总述「跨域归并」）；`universe` 是本域可能有的
-    取值（该域没有的取值在合并表里写「—」），`fill` 是没有单也要列出的取值（问题等级 A+、A、B、C）。
+    取值（该域没有的取值在合并表里写「—」），`fill` 是没有单也要列出的取值（问题等级 A+、A、B、C）；`unranked` 是
+    不参加排名的取值（`UNRANKED`，时间维度没有）。
     时间维度按日期依据取列；本域没有这个日期依据时算本域没有的维度。
     """
     out: list[dict[str, Any]] = []
@@ -609,7 +656,7 @@ def build_dims(group_by: Sequence[str], basis: str | None, table: Mapping[str, d
             if period_needs and (basis or "建单") in period_needs:
                 needs.add(period_needs[basis or "建单"])
         elif g in table:
-            out.append({"name": g, **table[g]})
+            out.append({"name": g, "unranked": list(UNRANKED), **table[g]})
             if needs_by and g in needs_by:
                 needs.add(needs_by[g])
         else:

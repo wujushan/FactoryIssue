@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
 import s4_data
 import scopes
 from fakes import FakeLLM, data_queries, make_harness, run
@@ -241,6 +242,37 @@ async def test_material_unit_explains_machine_and_impact():
                            [plan(detail("ZC9901002", "物料", "其他:影响数量为何为空", frm="previous"))])
     text = _text(events)
     assert "机型一栏显示「物料」" in text and "不展示产品在制属性与影响数量" in text
+
+
+_NOT_AVAILABLE = "制程问题单上没有"
+
+
+@pytest.mark.parametrize(("number", "aspect", "expected"), [
+    # 国内在途单还没定责：写「未定责」；只说「责任部门」照样对上（术语表别称）
+    ("ZC9901001", "其他:责任归属部门", ["- **责任归属部门**：未定责"]),
+    ("ZC9901001", "其他:责任部门", ["- **责任归属部门**：未定责"]),
+    # 国内物料问题不展示责任归属部门
+    ("ZC9901002", "其他:责任归属部门", [errors.RESP_DEPT_MATERIAL]),
+    # 只说「供应商」给名称与编号；各块里没有这一栏（没填不显示）时照样给「未填」；aspects 写成不在列表里的词也认
+    ("ZC9901002", "其他:供应商", ["- **供应商名称**：测试供应商", "- **供应商编号**：V99"]),
+    ("ZC9901001", "供应商", ["- **供应商名称**：未填", "- **供应商编号**：未填"]),
+    ("BR9901001", "其他:供应商", ["- **供应商名称**：测试供应商", "- **供应商编号**：V99"]),
+    # 巴西、海外没有责任归属部门：按问题跟进部门给并写明
+    ("BR9901001", "其他:责任归属部门", ["- **问题跟进部门**：生产工程部", "巴西没有责任归属部门，按问题跟进部门给"]),
+    ("HW9901001", "其他:责任归属部门", ["- **问题跟进部门**：生产工程部", "海外没有责任归属部门，按问题跟进部门给"]),
+])
+async def test_named_item_answers_from_the_ticket_not_as_unavailable(number, aspect, expected):
+    """手动测试「ZC2609012 的责任归属部门 / 供应商」「BR2604003 的责任归属部门」：对得上的项不说没有这项信息
+    （总述「本助手管不着的问题、看不懂的输入」点名数据项一条）。"""
+    _h, events = await _go(f"{number} 的{aspect.partition(':')[2] or aspect}", [plan(detail(number, aspect))])
+    text = _text(events)
+    assert all(x in text for x in expected), text
+    assert _NOT_AVAILABLE not in text and "本助手没有" not in text
+
+
+async def test_named_item_matching_nothing_says_no_such_information():
+    _h, events = await _go("ZC9901001 的手机号", [plan(detail("ZC9901001", "其他:手机号"))])
+    assert "制程问题单上没有『手机号』这项信息" in _text(events)
 
 
 async def test_material_unit_follow_up_written_as_out_of_scope_is_bounced():

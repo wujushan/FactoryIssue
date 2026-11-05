@@ -175,12 +175,70 @@ def test_rule7_name_matching_two_classes_becomes_clarify(chosen: str) -> None:
 @pytest.mark.parametrize(
     ("query", "value", "want"),
     [("跟进人是柯洱斯的单有哪些", "柯洱斯", "跟进人"),  # 说了类别却对不上：不改类
-     ("百富的单有哪些", "百富", "跟进人"),  # 只是包含不算对上
+     ("百富的单有哪些", "百富", "加工厂"),  # 一类都没有完全相同的：只有加工厂照包含对得上（G91）
      ("工程部跟进的单有哪些", "工程部", "跟进部门"),  # 「跟进」同时指人员与部门
      ("跟进人是工程部的单有哪些", "工程部", "跟进人")],
 )
 def test_rule7_class_words(query: str, value: str, want: str) -> None:
     assert field_of(apply([lst(filters=[{"field": "跟进人", "op": "是", "value": value}])], query)) == want
+
+
+#: 供应商主数据存全称、用户说简称（G91 手动测试的五句；名称是示意的）
+FULL_NAMES = {
+    "工厂": ["柯洱斯", "惠州百富", "TT"],
+    "人": ["李飞"],
+    "部门": ["生产工程部", "研发一部"],
+    "供应商": ["深圳市普瑞特电子有限公司", "东莞科全达五金制品有限公司", "深圳圳泰新科技有限公司",
+             "鸿展光电科技有限公司", "深圳鸿展光电有限公司", "屿峰塑胶制品厂", "研发配件厂"],
+    "系列": ["A"],
+}
+
+
+def _rule7(field: str, value: str, query: str, classes: dict = FULL_NAMES) -> tuple[dict, list[str]]:
+    inferred: list[normalize.Inferred] = []
+    ctx = Context(query=query, classes=classes, topics=TOPICS, today=TODAY, inferred=inferred)
+    out = normalize.apply({"steps": [agg(time=T, filters=[{"field": field, "op": "是", "value": value}])]}, ctx)
+    assert out is not None
+    return out, [i.field for i in inferred]
+
+
+@pytest.mark.parametrize(("query", "value"), [
+    ("普瑞特今年问题单", "普瑞特"), ("科全达今年有几张问题单", "科全达"), ("圳泰新今年问题单", "圳泰新"),
+    ("鸿展光电2026年的单", "鸿展光电"), ("屿峰塑胶今年几张问题单", "屿峰塑胶")])
+def test_rule7_short_supplier_name_moves_from_factory_to_supplier(query: str, value: str) -> None:
+    """G91：只给名称、五类都没有完全相同的，模型放进加工厂而只有供应商照包含对得上 → 改到供应商并写明。"""
+    plan, inferred = _rule7("加工厂", value, query)
+    assert field_of(plan) == "供应商" and inferred == ["供应商"]
+
+
+def test_rule7_contains_keeps_chosen_class_and_says_so() -> None:
+    """所选那一类照包含对得上就不改，同样写「按 X 理解」。"""
+    plan, inferred = _rule7("加工厂", "百富", "百富今年问题单")
+    assert field_of(plan) == "加工厂" and inferred == ["加工厂"]
+    plan, inferred = _rule7("供应商", "鸿展光电", "鸿展光电今年问题单")  # 对上两家：不改类，交第 6 步追问选哪家
+    assert field_of(plan) == "供应商" and inferred == ["供应商"]
+
+
+def test_rule7_contains_in_two_other_classes_does_not_move() -> None:
+    """「研发」在部门与供应商名称里都有，所选的加工厂对不上：不改，照加工厂答没找到。"""
+    plan, inferred = _rule7("加工厂", "研发", "研发今年问题单")
+    assert field_of(plan) == "加工厂" and inferred == []
+
+
+@pytest.mark.parametrize(("field", "value", "query"), [
+    ("加工厂", "普瑞特", "普瑞特工厂今年问题单"),  # 说了类别：不改类
+    ("跟进人", "瑞特", "瑞特今年问题单"),  # 人员不按包含；供应商照包含对得上，改过去
+])
+def test_rule7_contains_respects_class_words(field: str, value: str, query: str) -> None:
+    plan, _ = _rule7(field, value, query)
+    assert field_of(plan) == ("加工厂" if "工厂" in query else "供应商")
+
+
+def test_rule7_people_do_not_match_by_contains() -> None:
+    """人员只认完全相同：名字只是某个人名的一部分时不改到人员。"""
+    classes = {**FULL_NAMES, "人": ["李飞飞"]}
+    plan, inferred = _rule7("加工厂", "李飞", "李飞今年问题单", classes)
+    assert field_of(plan) == "加工厂" and inferred == []
 
 
 def test_rule7_check_half_bounces_name_next_to_another_class_word() -> None:

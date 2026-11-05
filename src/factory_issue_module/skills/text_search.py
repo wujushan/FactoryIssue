@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -48,10 +47,6 @@ THIRD_MAX = 10
 #: 类似问题每域交模型判断的张数（最相近的前几张，一批）。每域列几张是 `answer_params.toml` 的 `similar_rows`（默认 5，
 #: 决策 2026-11-03「回答骨架与排版」），不超过这里（`config/files.SIMILAR_ROWS_MAX`）：没判断过的不列
 SIM_JUDGE = 10
-#: 类似问题：写结论的模型每域看表格前几张单的内容（【列出的单】）。其余找法的需关注由程序挑（`present/insights.py`）
-NARRATIVE_ROWS = 5
-#: 交写结论的模型看的每格文字最多几个字
-NARRATIVE_CELL = 150
 CONTEXT_MAX = 120
 #: 用户没点名列时表格的列（「命中处」「原因与措施」另加）
 DEFAULT_KEYS = ("number", "machine", "desc")
@@ -646,33 +641,10 @@ def _present(T: Any, tp: TermPlan, segs: Sequence[dict[str, Any]], counts: Mappi
     return events
 
 
-_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
-
-
-def _cell(value: Any) -> str:
-    """交写结论的模型看的一格：去掉 Markdown 链接只留文字，压成一行，最多 `NARRATIVE_CELL` 个字。"""
-    flat = " ".join(_LINK.sub(r"\1", str(value if value is not None else "")).split())
-    return flat if len(flat) <= NARRATIVE_CELL else flat[:NARRATIVE_CELL] + "…"
-
-
-def listed_rows(segs: Sequence[Mapping[str, Any]]) -> str:
-    """【列出的单】：每域表格前 `NARRATIVE_ROWS` 张的内容，末尾写结案没有（是否未结案由沙箱按行给）。"""
-    lines: list[str] = []
-    for s in segs:
-        table = s.get("table") or {}
-        cols = [str(c) for c in table.get("columns") or []]
-        opened = list(s.get("open_shown") or [])
-        for k, row in enumerate((table.get("rows") or [])[:NARRATIVE_ROWS]):
-            cells = [f"{c}：{_cell(v)}" if i else _cell(v) for i, (c, v) in enumerate(zip(cols, row, strict=False))]
-            state = ("未结案" if opened[k] else "已结案") if k < len(opened) else ""
-            lines.append("｜".join([str(s.get("domain")), *cells, *([state] if state else [])]))
-    return "\n".join(lines)
-
-
-#: 写结论的【写法】（决策 2026-11-03「回答骨架与排版」）
-SIM_GUIDE = ("用户想知道以前有没有出现过他描述的现象。【列出的单】是各域按相近程度排在最前、已经逐张看过是同一类现象的单。"
-             "第一句回答有没有出现过；再点名最像的两三张：问题编号、一句话说清是什么现象、当时的原因与措施、结案没有。"
-             "不按问题类型、机型分布分析。")
+#: 类似问题写结论句的【写法】（决策 2026-11-03「结论的要点与需关注的单」补记，G86）：结论句只答有没有，各张单的
+#: 现象、原因与措施在表格里，不在结论里复述
+SIM_GUIDE = ("用户想知道以前有没有出现过他描述的现象。第一行回答以前有没有出现过相近的现象、列出了几张、几张还没结案，"
+             "不点名单号，不复述各张单的现象与原因措施（表格里有）。")
 
 
 async def _narrative(T: Any, X: Any, tp: TermPlan, res: Mapping[str, Any], segs: Sequence[dict[str, Any]],
@@ -695,12 +667,11 @@ async def _narrative(T: Any, X: Any, tp: TermPlan, res: Mapping[str, Any], segs:
             facts[str(s.get("domain"))] = {**f, "按词找到": _n(s, "kw"), columns.TEXT_GROUPS["3"]: _n(s, "g3")}
     described = "；".join(tables.describe(heading(tp, s, str(s.get("domain"))), s["table"], s.get("shown"))
                           for s in shown)
-    if sim:
-        return await X._narrate(T, described, note, facts, fallback_text, X._time_text(run), rows=listed_rows(shown),
-                                guide=SIM_GUIDE, dims=False)
-    # 结论句 + 要点 + 需关注（决策 2026-11-03「结论的要点与需关注的单」）：要点与需关注的单由沙箱按直接找到的单给
+    # 结论句 + 要点 + 需关注（决策 2026-11-03「结论的要点与需关注的单」）：要点与需关注的单由沙箱按直接找到的单给；
+    # 类似问题给它专用的要点、没有需关注（同一决策的补记，G86）
     return await X._conclude(T, described, note, facts, fallback_text, X._time_text(run), res.get("insights"),
-                             segs=shown)
+                             segs=shown, guide=SIM_GUIDE if sim else None, reading=X.reading_of(run),
+                             cover=X.cover_of(run, T))
 
 
 def _caliber(C: cal.Caliber, run: Any, tp: TermPlan, segs: Sequence[dict[str, Any]], sem_notes: Sequence[str],

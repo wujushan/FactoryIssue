@@ -362,11 +362,13 @@ def _aliases() -> dict[str, str]:
             out.setdefault(_norm(re.sub(r"（.*?）", "", alias)), key)
     # 列清单时只说「处理人」指问题跟进人（总述「三域共用的说法」、术语表「问题跟进人」的口径定义）
     out.setdefault(_norm("处理人"), "follower")
+    # 只说「供应商」指供应商名称，问单张单时另给供应商编号（总述「三域共用的说法」）
+    out.setdefault(_norm("供应商"), "ven_name")
     return out
 
 
 def resolve(said: str) -> str | None:
-    """用户点名的列 → 内部键；对不上返回 None（回答开头写「本助手没有『X』这一项」）。"""
+    """用户点名的列 → 内部键；对不上返回 None（回答开头写「制程问题单上没有『X』这项信息」）。"""
     return _aliases().get(_norm(said))
 
 

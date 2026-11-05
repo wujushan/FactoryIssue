@@ -8,6 +8,9 @@
   第 11 条安全问题两路；第 17 条汇总缺时间改为追问；第 18 条上一轮没有结果时「其中」改为追问。
 - 校验、打回重写：第 12 条格式在 `plan/schema.py`；第 7 条的校验一半、第 13、14、15、19 条在 `tagged_checks`
   （第 14 条在对照集期望计划上误拒为 0，已启用）；第 16 条 `values_not_in_query` 只记日志。
+- 第 20 条 `reading_rule`（决策 2026-11-04「按什么理解写在开头」）：问题等级、状态、问题类型的取值在问句里找不到
+  依据时记成助手的理解；清单张数在问句里找不到时改成默认张数并记下；都进 `inferred`，回答开头写「按 X 理解」。
+  认出了程度说法、计划没按落盘的读法写时只记日志。
 
 名字归类要的「库里的取值」由调用方给（`classes`：类 → 名字）：线上是可查的域的主数据，spike 是它的示意名单。
 每次改写记一条 `RuleHit`（规则编号、技能、改前改后的条件名），由规划器打日志 `factory_issue_plan_rule`。
@@ -25,8 +28,10 @@ from datetime import date
 from functools import lru_cache
 from typing import Any
 
+from factory_issue_module.config.defaults import ANSWER_PARAMS as ANSWER_DEFAULTS
 from factory_issue_module.config.files import TopicTerms
-from factory_issue_module.plan import names, timespan
+from factory_issue_module.domains import enums
+from factory_issue_module.plan import names, schema, timespan
 from factory_issue_module.plan.prematch import ISSUE_NUMBER, find_entities, find_numbers
 
 # ---------------------------------------------------------------------------- 归一
@@ -71,16 +76,44 @@ class RuleHit:
     action: str = "改写"
 
 
+#: `Inferred.kind`：第 7 条定的类；第 20 条助手按意思定的条件取值、程序定的张数
+KIND_CLASS = "类"
+KIND_VALUE = "取值"
+KIND_COUNT = "张数"
+
+
 @dataclass(frozen=True)
 class Inferred:
-    """第 7 条按库里的取值定了类（用户只给了名称，或说的类别对不上而改到另一类）：回答开头要写「按 X 理解」。
+    """回答开头要写的「按 X 理解」（总述「必要澄清项」之后「拿不准的问法」、「程度说法怎么理解」）。
 
-    模型本来就放对了类时计划不变，也要记下来，否则执行时看不出这是推断的（S2 起由呈现层用它）。
+    - `KIND_CLASS`（第 7 条）：按库里的取值定了类（用户只给了名称，或说的类别对不上而改到另一类）。模型本来就
+      放对了类时计划不变，也要记下来，否则执行时看不出这是推断的。`values` 是名称，`field` 是定到的类。
+    - `KIND_VALUE`（第 20 条）：问题等级、状态、问题类型的取值在问句里找不到依据，是助手按意思定的。`field` 是
+      条件名（否定时带比较方式），`values` 是取值。
+    - `KIND_COUNT`（第 20 条）：张数在问句里找不到，改成了默认张数。`field` 是排法（「按不良率从高到低」），
+      `values` 是张数。
+    `said` 是程序从问句里认出的程度说法原话（「比较严重」），没有为空。
     """
 
     step: str
     field: str
     values: tuple[str, ...]
+    kind: str = KIND_CLASS
+    said: str = ""
+
+
+def inferred_text(inf: Inferred) -> str:
+    """开头那一句（设计 §4.3 提示行）。"""
+    if inf.kind == KIND_COUNT:
+        n = inf.values[0] if inf.values else ""
+        if inf.said:
+            return f"「{inf.said}」{inf.field}列出前 {n} 张（没说要几张，默认列 {n} 张）"
+        return f"没说要几张，{inf.field}列出前 {n} 张"
+    if inf.kind == KIND_VALUE:
+        shown = "、".join(inf.values)
+        body = f"按{inf.field} {shown} 理解" if shown[:1].isascii() else f"按{inf.field}「{shown}」理解"
+        return f"「{inf.said}」{body}" if inf.said else body
+    return f"「{'、'.join(inf.values)}」按{inf.field}理解"
 
 
 def _fields(obj: Any) -> tuple[str, ...]:
@@ -245,6 +278,23 @@ def _found(value: str, group: str, classes: NameClasses) -> bool:
     return any(v == _name_key(c, group) for c in classes.get(group, ()))
 
 
+#: 自己的规则里有名称包含的几类（总述「某加工厂」「部门名称怎么对」「某供应商」）；人员、系列只认整串相同
+_CONTAINS_GROUPS = ("工厂", "部门", "供应商")
+
+
+def _contained(value: str, group: str, classes: NameClasses) -> bool:
+    """这一类照自己的包含规则对得上（「鸿展光电」之于某家供应商的全称），G91。
+
+    只用来定类：巴西工厂整段相等，合在工厂一类里也按包含看，真正对库仍照各域自己的规则（§6.5）。
+    """
+    if group not in _CONTAINS_GROUPS:
+        return False
+    v = _name_key(value, group)
+    if len(v) < 2:
+        return False
+    return any(v in _name_key(c, group) for c in classes.get(group, ()))
+
+
 def _move(p: dict, f: dict, group: str) -> None:
     new_field = NAME_GROUPS[group][0]
     old_field = f.get("field")
@@ -266,6 +316,17 @@ def _regroup(step: dict, query: str | None, classes: NameClasses,
     def note(f: dict, values: list[str]) -> None:
         if inferred is not None:
             inferred.append(Inferred(str(step.get("id")), str(f.get("field")), tuple(values)))
+
+    def by_contains(f: dict, group: str, values: list[str]) -> None:
+        """一类都没有完全相同的（G91）：所选那一类照自己的包含规则对得上就照它，对不上而另外恰好只有一类对得上就
+        改过去，两种都写「按 X 理解」。模型爱把没说类别的公司简称放进加工厂，供应商主数据又多是全称。"""
+        if all(_contained(v, group, classes) for v in values):
+            note(f, values)
+            return
+        hit = [g for g in NAME_GROUPS if g != group and all(_contained(v, g, classes) for v in values)]
+        if len(hit) == 1:
+            _move(p, f, hit[0])
+            note(f, values)
 
     words = _class_words_in(norm(query))
     p = step.get("params") or {}
@@ -292,6 +353,8 @@ def _regroup(step: dict, query: str | None, classes: NameClasses,
                 if matched[0] != group:
                     _move(p, f, matched[0])
                 note(f, values)
+            elif not matched:
+                by_contains(f, group, values)
             continue
         if all(_found(v, group, classes) for v in values):
             continue
@@ -302,6 +365,8 @@ def _regroup(step: dict, query: str | None, classes: NameClasses,
         if len(others) == 1:
             _move(p, f, others[0])
             note(f, values)
+        elif not others and not own:
+            by_contains(f, group, values)
     return None
 
 
@@ -828,8 +893,10 @@ class Context:
     topics: TopicTerms | None = None
     today: date | None = None
     hits: list[RuleHit] | None = None
-    #: 第 7 条按库里的取值定的类（回答开头「按 X 理解」）
+    #: 第 7 条按库里的取值定的类、第 20 条助手定的取值与张数（回答开头「按 X 理解」）
     inferred: list[Inferred] | None = None
+    #: 第 20 条：没说要几张时列几张（模块配置 `top_n`，与「哪个最多」的前 N 名同一个数）；没给用内置默认
+    default_limit: int | None = None
 
 
 def apply(plan: dict | None, ctx: Context) -> dict | None:
@@ -869,7 +936,10 @@ def apply(plan: dict | None, ctx: Context) -> dict | None:
     rec.run(17, out, _missing_time_rule, out, query, ctx.previous, ctx.today)
     if ctx.hits is not None and partial_time(out):
         ctx.hits.append(RuleHit(17, _skills(out), _fields(out), _fields(out), action="只记日志"))
-    return rec.run(17, out, _time_options, out, ctx.today)
+    out = rec.run(17, out, _time_options, out, ctx.today)
+    rec.run(20, out, reading_rule, out, query, ctx.default_limit or DEFAULT_LIMIT,
+            ctx.inferred if ctx.inferred is not None else [], ctx.hits)
+    return out
 
 
 def time_checks(steps: list[dict], query: str, today: date) -> list[str]:
@@ -988,3 +1058,195 @@ def values_not_in_query(plan: dict, query: str) -> list[str]:
             if any(norm(v) and norm(v) not in q for v in values):
                 missed.append(str(f.get("field")))
     return sorted(set(missed))
+
+
+# ---------------------------------------------------------------------------- 第 20 条 助手按意思定的条件与张数
+#
+# 决策 2026-11-04「按什么理解写在开头」：总述「必要澄清项」之后「拿不准的问法」要求开头一句写明「按 X 理解」，
+# 总述「程度说法怎么理解」给「严重」「不良率高」的默认读法与「没说要几张」的默认张数。
+
+#: 没给 `default_limit` 时的默认张数（与模块配置 `top_n` 的内置默认相同）
+DEFAULT_LIMIT = int(ANSWER_DEFAULTS["top_n"])
+#: 取值由规划器写成库里的叫法（不照抄原话）的几类条件：在问句里找不到依据就是助手按意思定的。名字类不查：
+#: 第 16 条在 p2 实测的 345 个值都在问句里找得到
+READING_FIELDS = ("问题等级", "状态", "问题类型")
+#: 程度说法前面的副词；「最」不算（「不良率最高的单」是排名，不是程度说法）
+_DEGREE = "比较|特别|非常|十分|相当|较为|较|很|挺|极其|极|偏"
+#: 总述「程度说法怎么理解」：「严重」= 问题等级 A+、A；「不良率高」= 按不良率从高到低列前几张
+SEVERE = re.compile(rf"(?:{_DEGREE})?严重")
+SEVERE_LEVELS = ("A+", "A")
+HIGH_RATE = re.compile(rf"不良率(?:{_DEGREE})?高(?![于过出])|(?:{_DEGREE})?高不良率")
+#: 问句里的等级说法（「A 级」「A+」「a类」「B 级及以上」）；字母前后不能紧挨字母数字（A930、A920PRO 不算）
+_LEVEL_TOKEN = re.compile(r"(?<![A-Z0-9])[ABC]\+?(?:等级|级|类)?(?:及以上|以上|及更高|或以上)?(?![A-Z0-9+])")
+#: 不带「级」「类」也不带「+」的单个字母，只在问句里说到了等级时才算
+_LEVEL_WORDS_IN_QUERY = ("等级", "级别", "级", "类")
+#: 几种不写字母的等级说法：「安全问题」按 A+（第 11 条）；「未填」见总述「问题等级」
+_LEVEL_SAYINGS = {"安全": ("A+",), "未填": ("未填",), "没填": ("未填",), "没有等级": ("未填",)}
+_CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+DATE_SORTS = ("建单时间", "现场发现日期", "停线日期", "结案时间")
+#: 按这几项排序的清单只列前几张（总述「程度说法怎么理解」末段「没说要几张」，G95）。看的是规划器写出的排序，
+#: 不看问句里的说法：「最高的」「突出的」「不良多的」怎么读成按不良率排，交给规划器（决策 2026-11-04 补记）。
+#: 按日期排的不算：按建单时间从新到旧列全部本来就是清单的默认做法
+TOP_SORTS = ("不良率", "不良数量", "影响数量")
+#: 问句里说张数的写法：数后面跟量词，或前面是「前」（「前十张」「5 条」「三个」）；年份、机型号里的数不算
+_COUNT = re.compile(r"前\s*(\d+|[一二两三四五六七八九十百]+)|(\d+|[一二两三四五六七八九十百]+)\s*(?:张|条|个|单|份)")
+
+
+def sort_text(sort: Any) -> str:
+    """排法的说法：「按不良率从高到低」「按建单时间从新到旧」；没写排序为建单时间从新到旧（清单的默认排法）。"""
+    s = sort if isinstance(sort, dict) else {}
+    by, asc = str(s.get("by") or "建单时间"), s.get("order") == "升序"
+    if by in DATE_SORTS:
+        return f"按{by}从{'旧到新' if asc else '新到旧'}"
+    return f"按{by}从{'低到高' if asc else '高到低'}"
+
+
+def _cn_int(s: str) -> int | None:
+    if "百" in s:
+        left, _, right = s.partition("百")
+        hundreds = _CN_DIGITS.get(left, 1) if left else 1
+        rest = _cn_int(right.lstrip("零")) if right.lstrip("零") else 0
+        return None if rest is None else hundreds * 100 + rest
+    if "十" in s:
+        left, _, right = s.partition("十")
+        tens = _CN_DIGITS.get(left, 1) if left else 1
+        ones = _CN_DIGITS.get(right, 0) if right else 0
+        return tens * 10 + ones
+    return _CN_DIGITS.get(s) if len(s) == 1 else None
+
+
+def numbers_in(text: str) -> set[int]:
+    """问句里说到的整数：阿拉伯数字与汉字数（「前十张」「五张」）。"""
+    plain = unicodedata.normalize("NFKC", text or "")
+    out = {int(x) for x in re.findall(r"\d+", plain)}
+    for token in re.findall(r"[零一二两三四五六七八九十百]+", plain):
+        value = _cn_int(token)
+        if value is not None:
+            out.add(value)
+    return out
+
+
+def counts_in(text: str) -> list[int]:
+    """问句里说的张数（「前十张」「5 条」），按出现的先后；年份、机型号里的数不算。"""
+    plain = unicodedata.normalize("NFKC", text or "")
+    out: list[int] = []
+    for m in _COUNT.finditer(plain):
+        token = m.group(1) or m.group(2)
+        value = int(token) if token.isdigit() else _cn_int(token)
+        if value:
+            out.append(value)
+    return out
+
+
+def levels_in(query: str) -> set[str]:
+    """问句里说到的问题等级（与对库同一个换算 `enums.level_codes`）。"""
+    raw = re.sub(r"\s+", "", unicodedata.normalize("NFKC", query or "")).upper()
+    bare_ok = any(w in raw for w in _LEVEL_WORDS_IN_QUERY)
+    out: set[str] = set()
+    for m in _LEVEL_TOKEN.finditer(raw):
+        token = m.group(0)
+        if not bare_ok and len(token) == 1:
+            continue
+        out |= set(enums.level_codes(token) or [])
+    for word, levels in _LEVEL_SAYINGS.items():
+        if word in raw:
+            out |= set(levels)
+    return out
+
+
+def _type_core(value: str) -> str:
+    return re.sub(r"(类问题|问题|类型|类)$", "", value)
+
+
+def has_basis(field_name: str, value: object, query: str, levels: set[str] | None = None) -> bool:
+    """这一个取值在问句里有没有依据：取值本身，或对库时认的说法（状态 `enums.status_sayings`、等级
+    `levels_in`、问题类型去掉末尾「问题」「类」后的说法）。"""
+    q = norm(query)
+    text = str(value)
+    if field_name == "问题等级":
+        found = levels if levels is not None else levels_in(query)
+        return re.sub(r"\s+", "", text).upper() in found
+    if field_name == "状态":
+        return any(norm(w) and norm(w) in q for w in enums.status_sayings(text))
+    core = norm(_type_core(text))
+    return norm(text) in q or (len(core) >= 2 and core in q)
+
+
+def _add_inferred(inferred: list[Inferred], item: Inferred) -> None:
+    if item not in inferred:
+        inferred.append(item)
+
+
+def reading_rule(plan: dict, query: str | None, default_limit: int, inferred: list[Inferred],
+                 hits: list[RuleHit] | None = None) -> None:
+    """第 20 条（就地改）：
+
+    - 问题等级、状态、问题类型的取值，本轮说的（不是沿用上一轮的），有一个在问句里找不到依据，就把这一条条件记成
+      助手按意思定的（`KIND_VALUE`）；「严重」读成 A+、A 时带上原话。
+    - 清单张数（G92、G95）。要不要只列前几张看计划结构：规划器写了张数，或按 `TOP_SORTS` 里的一项排序（升降都算）、
+      又没要全部（`export`）。几张：问句里说了张数（`counts_in`），用它；规划器写的张数在问句里出现过，或是 1（「哪张」
+      「那一单」这类单数说法，模型写成 1；它自己定的数是 10、20 这类），照它；其余改成 `default_limit`，记成
+      `KIND_COUNT`，开头写明。判据都在计划与问句里、可证明，按设计 §5.3 准入准则改写。不看问句里的程度说法：
+      「最高的」「突出的」怎么读成按不良率排，交给规划器；词表只用来在开头带上原话（「不良率高」一类）。
+    - 认出了程度说法、计划却没按落盘的读法写（「严重」没写成 A+、A，「不良率高」没按不良率从高到低排）：
+      只记日志，不改不打回。
+    """
+    if not query:
+        return
+    raw = unicodedata.normalize("NFKC", query)
+    levels = levels_in(query)
+    numbers = numbers_in(query)
+    counts = counts_in(query)
+    severe_ok = high_rate_ok = False
+    for step in plan.get("steps") or []:
+        if not isinstance(step, dict) or step.get("skill") not in schema.COND_SKILLS:
+            continue
+        p = step.get("params")
+        if not isinstance(p, dict):
+            continue
+        sid = str(step.get("id"))
+        for f in _as_list(p.get("filters")):
+            if not isinstance(f, dict) or f.get("from", "user") == "previous" or schema.is_ref(f.get("value")):
+                continue
+            name = next((x for x in READING_FIELDS if norm_field(x) == norm_field(f.get("field"))), None)
+            values = [str(v).strip() for v in _as_list(f.get("value")) if str(v).strip()]
+            if name is None or not values:
+                continue
+            op = str(f.get("op") or "是")
+            negated = schema.OP_KINDS.get(op) in ("ne", "nhas")
+            is_severe = (name == "问题等级" and not negated
+                         and {re.sub(r"\s+", "", v).upper() for v in values} == set(SEVERE_LEVELS))
+            severe_ok = severe_ok or is_severe
+            if all(has_basis(name, v, query, levels) for v in values):
+                continue
+            m = SEVERE.search(raw) if is_severe else None
+            _add_inferred(inferred, Inferred(sid, name + (op if negated else ""), tuple(values), kind=KIND_VALUE,
+                                             said=m.group(0) if m else ""))
+        if step.get("skill") != "list_issues":
+            continue
+        sort = p.get("sort") if isinstance(p.get("sort"), dict) else {}
+        by_rate = sort.get("by") == "不良率" and sort.get("order", "降序") != "升序"
+        high_rate_ok = high_rate_ok or by_rate
+        lim = p.get("limit")
+        given = isinstance(lim, int) and not isinstance(lim, bool) and lim > 0
+        # 要不要只列前几张：看计划结构，不看问句里的说法（复测 2026-11-05：「不良率高的单有哪些」规划器只写了排序）
+        top = given or (sort.get("by") in TOP_SORTS and p.get("export") is not True)
+        if not top:
+            continue
+        if counts:  # 用户说了几张（规划器漏写也照用户的）
+            if lim != counts[0]:
+                p["limit"] = counts[0]
+            continue
+        if given and (lim in numbers or lim == 1):
+            continue
+        p["limit"] = default_limit
+        m = HIGH_RATE.search(raw) if by_rate else None
+        _add_inferred(inferred, Inferred(sid, sort_text(sort), (str(default_limit),), kind=KIND_COUNT,
+                                         said=m.group(0) if m else ""))
+    if hits is None:
+        return
+    skills = _skills(plan)
+    if SEVERE.search(raw) and not levels and not severe_ok:
+        hits.append(RuleHit(20, skills, ("程度说法：严重",), (), action="只记日志"))
+    if HIGH_RATE.search(raw) and not high_rate_ok:
+        hits.append(RuleHit(20, skills, ("程度说法：不良率高",), (), action="只记日志"))

@@ -1236,9 +1236,10 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
            lambda p: [s["skill"] for s in p["steps"]] == ["clarify"]
            and {"亮亮：加工厂", "亮亮：供应商"} <= set(p["steps"][0]["params"]["options"]))
           for field in ("加工厂", "供应商", "跟进人")],
-        ("只是包含不算对上", "百富的单有哪些",
+        # G91：一类都没有完全相同的，只有一类照自己的包含规则对得上时改过去
+        ("一类都不完全相同时按包含定类", "百富的单有哪些",
          {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "百富"}])]},
-         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进人"),
+         lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "加工厂"),
         ("「跟进」同时指人员与部门", "工程部跟进的单有哪些",
          {"steps": [lst("s1", filters=[{"field": "跟进人", "op": "是", "value": "工程部"}])]},
          lambda p: p["steps"][0]["params"]["filters"][0]["field"] == "跟进部门"),

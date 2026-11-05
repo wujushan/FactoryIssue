@@ -278,6 +278,21 @@ async def test_inferred_class_is_said_in_opening():
     assert "Factory" in main.sql and "05" in main.params.values()
 
 
+async def test_short_supplier_name_put_in_factory_is_queried_as_supplier():
+    """G91：「普瑞特今年问题单」模型放进加工厂，供应商库里是全称 → 按供应商查、开头写明，不答「没有找到加工厂」。"""
+    reply = plan(step("aggregate", domains=CN, time=[{"said": "今年", "basis": "建单", "from": "user"}],
+                      filters=[{"field": "加工厂", "op": "是", "value": "普瑞特", "from": "user"}]))
+    h = make_harness(scopes.account_jia(), llm_replies=[reply, "共 0 张。"])
+    cn_data.load(h)
+    h.connectors["info"].frames["tbIQCvendor"] = pd.DataFrame(
+        [{"ferpcode": "V97", "fname": "深圳市普瑞特电子有限公司"}, {"ferpcode": "V99", "fname": "测试供应商"}])
+    events = await run(h, "国内普瑞特今年问题单")
+    text = _text(events)
+    assert "「普瑞特」按供应商理解" in text and "没有找到加工厂" not in text
+    main = next(q for q in data_queries(h) if q.tables[0] == "ZCTracking_ProblemList")
+    assert "VenCode" in main.sql and "V97" in main.params.values()
+
+
 async def test_rule13_still_mismatched_opens_with_basis_and_offers_other_reading():
     """第 13 条修一次仍不一致：按计划执行，开头写明按什么日期理解，并给另一种理解的按钮。"""
     bad = plan(step("aggregate", domains=CN, time=[{"said": "今年", "basis": "建单", "from": "user"}]))
@@ -345,7 +360,9 @@ async def test_chained_steps_pass_top_values_by_reference():
     assert text.startswith("### 1. ") and "\n\n### 2. " in text and text.count("统计口径") == 1
     assert "\n\n---\n\n**统计口径**" in text
     tables = _tables(events)
-    assert tables[0]["rows"] == [["A920", 2]]
+    # 「未填」照常列一行、排在最后、不占前 1 名的名额；物料单本来不挂机型（G87）
+    assert tables[0]["rows"] == [["A920", 2], ["未填", 1]]
+    assert "另有 1 张没填机型（其中物料单 1 张），不参加排名。" in text
     assert [r[0] for r in tables[1]["rows"]] == ["ZC9901001", "ZC9901003"]
 
 
@@ -364,3 +381,32 @@ async def test_parallel_fetch_keeps_query_recording():
         await asyncio.gather(*(base.fetch(h.ctx, spec) for _ in range(4)))
     assert len(recs) == 7 and all(r["source"] == "info" for r in recs)
     QuerySpec.model_validate(spec)
+
+
+async def test_chained_top_values_without_top_is_the_first_only():
+    """只说「最多的」、没给名次数：表格照给前 10 名，后一步引用 `top_values` 只接第一名（规划提示「步骤之间的引用」）。"""
+    s1 = step("aggregate", "s1", domains=CN, time=RECENT30, group_by=["机型"], ranking=True)
+    s2 = step("list_issues", "s2", domains=CN, time=RECENT30,
+              filters=[{"field": "机型", "op": "属于", "value": {"ref": "s1.top_values"}, "from": "user"}])
+    h, events = await _go("近 30 天国内问题最多的机型的单", [plan(s1, s2), "共 4 张。A920 最多，有 2 张。"])
+    tables = _tables(events)
+    assert tables[0]["rows"][0] == ["A920", 2] and len(tables[0]["rows"]) > 1
+    assert [r[0] for r in tables[1]["rows"]] == ["ZC9901001", "ZC9901003"]
+
+
+async def test_chained_step_stops_when_reference_has_no_value():
+    """前一步有单、却没有可以排名的取值（加工厂都没对上）：后一步不去掉这个条件查全部，写明并停在这一步，
+    再后面的详情也不执行（设计 §8「一问多段」）。"""
+    rows = [{**r, "Factory": None} for r in cn_data.main_rows()]
+    s1 = step("aggregate", "s1", domains=CN, time=RECENT30, group_by=["加工厂"], ranking=True)
+    s2 = step("list_issues", "s2", domains=CN, time=RECENT30,
+              filters=[{"field": "加工厂", "op": "是", "value": {"ref": "s1.top1"}, "from": "user"}])
+    s3 = {"id": "s3", "skill": "issue_detail", "when": None,
+          "params": {"issue": {"ref": "s2.max_defect_rate_issue"}, "aspects": ["原因"]}}
+    h, events = await _go("近 30 天国内问题最多的工厂是哪个？把它的单列出来，不良率最高那张的原因是什么？",
+                          [plan(s1, s2, s3)], main=pd.DataFrame(rows))
+    text = _text(events)
+    assert "前一步没有得出可以承接的加工厂，这一步和后面依赖它的步骤都不再查。" in text
+    assert "后面依赖它的步骤不再执行" not in text and "### 3. " not in text
+    assert len([q for q in data_queries(h) if q.tables[0] == "ZCTracking_ProblemList"]) == 1  # 只有第一步取了主表
+    assert _tables(events) == []

@@ -139,8 +139,9 @@ async def test_a5_master_data_failure_is_not_answered_as_not_found():
 
 async def test_a6_sorted_by_rate_does_not_say_latest():
     rows = [{**cn_data.main_rows()[0], "ID": i, "Numbers": f"ZC99020{i:02d}", "Rate": float(i)} for i in range(1, 26)]
-    reply = plan(step("list_issues", domains=CN, time=RECENT30, sort={"by": "不良率", "order": "降序"}))
-    h, events = await _go("近 30 天国内不良率最高的单", [reply, NARR], main=pd.DataFrame(rows))
+    # 说了 25 张：表格只给前 20 张，下面那句写排法（没说张数时 G95 只列前 10 张，表格不截，就没有这句）
+    reply = plan(step("list_issues", domains=CN, time=RECENT30, sort={"by": "不良率", "order": "降序"}, limit=25))
+    h, events = await _go("近 30 天国内不良率最高的 25 张单", [reply, NARR], main=pd.DataFrame(rows))
     # 表格下面那句（决策 2026-11-03「回答骨架与排版」）：按不良率排时不说「最近」
     note = next(e.data["text"] for e in events if e.type is EventType.DELTA and "表格" in e.data["text"])
     assert "最近" not in note and "不良率从高到低" in note

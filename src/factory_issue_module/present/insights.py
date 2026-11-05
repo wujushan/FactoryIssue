@@ -66,7 +66,7 @@ def params(step: Mapping[str, Any], answer: AnswerParams, today: date) -> dict[s
     """交沙箱的参数（`stats/lib/insights.py` 开头）。"""
     return {"today": today.isoformat(), "share": answer.concentrate_share, "repeat": answer.repeat_min,
             "months": answer.trend_months, "close_min": answer.close_min, "points": answer.points_max,
-            "focus": answer.focus_max, "skip": skips(step)}
+            "focus": answer.focus_max, "common": answer.similar_common_min, "skip": skips(step)}
 
 
 # ---------------------------------------------------------------------------- 要点的模板句
@@ -129,7 +129,35 @@ def _close(p: Mapping[str, Any]) -> str:
                     for x in p.get("各域已结案的单") or [])
 
 
-_TEMPLATES = {"集中": _concentrate, "积压": _backlog, "严重": _severe, "重复": _repeat, "时间": _months, "时效": _close}
+def _sim_dates(p: Mapping[str, Any]) -> str:
+    return f"最早一次建单 {p.get('最早一次建单')}，最近一次 {p.get('最近一次建单')}"
+
+
+def _sim_recur(p: Mapping[str, Any]) -> str:
+    return "；".join(f"{x.get('结案的单')} {x.get('结案日期')} 结案后，又建了 {x.get('张数')} 张相近的单"
+                    f"（{'、'.join(str(n) for n in x.get('之后又建的相近单') or [])}）" for x in p.get("各域") or [])
+
+
+def _sim_common(p: Mapping[str, Any]) -> str:
+    total = p.get("列出的张数")
+    parts = []
+    for what in ("供应商", "机型", "加工厂", "原因分类"):
+        for name, n in p.get(what) or []:
+            parts.append(f"{what}是「{name}」的 {n} 张")
+    return f"列出的 {total} 张里，" + "；".join(parts)
+
+
+def _sim_open(p: Mapping[str, Any]) -> str:
+    items = []
+    for x in p.get("未结案的单") or []:
+        stages = "」「".join(str(s) for s in x.get("停在的环节") or [])
+        items.append(f"{x.get('问题编号')}" + (f"（停在「{stages}」）" if stages else ""))
+    return "、".join(items)
+
+
+_TEMPLATES = {"集中": _concentrate, "积压": _backlog, "严重": _severe, "重复": _repeat, "时间": _months, "时效": _close,
+              # 类似问题的要点（G86）
+              "相近时间": _sim_dates, "结案后又出现": _sim_recur, "共同点": _sim_common, "未结案": _sim_open}
 
 
 def bullet(name: str, body: str) -> str:

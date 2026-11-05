@@ -157,11 +157,13 @@ async def run_turn(
     topics = await config_files.load(ctx, TOPIC_TERMS)
     dept_aliases = await config_files.load(ctx, DEPT_ALIASES)
     regions = await config_files.load(ctx, FACTORY_REGIONS)
+    # 规划前就要：规整第 20 条没说要几张时按 `top_n` 列（与「哪个最多」的前 N 名同一个数）
+    answer = await config_files.load(ctx, ANSWER_PARAMS)
     lazy = _LazyMaster(ctx, access, asked, dept_aliases, regions)
     planner = Planner(manifest, topics)
     inputs = PlanInputs(
         query=asked, history=history, previous_plan=previous.plan, previous_outcome=previous.outcome,
-        earlier_query=previous.earlier_query, today=today)
+        earlier_query=previous.earlier_query, today=today, default_limit=answer.top_n)
     llm = getattr(ctx, "llm", None)
     if filled is not None:
         result = PlanResult(plan=filled.plan, source="filled", inferred=list(filled.inferred),
@@ -190,7 +192,6 @@ async def run_turn(
 
     # 规划时没补过主数据的（追问选项直填）在这里取；规划时取过的不再取
     master, entities = await lazy.get()
-    answer = await config_files.load(ctx, ANSWER_PARAMS)
     sites = await config_files.load(ctx, LINK_SITES)
     seg = await config_files.load(ctx, SEGMENTATION)
     results = await workspace.read(ctx, workspace.RESULTS) if previous.turn else None

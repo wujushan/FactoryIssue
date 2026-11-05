@@ -28,6 +28,14 @@ def test_happen_time_is_found_date_column():
     assert columns.shown("found_date") == "现场发现日期"
 
 
+def test_supplier_said_alone_is_supplier_name_column():
+    """决策 2026-11-05「点名的数据项先对上再答」：只说「供应商」指供应商名称（总述「三域共用的说法」）。"""
+    from factory_issue_module.present import columns
+
+    assert columns.resolve("供应商") == columns.resolve("供应商名称") == "ven_name"
+    assert columns.resolve("手机号") is None
+
+
 def test_list_item_count_and_nth_rank_are_not_made_up_numbers():
     """T10：引用事实里列表的项数、「第 N 名」（N 不超过最长的列表）不算编数。"""
     assert _bad("共列出 3 个机型，第二名是 L1400。") == []

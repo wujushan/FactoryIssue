@@ -167,5 +167,22 @@ DETAIL_ABSENT: dict[tuple[str, str], str] = {
 
 
 def not_available(item: str) -> str:
-    """点名的项本助手没有（总述「业务定位」）。"""
-    return f"本助手没有『{item}』这一项"
+    """点名的项三个域的显示名与术语表都对不上（总述「本助手管不着的问题、看不懂的输入」）。只在这时用：对得上的项
+    这张单没填、本域没有，各有各的说法（`blocks_for`），说成没有这项信息会让用户以为不支持。"""
+    return f"制程问题单上没有『{item}』这项信息" if item.strip() else "制程问题单上没有这项信息"
+
+
+def domain_lacks(domain: str, item: str) -> str:
+    """点名的项对得上、但这个域的单上没有（别的域有）。"""
+    return f"{domain}单上没有『{item}』"
+
+
+def ticket_lacks(item: str) -> str:
+    """要看的内容这张单上没有（本域有这一块，这张单没有内容）。"""
+    return f"这张单上没有『{item}』的内容"
+
+
+#: 巴西、海外问责任归属部门：按问题跟进部门给并写明（术语表「责任归属部门」）
+RESP_DEPT_AS_FOLLOW = "{domain}没有责任归属部门，按问题跟进部门给"
+#: 国内物料问题不展示责任归属部门（术语表「责任归属部门」）
+RESP_DEPT_MATERIAL = "物料问题不展示责任归属部门"

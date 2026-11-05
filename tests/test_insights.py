@@ -169,3 +169,50 @@ async def test_write_points_without_model_and_with_must():
     llm = FakeLLM(["**共 13 张。**", "**共 13 张，物料问题最多。**"])
     head, _b = await narrative.write_points(llm, "q", None, None, FACTS, [], {}, "模板。", must=["物料问题"])
     assert head == "**共 13 张，物料问题最多。**" and "要点名最多的：物料问题" in llm.calls[1][-1]["content"]
+
+
+# ---------------------------------------------------------------------------- 类似问题的要点（G86）
+
+from factory_issue_module.stats.lib.insights import in_similar  # noqa: E402
+
+SQ = {**Q, "common": 2}
+
+
+def _sim(i: int, *, add: str, close: str | None = None, ven: str = "未填", reason: str = "未填", **kw) -> dict:
+    row = _row(i, add=add, unclosed=close is None, ven=ven, **kw)
+    row["_close"] = pd.Timestamp(close) if close else None
+    row["reason_class"] = reason
+    return row
+
+
+def test_similar_points_dates_recurrence_common_and_open():
+    rows = [_sim(1, add="2024-11-05", close="2025-01-10", ven="XX电路", reason="来料不良"),
+            _sim(2, add="2025-03-01", close="2025-04-01", ven="XX电路", reason="来料不良"),
+            _sim(3, add="2026-08-20", ven="XX电路", stages=("原因分析",)),
+            _sim(4, add="2026-02-01", close="2026-03-01", ven="YY电子", machines=("Q92",))]
+    got = in_similar([("国内", _view(rows))], SQ, {})
+    assert got["focus"] == [] and _kinds(got) == ["相近时间", "结案后又出现", "共同点", "未结案"]
+    dates, recur, common, opened = got["points"]
+    assert (dates["最早一次建单"], dates["最近一次建单"]) == ("2024-11-05", "2026-08-20")
+    # ZC9900001 结案后又建了 3 张（之后建的最多），不写之后只有 1、2 张的那几张
+    assert recur["各域"] == [{"域": "国内", "结案的单": "ZC9900001", "结案日期": "2025-01-10",
+                              "之后又建的相近单": ["ZC9900002", "ZC9900004", "ZC9900003"], "张数": 3}]
+    assert common["列出的张数"] == 4 and common["供应商"] == [["XX电路", 3]] and common["原因分类"] == [["来料不良", 2]]
+    assert common["机型"] == [["A920", 3]] and "加工厂" in common
+    assert opened["未结案的单"] == [{"域": "国内", "问题编号": "ZC9900003", "停在的环节": ["原因分析"]}]
+    assert insights.point_text(recur) == ("- **结案后又出现**：ZC9900001 2025-01-10 结案后，又建了 3 张相近的单"
+                                          "（ZC9900002、ZC9900004、ZC9900003）")
+    assert insights.point_text(opened) == "- **未结案**：ZC9900003（停在「原因分析」）"
+    assert insights.point_text(common).startswith("- **共同点**：列出的 4 张里，供应商是「XX电路」的 3 张")
+
+
+def test_similar_points_stay_within_a_domain_and_respect_limits():
+    cn = [_sim(1, add="2025-01-01", close="2025-02-01", factory="A厂")]
+    br = [{**_sim(9, add="2026-01-01", close="2026-01-20", factory="B厂", machines=("Q92",)), "_number": "BR9900009"}]
+    got = in_similar([("国内", _view(cn)), ("巴西", _view(br))], SQ, {})
+    assert "结案后又出现" not in _kinds(got)  # 巴西的单不算国内那张结案后又出现
+    assert "共同点" not in _kinds(got) and "未结案" not in _kinds(got)  # 都只有 1 张、都已结案
+    assert in_similar([("国内", _view(cn))], SQ, {}) == {"points": [], "focus": []}  # 只列出 1 张
+    four = [_sim(i, add=f"2026-0{i}-01", ven="XX电路") for i in range(1, 5)]
+    assert _kinds(in_similar([("国内", _view(four))], {**SQ, "points": 2}, {})) == ["相近时间", "共同点"]
+    assert "供应商" not in (in_similar([("国内", _view(four))], {**SQ, "skip": ["供应商"]}, {})["points"][1])

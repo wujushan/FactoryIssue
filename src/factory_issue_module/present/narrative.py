@@ -7,6 +7,8 @@ spike 搬来。2026-11-03 起这一段是回答最前面的结论，由它一个
 - 输入：用户问题、表格的说明、程序写在上面的提示行（【说明】）、`facts`（沙箱产出，列表已附项数）；按文字找单另有
   每域前几张单的内容（【列出的单】）与这类问法的写法（【写法】）。类似问题的 system 不带分析维度（`dims=False`）。
 - 问「哪个最多」时第一名（并列的全部）必须点到（`must`），没点全按不合格重写一次。
+- 结论句与要点另有【本次查的是】（实际查的条件与列法，与统计口径「筛选条件」同一份）；开头写了「按 X 理解」的
+  条件取值（`cover`）第一行要点到（决策 2026-11-04「按什么理解写在开头」，`POINTS_SYSTEM` 第 8 条）。
 - 核数逐句做：数、约数与比值、日期、点名的问题编号与机型 / 系列 / 工厂 / 部门 / 供应商都要能在事实、表格、问句里
   找到（§8.3）。「前 N 名」不查；「第 N 名」N 不超过事实里最长的列表时不查；「A 和 B 两类」不查；「这三张」照查；
   「这 / 那 + 两」本句前文用「和」「与」「、」点过名时不查。
@@ -67,7 +69,9 @@ POINTS_SYSTEM = """你是「制程问题查询助手」的回答撰写人。程�
 3. 第一行不逐域报张数（各域张数程序写在小标题上），需要时说合计或点名最多的域。
 4. 用业务说法，不出现英文代码、数据库表名或字段名。
 5. 不写统计口径，不写需关注的单，程序会另附。
-6. 【说明】是程序已经写在你这段上面的提示（如按什么理解、哪个域没计入），不要重复，但结论要与它一致。"""
+6. 【说明】是程序已经写在你这段上面的提示（如按什么理解、哪个域没计入），不要重复，但结论要与它一致。
+7. 有【写法】时按【写法】写。
+8. 【本次查的是】是程序实际查的条件和列法。第一行照它称呼这些单，不照搬用户问句里的形容词（如「比较严重」「特别高」）；只列了前几张时说「不良率最高的 10 张」这样的列法，不把列出的张数说成一共有几张。"""
 
 _CHAT_KW: dict[str, Any] = {"temperature": 0.2}
 
@@ -79,12 +83,14 @@ def narrative_system(manifest: ModuleManifest, *, dims: bool = True) -> str:
 
 
 def narrative_user(question: str, table: str | None, note: str | None, facts: Any, *, rows: str | None = None,
-                   guide: str | None = None) -> str:
+                   guide: str | None = None, reading: str | None = None) -> str:
     parts = [f"【用户问题】{question}"]
     if table:
         parts.append(f"【已展示的表格】{table}")
     if note:
         parts.append(f"【说明】{note}")
+    if reading:
+        parts.append(f"【本次查的是】{reading}")
     if rows:
         parts.append(f"【列出的单】\n{rows}")
     if guide:
@@ -300,8 +306,10 @@ async def write(llm: Any, manifest: ModuleManifest, question: str, table: str | 
 # ---------------------------------------------------------------------------- 结论句与要点（决策 2026-11-03「结论的要点与需关注的单」）
 
 
-def points_user(question: str, table: str | None, note: str | None, facts: Any, points: Sequence[Any]) -> str:
-    return narrative_user(question, table, note, facts) + "\n【要点】" + json.dumps(list(points), ensure_ascii=False)
+def points_user(question: str, table: str | None, note: str | None, facts: Any, points: Sequence[Any],
+                guide: str | None = None, reading: str | None = None) -> str:
+    return (narrative_user(question, table, note, facts, guide=guide, reading=reading) + "\n【要点】"
+            + json.dumps(list(points), ensure_ascii=False))
 
 
 _BULLET = re.compile(r"^\s*(?:[-*•·]|\d+[.、])\s*")
@@ -337,10 +345,13 @@ def _ok(question: str, note: str | None, table: str | None, facts: Any, text: st
 
 async def write_points(llm: Any, question: str, table: str | None, note: str | None, facts: Any,
                        points: Sequence[Mapping[str, Any]], entities: Mapping[str, Sequence[str]], fallback: str,
-                       *, must: Sequence[str] = ()) -> tuple[str, list[str]]:
+                       *, must: Sequence[str] = (), guide: str | None = None, reading: str | None = None,
+                       cover: Sequence[str] = ()) -> tuple[str, list[str]]:
     """结论句（加粗）与各条要点。
 
     - 结论句逐句核数，`must` 里的名字（问「哪个最多」时的第一名）要点全；不过时带着错处重写一次，仍不过用 `fallback`。
+    - `reading` 是【本次查的是】（实际查的条件与列法，决策 2026-11-04「按什么理解写在开头」）；`cover` 是开头写了
+      「按 X 理解」的条件取值（「A+」「A」），结论句要点到，没点到同样重写一次、仍不行用 `fallback`。
     - 要点逐条核：模型写的条数与【要点】项数一样时一条对一条，不合格的那一条换成程序的模板句（`point_text`）；
       条数对不上时全部用模板句。模型调用出错时结论句用 `fallback`、要点用模板句。"""
     from factory_issue_module.present import insights
@@ -351,7 +362,9 @@ async def write_points(llm: Any, question: str, table: str | None, note: str | N
         return head_fallback, templates
     scope = {**facts, "要点": list(points)} if isinstance(facts, dict) else {"事实": facts, "要点": list(points)}
     messages = [{"role": "system", "content": POINTS_SYSTEM},
-                {"role": "user", "content": points_user(question, table, note, facts, points)}]
+                {"role": "user", "content": points_user(question, table, note, facts, points, guide, reading)}]
+    # 核数时【本次查的是】里的数（一共几张、列出几张）与名称也算出处
+    checked = "\n".join(x for x in (note, reading) if x) or None
     bullets = templates
     for attempt in (1, 2):
         try:
@@ -365,7 +378,7 @@ async def write_points(llm: Any, question: str, table: str | None, note: str | N
             for item, point, template in zip(items, points, templates, strict=True):
                 name = str(point.get("名称") or point.get("发现"))
                 body = _body(item, name)
-                good, _bad = _ok(question, note, table, scope, body, entities)
+                good, _bad = _ok(question, checked, table, scope, body, entities)
                 got.append(insights.bullet(name, body) if good and body else template)
             dropped = sum(1 for g, t in zip(got, templates, strict=True) if g == t)
             if dropped:
@@ -375,16 +388,20 @@ async def write_points(llm: Any, question: str, table: str | None, note: str | N
             logger.info("factory_issue_points_count_mismatch", written=len(items), expected=len(points))
             bullets = templates
         core = head.replace("**", "").strip()
-        good, bad = _ok(question, note, table, scope, core, entities)
+        good, bad = _ok(question, checked, table, scope, core, entities)
         missed = [m for m in must if m and m not in core]
-        if good and not missed:
+        uncovered = [c for c in cover if c and c not in core]
+        if good and not missed and not uncovered:
             return insights.bold(core), bullets
-        logger.info("factory_issue_narrative_rejected", attempt=attempt, bad=len(bad), missed=len(missed))
+        logger.info("factory_issue_narrative_rejected", attempt=attempt, bad=len(bad), missed=len(missed),
+                    uncovered=len(uncovered))
         wrong = "；".join(f"「{b['句子']}」里的「{'、'.join(map(str, b['事实里没有的数']))}」" for b in bad)
         if wrong:
             ask = f"第一行里这些在【事实】【要点】里找不到，请只用里面的数字和名称重写：{wrong}"
         elif missed:
             ask = f"第一行要点名最多的：{'、'.join(missed)}（并列的都要点到）。请重写。"
+        elif uncovered:
+            ask = f"第一行要照【本次查的是】写明这些单是按什么查的，点到：{'、'.join(uncovered)}。请重写。"
         else:
             ask = "请按要求重写：第一行是加粗的一句结论，之后每条要点一行。"
         messages = [*messages[:2], {"role": "assistant", "content": text}, {"role": "user", "content": ask}]

@@ -160,6 +160,8 @@ class AnswerParams:
     repeat_min: int = 3
     trend_months: int = 3
     close_min: int = 5
+    #: 类似问题的「共同点」至少几张（G86）
+    similar_common_min: int = 2
 
 
 # ---------------------------------------------------------------- Markdown 两种形态
@@ -396,7 +398,7 @@ def segmentation_from(data: Mapping[str, Any]) -> Segmentation:
 #: 结论里的要点与需关注的单几项的取值范围（整数，含两头；决策 2026-11-03「结论的要点与需关注的单」）
 INSIGHT_RANGES: dict[str, tuple[int, int]] = {
     "points_max": (0, 6), "focus_max": (0, 5), "concentrate_share": (1, 100), "repeat_min": (2, 1000),
-    "trend_months": (2, 120), "close_min": (1, 1000),
+    "trend_months": (2, 120), "close_min": (1, 1000), "similar_common_min": (2, 10),
 }
 _ANSWER_KEYS = (
     "top_n", "export_threshold", "table_rows", "judge_max", "rerank_max",

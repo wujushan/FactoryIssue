@@ -115,6 +115,7 @@ def opening(seg: dict[str, Any], label: str, scope: str, *, tie: bool = True) ->
         types = f.get("按问题类型") or []
         if types:
             text += "；问题类型分布：" + "、".join(f"{name} {n} 张" for name, n in types)
+        text += distribution_blanks(f, "问题类型")
         if seg.get("cross"):
             return text + _cross_metrics(f)
         return text + _metrics_text(f)
@@ -129,8 +130,67 @@ def opening(seg: dict[str, Any], label: str, scope: str, *, tie: bool = True) ->
         # 第一名全体并列、又超过要的名次时，「第 N 名并列」点的是同一批名字，只说前一句（S2 复评留下的一处）
         if tie and tied and f.get("并列名次") and set(tied) != {str(x) for x in first}:
             text += f"；第 {f['并列名次']} 名并列，{'、'.join(tied)}都列出"
+    elif _only_unranked(seg):  # 问题等级 A+、A、B、C 没有单也列出，所以先看这一条
+        text += "；" + _only_text(seg)
     elif pairs:
         text += f"，按{title}分为 {f.get('按' + title + '（项数）', 0)} 组"
+    return text
+
+
+# ---------------------------------------------------------------------------- 不参加排名的「未填」（G87、G88）
+
+
+def _only_unranked(seg: dict[str, Any]) -> bool:
+    info = seg.get("unranked") or {}
+    return seg.get("kind") == "group" and bool(info.get("rows")) and bool(info.get("only"))
+
+
+def _blank_parts(info: dict[str, Any]) -> list[str]:
+    """「3 张没填机型（其中物料单 2 张）」「1 张问题类型为『其他（未识别）』」；张数都来自沙箱。"""
+    title = str(info.get("title") or "")
+    out = []
+    for value, n in info.get("rows") or []:
+        if value == "未填":
+            material = int(info.get("material") or 0)
+            out.append(f"{n} 张没填{title}" + (f"（其中物料单 {material} 张）" if material else ""))
+        elif title and title in str(value):  # 「未识别机型」：不写成「机型为『未识别机型』」
+            out.append(f"{n} 张为「{value}」")
+        else:
+            out.append(f"{n} 张{title}为「{value}」")
+    return out
+
+
+def distribution_blanks(facts: dict[str, Any], title: str) -> str:
+    """分布里不参加排名的那几项（沙箱放在「不参加排名的 X」）：「；另有 5 张没填问题类型」，没有时为空串。"""
+    rows = facts.get("不参加排名的" + title) or []
+    parts = _blank_parts({"title": title, "rows": rows})
+    return ("；另有 " + "、".join(parts)) if parts else ""
+
+
+def _only_text(seg: dict[str, Any]) -> str:
+    """只有不参加排名的几组：不点名第一（总述「排名、长清单与导出」）。"""
+    info = seg.get("unranked") or {}
+    title = str(info.get("title") or "")
+    rows = info.get("rows") or []
+    found = int(seg.get("found") or 0)
+    if len(rows) == 1 and rows[0][0] == "未填" and int(rows[0][1]) == found:
+        material = int(info.get("material") or 0)
+        head = f"这 {found} 张单都没填{title}" + (f"（其中物料单 {material} 张）" if material else "")
+    else:
+        head = "其中 " + "、".join(_blank_parts(info))
+    return f"{head}，没有可以排名的{title}"
+
+
+def unranked_note(seg: dict[str, Any], label: str, ranking: bool) -> str:
+    """结论句后面那句（总述「排名、长清单与导出」）：「另有 N 张没填机型（其中物料单 M 张），不参加排名」，没填的比第一名
+    还多时再加一句。只有这几组时已写在模板句里（`_only_text`），这里不写；`label` 是几张表共用一段结论时的域名。"""
+    info = seg.get("unranked") or {}
+    if seg.get("kind") != "group" or not info.get("rows") or info.get("only"):
+        return ""
+    title = str(info.get("title") or "")
+    text = f"{label}另有 " + "、".join(_blank_parts(info)) + ("，不参加排名" if ranking else "") + "。"
+    if info.get("over_first"):
+        text += f"没填{title}的单比排第一的还多，排名只反映已填{title}的单。"
     return text
 
 

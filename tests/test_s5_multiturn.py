@@ -367,7 +367,9 @@ async def test_verify_replays_the_plan_and_says_it_matches():
     assert len(c.h.llm.calls) == before + 1  # 只有规划那一次，不写分析
     text = _text(events)
     assert "按上一轮的条件重新查了一遍" in text and "国内：与上一轮一致" in text and "结果与上一轮一致" in text
-    assert "机型：A920" in text and "上一轮按「按条件查」理解" in text
+    # 上一轮开头没写「按 X 理解」（条件都是原话），复核时也不另说，不搬规划器的原文（决策 2026-11-04「按什么理解
+    # 写在开头」）；条件在统计口径里
+    assert "机型：A920" in text and "上一轮按「" not in text and "上一轮开头写明" not in text
     assert any(q.tables[0] == "ZCTracking_ProblemList" for q in data_queries(c.h))
     recs = _buttons(events)
     assert recs and recs[0]["query"] == "换个理解：A920 系列" and recs[0]["label"] == "A920 系列"
