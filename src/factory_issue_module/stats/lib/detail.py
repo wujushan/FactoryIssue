@@ -55,8 +55,18 @@ def dt_add(fields, label, value, docs=None):
 
 def dt_put(fields, label, value):
     """总是显示，空写「未填」。"""
-    s = value if isinstance(value, str) and value.strip() else fi_show(value)
-    fields.append([label, s])
+    fields.append([label, dt_show(value)])
+
+
+def dt_values(v, P, domain):
+    """「一单一行」视图各列的显示值：显示名 → 文字。问单张单的某一项、各块里又没有这一栏时（没填就不显示的栏、
+    物料问题不展示的责任归属部门）照它答（`issue_detail.blocks_for`）。问题编号已在抬头，问题描述在描述一块。"""
+    names = P["names"].get(domain) or {}
+    return {label: dt_show(v[k]) for k, label in names.items() if k in v and k not in ("number", "desc")}
+
+
+def dt_show(value):
+    return value if isinstance(value, str) and value.strip() else fi_show(value)
 
 
 def dt_time(v):
@@ -618,7 +628,8 @@ def dt_cn(data, E, L, T, P):
             des.append([L["cn.DesignDate"], fi_day(fi_ts(r.get("DesignDate")))])
         blocks["design"] = dt_block("design", L["design_change"], des)
         out.append({"domain": "国内", "id": pid, "number": v["_number"], "blocks": blocks, "order": order,
-                    "material": material, "facts": {"驳回次数": rejects, "其他在线订单条数": len(others)}})
+                    "material": material, "facts": {"驳回次数": rejects, "其他在线订单条数": len(others)},
+                    "values": dt_values(v, P, "国内")})
     return out
 
 
@@ -827,7 +838,7 @@ def dt_br(data, E, L, T, P):
         blocks["stop"] = dt_block("stop", T["stop_title"], stop, notes=[T["br_no_restart"]])
         blocks["five_why"] = dt_block("five_why", "5Why", notes=[T["br_five_why"]])
         out.append({"domain": "巴西", "id": pid, "number": v["_number"], "blocks": blocks, "order": order,
-                    "material": False, "facts": {}})
+                    "material": False, "facts": {}, "values": dt_values(v, P, "巴西")})
     return out
 
 
@@ -1040,7 +1051,7 @@ def dt_os(data, E, L, T, P):
         blocks["stop"] = dt_block("stop", T["stop_title"], stop)
         blocks["five_why"] = dt_block("five_why", "5Why", notes=[T["os_five_why"]])
         out.append({"domain": "海外", "id": pid, "number": v["_number"], "blocks": blocks, "order": order,
-                    "material": False, "facts": {"驳回次数": rejects}})
+                    "material": False, "facts": {"驳回次数": rejects}, "values": dt_values(v, P, "海外")})
     return out
 
 

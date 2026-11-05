@@ -27,6 +27,7 @@ from factory_issue_module.domains.shared import KIND_MACHINE, KIND_PERSON, Maste
 from factory_issue_module.plan import names, schema
 from factory_issue_module.plan.timespan import Span
 from factory_issue_module.present import columns
+from factory_issue_module.turn import errors
 
 logger = structlog.get_logger(__name__)
 
@@ -399,11 +400,11 @@ def enum_codes(fld: str, values: Sequence[str], table: dict[int, str]) -> list[i
 
 def other_column(f: dict, values: Sequence[str], neg: bool, out: DomainStep, needs: dict[str, str],
                  domain: Domain) -> None:
-    """「其他」条件：点名的列先对显示名与术语表；对不上的写「本助手没有『X』这一项」，本域没有的列整域不计入。"""
+    """「其他」条件：点名的列先对显示名与术语表；对不上的写「制程问题单上没有『X』这项信息」，本域没有的列整域不计入。"""
     said = str(f.get("column") or "")
     key = columns.resolve(said)
     if key is None:
-        out.notes.append(f"本助手没有『{said or '这一项'}』这一项")
+        out.notes.append(errors.not_available(said))
         return
     if key not in columns.view_columns(domain):
         out.excluded.append(f"{domain.label}没有「{columns.shown(key)}」，{domain.label}未计入")

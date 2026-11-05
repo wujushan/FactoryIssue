@@ -842,7 +842,7 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
     metrics: list[str] = []
     if run.skill == "list_issues":
         keys, missing = list_issues.columns_for(run.step)
-        head += [f"本助手没有『{m}』这一项" for m in missing]
+        head += [errors.not_available(m) for m in missing]
         for d in executed:
             keys_by[d.label], absent = list_issues.domain_keys(keys, d, ADAPTERS[d].KEY_ALIAS)
             if absent:

@@ -353,7 +353,7 @@ async def _plan(llm: Any, step: dict, topics: TopicTerms, seg: Segmentation) -> 
     words = _words(p.get("terms"))
     fields = resolve_fields(_words(p.get("fields")))
     first, measure = list(seg.groups["first"]), list(seg.groups["second"])
-    notes = [f"本助手没有『{x}』这一栏" for x in fields.unknown]
+    notes = [f"『{x}』不是可以按文字查找的栏目" for x in fields.unknown]
 
     if mode == "类似问题" or not (topic or words or approach):
         said = phenomenon or topic

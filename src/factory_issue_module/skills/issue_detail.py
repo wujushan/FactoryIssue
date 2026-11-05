@@ -9,7 +9,8 @@
 - 取数：一域一次，主表含叙述列、全部子表、文档、主数据；有 CAR 报告权限、物料问题且 CAR 报告 ID 有值时才读
   CAR 报告（J-P07）。剥图、派生、各块显示条件都在沙箱里（`stats/lib/detail.py`）。
 - 要看什么（`aspects`）对到各块；没说要看什么时给该域的整张详情（各域「单张单详情」的块与顺序）。本域没有的项
-  按 `errors.DETAIL_ABSENT` 说明；「其他:X」先在各块的标签里找，找不到就说本助手没有这一项。
+  按 `errors.DETAIL_ABSENT` 说明；「其他:X」先对显示名与术语表、再在各块的标签里找，三个域都对不上才说制程问题单上
+  没有这项信息（`_other`）。
 - 链接在这里拼：问题编号、CAR 报告（对所有用户生成）、附件（摘要要的值不进沙箱脚本）。
 """
 
@@ -230,29 +231,65 @@ def blocks_for(ticket: dict[str, Any], aspects: Sequence[str]) -> tuple[list[str
     notes: list[str] = []
     labels: list[str] = []
     for a in aspects:
-        if a.startswith("其他"):
-            said = a.partition(":")[2] or a.partition("：")[2] or a
-            hit = [f[0] for b in blocks.values() for f in b["fields"] if f[0] and f[0] in said]
-            if hit:
-                labels += [x for x in hit if x not in labels]
-            elif ticket.get("material") and any(w in said for w in _MATERIAL_WORDS):
-                keys.append("machine")
-            else:
-                notes.append(errors.not_available(said))
-            if ticket.get("material") and any(w in said for w in _MATERIAL_WORDS) and "machine" not in keys:
-                keys.append("machine")
+        if a.startswith("其他") or a not in ASPECT_BLOCKS:
+            said = (a.partition(":")[2] or a.partition("：")[2] or a) if a.startswith("其他") else a
+            _other(ticket, dom, said, keys, notes, labels)
             continue
-        for key in ASPECT_BLOCKS.get(a, ()):
+        for key in ASPECT_BLOCKS[a]:
             key = _DOMAIN_ALIAS.get((dom, key), key)
             if key == "process" and dom is Domain.BRAZIL:
                 keys += ["process", *[k for k in ticket["order"] if k.startswith("stage:")]]
             elif key in blocks:
                 keys.append(key)
             else:
-                notes.append(errors.DETAIL_ABSENT.get((dom.label, key), errors.not_available(a)))
-        if a not in ASPECT_BLOCKS:
-            notes.append(errors.not_available(a))
+                notes.append(errors.DETAIL_ABSENT.get((dom.label, key), errors.ticket_lacks(a)))
     return list(dict.fromkeys(keys)), list(dict.fromkeys(notes)), labels
+
+
+#: 只说「供应商」时连供应商编号一起给（总述「三域共用的说法」）
+_ALONG = {"ven_name": ("ven_code",)}
+
+
+def _other(ticket: dict[str, Any], dom: Domain, said: str, keys: list[str], notes: list[str],
+           labels: list[str]) -> None:
+    """「其他:X」与不在 ASPECT_BLOCKS 里的项（总述「本助手管不着的问题、看不懂的输入」点名数据项一条）：
+
+    1. 对上显示名或术语表（`columns.resolve`）：本域有就给这张单上的值，各块里没有这一栏时（没填就不显示的栏）
+       照「一单一行」的值给，物料问题的责任归属部门说明不展示；本域没有就说明本域没有，巴西、海外的责任归属部门
+       按问题跟进部门给。
+    2. 对不上时在各块的标签里找说到的栏（「影响数量为何为空」），「物料」单说到机型、影响数量等按「物料」单的规则说明。
+    3. 都对不上才说制程问题单上没有这项信息。
+    """
+    material_words = bool(ticket.get("material")) and any(w in said for w in _MATERIAL_WORDS)
+    key = columns.resolve(said)
+    if key is not None:
+        names = columns.view_columns(dom)
+        values = ticket.get("values") or {}
+        shown = {f[0] for b in ticket["blocks"].values() for f in b["fields"]}
+        if key == "resp_dept" and dom is not Domain.DOMESTIC:
+            notes.append(errors.RESP_DEPT_AS_FOLLOW.format(domain=dom.label))
+            key = "follow_dept"
+        if key not in names:
+            notes.append(errors.domain_lacks(dom.label, columns.shown(key)))
+        elif key == "resp_dept" and values.get(names[key]) == "—":
+            notes.append(errors.RESP_DEPT_MATERIAL)
+        else:
+            for k in (key, *_ALONG.get(key, ())):
+                label = names.get(k)
+                # 「物料」单不展示的栏（影响数量等）不从「一单一行」的值里补，按「物料」单的规则说明
+                if label is not None and (label in shown or (label in values and not material_words)) \
+                        and label not in labels:
+                    labels.append(label)
+        if material_words and "machine" not in keys:
+            keys.append("machine")
+        return
+    hit = [f[0] for b in ticket["blocks"].values() for f in b["fields"] if f[0] and f[0] in said]
+    if hit:
+        labels += [x for x in hit if x not in labels]
+    elif not material_words:
+        notes.append(errors.not_available(said))
+    if material_words and "machine" not in keys:
+        keys.append("machine")
 
 
 def _value(field: Sequence[Any], sites: Any) -> str:
@@ -331,8 +368,9 @@ def render(ticket: dict[str, Any], keys: Sequence[str], notes: Sequence[str], la
         seen.add(text)
         return True
 
-    if labels:
-        fields = {f[0]: f for b in blocks.values() for f in b["fields"]}
+    if labels:  # 各块里的栏优先（带附件、链接）；块里没有的取「一单一行」的值（`blocks_for`）
+        fields: dict[str, Sequence[Any]] = {k: [k, v] for k, v in (ticket.get("values") or {}).items()}
+        fields.update({f[0]: f for b in blocks.values() for f in b["fields"]})
         lines += [line for line in (_field_line(fields[x], sites, None) for x in labels if x in fields) if once(line)]
     for key in keys:
         b = blocks.get(key)
