@@ -9,8 +9,10 @@
 - 取数：一域一次，主表含叙述列、全部子表、文档、主数据；有 CAR 报告权限、物料问题且 CAR 报告 ID 有值时才读
   CAR 报告（J-P07）。剥图、派生、各块显示条件都在沙箱里（`stats/lib/detail.py`）。
 - 要看什么（`aspects`）对到各块；没说要看什么时给该域的整张详情（各域「单张单详情」的块与顺序）。本域没有的项
-  按 `errors.DETAIL_ABSENT` 说明；「其他:X」先对显示名与术语表、再在各块的标签里找，三个域都对不上才说制程问题单上
-  没有这项信息（`_other`）。
+  按 `errors.DETAIL_ABSENT` 说明；「其他:X」先对显示名与术语表、再对块名与环节名、本域不在查询范围的几项，最后在各块的
+  标签里找，都对不上才说制程问题单上没有这项信息（`_other`）。
+- 问「完整信息」「所有字段」时（`asks_everything`）给整张详情，另给问句里点到的、整张详情里没有的项；模型列出、
+  用户没点到的项不给、也不逐条说明本域有没有（`named_aspects`，决策 2026-11-06「问完整信息时给整张详情」）。
 - 链接在这里拼：问题编号、CAR 报告（对所有用户生成）、附件（摘要要的值不进沙箱脚本）。
 """
 
@@ -18,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -29,7 +33,7 @@ from forge_core.events import Event
 
 from factory_issue_module.config import files as config_files
 from factory_issue_module.declarations import DOMAINS, SEGMENTATION, Domain
-from factory_issue_module.domains import brazil, domestic, numbers, overseas
+from factory_issue_module.domains import brazil, domestic, enums, numbers, overseas
 from factory_issue_module.plan import schema
 from factory_issue_module.present import columns, links
 from factory_issue_module.stats import runner
@@ -58,6 +62,64 @@ _DOMAIN_ALIAS = {(Domain.OVERSEAS, "orders"): "delivery"}
 REASON_ASPECTS = ("原因", "措施", "处理结果")
 #: 「其他:X」里说到这几项、又是「物料」单时，按「物料」单的规则说明（国内「物料标识与关联订单」）
 _MATERIAL_WORDS = ("物料", "机型", "影响数量", "产品在制属性")
+
+#: 问「完整信息」「所有字段」（决策 2026-11-06「问完整信息时给整张详情」）。「完整处理过程」不在其中
+_EVERYTHING = re.compile(r"(完整|全部|所有|整张|详细)的?(信息|字段|内容|详情|资料|栏目)")
+#: 看用户有没有点到某一项：问句里的说法（缺省就是这一项本身）
+_SAID_AS: dict[str, tuple[str, ...]] = {
+    "可能原因": ("可能原因", "可能问题原因", "可能的问题原因"), "5Why": ("5Why", "五问"),
+    "完整处理过程": ("处理过程", "操作记录", "流转记录", "处理步骤"), "设计更改": ("设计更改", "设计变更"),
+    "停线与重启": ("停线", "重启"),
+}
+#: 包含这一项、意思却不同的说法，先从问句里去掉（「可能问题原因」不是「原因」，「可能问题物料」不是「物料」）
+_SHADOWED: dict[str, tuple[str, ...]] = {
+    "原因": ("可能问题原因", "可能的问题原因", "可能原因", "原因分类"),
+    "物料": ("可能问题物料", "可能的问题物料"),
+    "订单": ("其他在线订单",),
+    "责任人": ("当前责任人",),
+}
+#: 「其他:X」说到的块（不在 ASPECTS 里的叫法，长的在前）：说法 → 块。本域没有这一块时按 `DETAIL_ABSENT` 说明
+_BLOCK_WORDS: tuple[tuple[str, str], ...] = (
+    ("可能的问题物料", "possible_inv"), ("可能问题物料", "possible_inv"), ("可能的问题原因", "possible_reasons"),
+    ("可能问题原因", "possible_reasons"), ("生产订单", "orders"), ("小板订单", "orders"),
+)
+_DOMAIN_BLOCK_WORDS: dict[Domain, tuple[tuple[str, str], ...]] = {Domain.BRAZIL: (("库存", "stock"),)}
+#: 本域不在查询范围的几项（国内「查询范围」、海外「不做」）：(说到的词, 同时出现就不算的词) → 说明
+_OUT_OF_SCOPE: dict[Domain, tuple[tuple[str, tuple[str, ...], str], ...]] = {
+    Domain.DOMESTIC: (("库存", (), errors.CN_IQC_STOCK), ("CKD", (), errors.CN_IQC_STOCK),
+                      ("在线", ("订单", "数量"), errors.CN_IQC_STOCK), ("风险订单", (), errors.CN_RISK_ORDERS)),
+    Domain.OVERSEAS: (("库存", (), errors.OS_OUT_OF_SCOPE), ("在线", ("订单",), errors.OS_OUT_OF_SCOPE),
+                      ("退货单号", (), errors.OS_OUT_OF_SCOPE)),
+}
+#: 各域单张单详情的环节名（说到环节、这张单上没有这一块时说这张单上没有它的内容）
+_STAGE_NAMES = tuple(dict.fromkeys([*enums.CN_DETAIL_STAGES.values(), *errors.DETAIL_TEXTS["br_stages"],
+                                    *enums.OS_STAGES]))
+
+
+def _norm(text: object) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text or ""))).lower()
+
+
+def asks_everything(query: str) -> bool:
+    """问句要这张单的完整信息、所有字段（决策 2026-11-06「问完整信息时给整张详情」）。"""
+    return bool(_EVERYTHING.search(unicodedata.normalize("NFKC", query or "")))
+
+
+def named_aspects(aspects: Sequence[str], query: str) -> list[str]:
+    """问完整信息时只留用户点到的项：「其他:X」与列表外的词照留（模型照用户的话写的）；列表里的项要在问句里说到，
+    模型把整份列表抄上的不算。"""
+    q = _norm(query)
+    out: list[str] = []
+    for a in aspects:
+        if a not in ASPECT_BLOCKS:
+            out.append(a)
+            continue
+        text = q
+        for longer in _SHADOWED.get(a, ()):
+            text = text.replace(_norm(longer), "")
+        if any(_norm(w) in text for w in _SAID_AS.get(a, (a,))):
+            out.append(a)
+    return out
 
 
 @dataclass
@@ -221,17 +283,19 @@ async def _two(T: Any, d: Domain, nums: Sequence[str], ids: Sequence[int]) -> di
 # ---------------------------------------------------------------------------- 呈现
 
 
-def blocks_for(ticket: dict[str, Any], aspects: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
-    """(要给的块, 本域没有的项的说明, 「其他:X」里对上的标签)。没说要看什么时给整张详情。"""
+def blocks_for(ticket: dict[str, Any], aspects: Sequence[str], full: bool = False
+               ) -> tuple[list[str], list[str], list[str]]:
+    """(要给的块, 本域没有的项的说明, 「其他:X」里对上的标签)。没说要看什么时给整张详情；`full`（问完整信息）时先给
+    整张详情，再按 `aspects`（已经只留用户点到的，`named_aspects`）补上整张详情里没有的。"""
     dom = _BY_LABEL[ticket["domain"]]
     blocks = ticket["blocks"]
     if not aspects:
         return list(ticket["order"]), [], []
-    keys: list[str] = []
+    keys: list[str] = list(ticket["order"]) if full else []
     notes: list[str] = []
     labels: list[str] = []
     for a in aspects:
-        if a.startswith("其他") or a not in ASPECT_BLOCKS:
+        if a not in ASPECT_BLOCKS:  # 「其他在线订单」也以「其他」开头，先认列表里的项
             said = (a.partition(":")[2] or a.partition("：")[2] or a) if a.startswith("其他") else a
             _other(ticket, dom, said, keys, notes, labels)
             continue
@@ -257,11 +321,16 @@ def _other(ticket: dict[str, Any], dom: Domain, said: str, keys: list[str], note
     1. 对上显示名或术语表（`columns.resolve`）：本域有就给这张单上的值，各块里没有这一栏时（没填就不显示的栏）
        照「一单一行」的值给，物料问题的责任归属部门说明不展示；本域没有就说明本域没有，巴西、海外的责任归属部门
        按问题跟进部门给。
-    2. 对不上时在各块的标签里找说到的栏（「影响数量为何为空」），「物料」单说到机型、影响数量等按「物料」单的规则说明。
-    3. 都对不上才说制程问题单上没有这项信息。
+    2. 本域不在查询范围的几项（国内 IQC 部分的库存、在线、CKD 机型，风险订单；海外的其他在线、库存、退货单号）
+       说明请到管理页面查看。
+    3. 说到块名（「生产订单」「可能问题物料」）或环节名（「SQE跟进」）：这张单有这一块就给，没有就说明。
+    4. 再在各块的标签里找说到的栏（「影响数量为何为空」），「物料」单说到机型、影响数量等按「物料」单的规则说明。
+    5. 都对不上才说制程问题单上没有这项信息。
     """
     material_words = bool(ticket.get("material")) and any(w in said for w in _MATERIAL_WORDS)
     key = columns.resolve(said)
+    if key is None and _special(ticket, dom, said, keys, notes):
+        return
     if key is not None:
         names = columns.view_columns(dom)
         values = ticket.get("values") or {}
@@ -290,6 +359,31 @@ def _other(ticket: dict[str, Any], dom: Domain, said: str, keys: list[str], note
         notes.append(errors.not_available(said))
     if material_words and "machine" not in keys:
         keys.append("machine")
+
+
+def _special(ticket: dict[str, Any], dom: Domain, said: str, keys: list[str], notes: list[str]) -> bool:
+    """`_other` 第 2、3 步：不在查询范围的项、块名与环节名。对上了返回 True。"""
+    s = _norm(said)
+    for word, unless, note in _OUT_OF_SCOPE.get(dom, ()):
+        if _norm(word) in s and not any(_norm(u) in s for u in unless):
+            notes.append(note)
+            return True
+    blocks = ticket["blocks"]
+    for word, key in (*_DOMAIN_BLOCK_WORDS.get(dom, ()), *_BLOCK_WORDS):
+        if _norm(word) in s:
+            if key in blocks:
+                keys.append(key)
+            else:
+                notes.append(errors.DETAIL_ABSENT.get((dom.label, key), errors.ticket_lacks(said)))
+            return True
+    stages = [k for k, b in blocks.items() if k.startswith("stage:") and b.get("title") and _norm(b["title"]) in s]
+    if stages:
+        keys += stages
+        return True
+    if any(_norm(n) in s for n in _STAGE_NAMES):
+        notes.append(errors.ticket_lacks(said))
+        return True
+    return False
 
 
 def _value(field: Sequence[Any], sites: Any) -> str:
@@ -346,8 +440,9 @@ def _table_event(table: dict[str, Any], title: str, sites: Any) -> Event:
 
 
 def render(ticket: dict[str, Any], keys: Sequence[str], notes: Sequence[str], labels: Sequence[str],
-           aspects: Sequence[str], sites: Any, head_note: str | None = None) -> list[Event]:
-    """一张单的事件：抬头一行，再按块给；表格单独成事件。"""
+           aspects: Sequence[str], sites: Any, head_note: str | None = None, full: bool = False) -> list[Event]:
+    """一张单的事件：抬头一行，再按块给；表格单独成事件。`full`（问完整信息）时点到的栏放在整张详情之后，
+    各块里已经给过的不再给。"""
     dom = _BY_LABEL[ticket["domain"]]
     blocks = ticket["blocks"]
     lines = [f"**{dom.label} {links.issue(sites, dom, ticket['number'], ticket['id'])}**"]
@@ -368,10 +463,16 @@ def render(ticket: dict[str, Any], keys: Sequence[str], notes: Sequence[str], la
         seen.add(text)
         return True
 
-    if labels:  # 各块里的栏优先（带附件、链接）；块里没有的取「一单一行」的值（`blocks_for`）
+    def named_fields() -> None:  # 各块里的栏优先（带附件、链接）；块里没有的取「一单一行」的值（`blocks_for`）
         fields: dict[str, Sequence[Any]] = {k: [k, v] for k, v in (ticket.get("values") or {}).items()}
         fields.update({f[0]: f for b in blocks.values() for f in b["fields"]})
-        lines += [line for line in (_field_line(fields[x], sites, None) for x in labels if x in fields) if once(line)]
+        got = [line for line in (_field_line(fields[x], sites, None) for x in labels if x in fields) if once(line)]
+        if got and full and lines and lines[-1]:
+            lines.append("")
+        lines.extend(got)
+
+    if labels and not full:
+        named_fields()
     for key in keys:
         b = blocks.get(key)
         if b is None:
@@ -388,20 +489,40 @@ def render(ticket: dict[str, Any], keys: Sequence[str], notes: Sequence[str], la
         tables = [t for t in b["tables"] if once(repr((t.get("title"), t.get("columns"), t.get("rows"))))]
         if b.get("title") and key != "header" and (body or notes_b):
             lines.append(f"\n**{b['title']}**")
-        lines += body + notes_b
+        lines += body
+        if notes_b:
+            _gap(lines)
+            lines += notes_b
         for table in tables:
             if table.get("total", 0) > table.get("shown", 0):
                 lines.append(f"共 {table['total']} 条，表格列出前 {table['shown']} 条。")
             flush()
             events.append(_table_event(table, f"{dom.label} {ticket['number']} {table['title']}", sites))
         lines += _tail_lines(b, key, keys, blocks, sites, once)
+    if labels and full:
+        named_fields()
+    tail: list[str] = []
     if "驳回" in aspects:
         n = (ticket.get("facts") or {}).get("驳回次数")
         if isinstance(n, int):
-            lines.append(f"处理过程里驳回过 {n} 次。" if n else "处理过程里没有驳回记录。")
-    lines += list(notes)
+            tail.append(f"处理过程里驳回过 {n} 次。" if n else "处理过程里没有驳回记录。")
+    tail += [_sentence(n) for n in notes if once(n)]
+    if tail:  # 另起一段；几句时列成要点，不接在上一块最后一项后面
+        if lines and lines[-1]:
+            lines.append("")
+        lines += tail if len(tail) == 1 else [f"- {x}" for x in tail]
     flush()
     return events
+
+
+def _gap(lines: list[str]) -> None:
+    """上一行是列表项（或列表项里换行的内容）时空一行，免得接下来的说明被并进那一项。"""
+    if lines and lines[-1].startswith(("- ", "  ")):
+        lines.append("")
+
+
+def _sentence(text: str) -> str:
+    return text if text.endswith(("。", "！", "？", "）", "」")) else f"{text}。"
 
 
 def _tail_lines(b: dict[str, Any], key: str, keys: Sequence[str], blocks: Mapping[str, Any], sites: Any,

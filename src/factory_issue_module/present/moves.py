@@ -216,6 +216,12 @@ def _car_content(ticket: Mapping[str, Any]) -> bool:
     return isinstance(car, Mapping) and has_content(car)
 
 
+def _whole_shown(t: Mapping[str, Any], shown: Sequence[str]) -> bool:
+    """给了整张详情的各块（问完整信息时 aspects 不为空，也给了整张详情）。"""
+    order = list(t.get("order") or [])
+    return bool(order) and set(order) <= set(shown)
+
+
 def asked_keys(d: Done) -> list[str]:
     """这一步执行过的意图键（与用户怎么说无关）。整张详情另记「原因与措施」，单上有 CAR 报告内容时不记（决策
     2026-11-02 第 3 条）。"""
@@ -225,7 +231,7 @@ def asked_keys(d: Done) -> list[str]:
         for t in d.tickets:
             number = str(t.get("number") or "")
             out += [detail_key(number, b) for b in d.shown.get(number, [])]
-            if not aspects:
+            if not aspects or _whole_shown(t, d.shown.get(number, [])):
                 out.append(detail_key(number, WHOLE))
                 if not _car_content(t):
                     out.append(detail_key(number, "reasons"))
@@ -710,7 +716,7 @@ def _after_detail(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
             continue  # 只有填写问题那一步的附件，整张详情里已经给了
         add(Candidate(move=ASPECT, key=detail_key(number, block), query=f"{number} 的{name}", must=(number,),
                       hint=_block_hint(block, b, t), plan=detail_plan(number, asp)))
-    if aspects:
+    if aspects and not _whole_shown(t, list(shown)):
         add(Candidate(move=ASPECT, key=detail_key(number, WHOLE), query=f"{number} 的详情", must=(number,),
                       hint="这张单还没看整张详情", plan=detail_plan(number)))
     values = _field_values(t)

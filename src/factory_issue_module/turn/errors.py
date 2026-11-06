@@ -165,7 +165,17 @@ DETAIL_ABSENT: dict[tuple[str, str], str] = {
     ("海外", "supplement"): "海外单上没有补料，补料只在巴西的单上",
     ("海外", "stock"): "海外单上的库存不在查询范围",
     ("海外", "other_orders"): "海外单上的其他在线订单不在查询范围",
+    # 「其他:X」说到块名时（`issue_detail._special`）
+    ("国内", "possible_inv"): "这张单没有可能的问题物料",
+    ("巴西", "possible_inv"): "巴西单上没有可能的问题物料",
+    ("海外", "possible_inv"): "海外单上没有可能的问题物料",
+    ("海外", "orders"): "海外单上没有生产订单、小板订单，订单信息见涉及发货单",
 }
+
+#: 本域不在查询范围的几项，用户点到时这样说（国内「查询范围」、海外「不做」）
+CN_IQC_STOCK = "IQC 部分的库存、在线、CKD 机型三栏（处理方式与退货数量）不在查询范围，请到管理页面查看"
+CN_RISK_ORDERS = "风险订单信息不在查询范围，请到管理页面查看"
+OS_OUT_OF_SCOPE = "海外单上的其他在线订单、库存、在线 / 在库退货单号不在查询范围"
 
 
 def not_available(item: str) -> str:

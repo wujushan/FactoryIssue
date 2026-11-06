@@ -1209,6 +1209,10 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
         targets = list(run.targets)
     named = _named(run.step)
     aspects = issue_detail.aspects_of(run.step)
+    # 问完整信息：给整张详情，模型列出、用户没点到的项不给（决策 2026-11-06「问完整信息时给整张详情」）
+    full = bool(aspects) and issue_detail.asks_everything(T.query)
+    if full:
+        aspects = issue_detail.named_aspects(aspects, T.query)
     lines: list[str] = []
     allowed = [t for t in targets if T.access.can(t.domain)]
     for t in targets:
@@ -1243,9 +1247,9 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
             out.events.append(Event.delta(f"{errors.issue_not_found(str(t.number or ''))}。"))
             out.ok = True
             continue
-        keys, notes, labels = issue_detail.blocks_for(ticket, aspects)
+        keys, notes, labels = issue_detail.blocks_for(ticket, aspects, full=full)
         out.events += issue_detail.render(ticket, keys, notes, labels, aspects, T.sites,
-                                          issue_detail.prefix_note(t, named))
+                                          issue_detail.prefix_note(t, named), full=full)
         items += issue_detail.caliber_items(ticket, keys)
         out.ok = out.found_any = True
         shown.append({"domain": str(ticket["domain"]), "number": str(ticket["number"]), "id": int(ticket["id"])})
