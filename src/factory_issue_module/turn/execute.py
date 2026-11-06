@@ -953,12 +953,14 @@ async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Seque
     """结论 → 每域一节：小标题（张数）、表格、表格下面一句（决策 2026-11-03「回答骨架与排版」）。几域时结论整步一次
     （总述「跨域规则」清单呈现）。结论由模型写；只有一两张、模型没写出来时用 `list_issues.conclusion` 的模板句。"""
     multi = len(segs) > 1
+    # 几域都没有单时结论已说「都没有查到」，各域不再逐个说一遍（一样信息只在一处说）
+    say_empty = multi and any(not s.get("empty") for s in segs)
     order = list_issues.order_text(run.step)
     sections: list[Event] = []
     described: list[str] = []
     for seg in segs:
         dom = _BY_LABEL.get(seg.get("domain", ""), Domain.DOMESTIC)
-        got, table_text = _present_list(run, T, seg, dom, C, multi, order)
+        got, table_text = _present_list(run, T, seg, dom, C, say_empty, order)
         sections += got
         if table_text:
             described.append(table_text)
@@ -981,12 +983,12 @@ async def _present_lists(run: StepRun, T: Turn, res: dict[str, Any], segs: Seque
     return [Event.delta(text), *sections]
 
 
-def _present_list(run: StepRun, T: Turn, seg: dict[str, Any], dom: Domain, C: cal.Caliber, multi: bool,
+def _present_list(run: StepRun, T: Turn, seg: dict[str, Any], dom: Domain, C: cal.Caliber, say_empty: bool,
                   order: str | None) -> tuple[list[Event], str | None]:
-    """一域一节。没有单的域：几域一起时原位置一句，只有这一域时由结论说。"""
+    """一域一节。没有单的域：几域一起、别的域有单时原位置一句；只有这一域或几域都没有单时由结论说。"""
     _add_caliber(C, run, seg, [], [])
     if seg.get("empty"):
-        return ([Event.delta(f"{dom.label}没有查到单。")] if multi else []), None
+        return ([Event.delta(f"{dom.label}没有查到单。")] if say_empty else []), None
     head = list_issues.heading(seg, dom.label, run.step)
     events = [layout.heading(head),
               tables.event(seg["table"], "", link_ids=seg.get("ids_shown") or None, domain=dom, sites=T.sites)]
