@@ -133,8 +133,8 @@ def planner_user(case: dict, prematch: bool = False) -> str:
     return text
 
 
-def repair_user(errors: list[str]) -> str:
-    return _plan_prompt.repair_user(errors)
+def repair_user(errors: list[str], verify: list[str] | tuple[str, ...] = ()) -> str:
+    return _plan_prompt.repair_user(errors, verify)
 
 
 # ---------------------------------------------------------------------------

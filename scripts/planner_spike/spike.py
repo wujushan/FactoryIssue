@@ -56,6 +56,8 @@ GROUPS: dict[str, dict[str, Any]] = {
     # 重写后仍不过，照用重写的计划（设计稿：按模型的计划执行，开头写明按什么理解）
     "现状+校验": {"extra": {}, "query_checks": True},
     "现状+预匹配+校验": {"extra": {}, "prematch": True, "query_checks": True},
+    # 只给修一次那一项用：请求同「现状」，打回说明用改措辞之前的原文（`repair_cases.json` 的 `old_repair`），作对照
+    "现状·旧打回说法": {"extra": {}, "old_repair": True},
     "关思考": {"extra": {"chat_template_kwargs": {"enable_thinking": False}}},
     "思考low": {"extra": {"reasoning_effort": "low"}},
     "推荐采样": {"temperature": 0.7,
@@ -99,6 +101,9 @@ PLAN_CASES = _load_cases("plan_cases.json")
 PLAN_CASES_VERSION = json.loads((CASES_DIR / "plan_cases.json").read_text(encoding="utf-8"))["version"]
 NARRATIVE_CASES = _load_cases("narrative_cases.json")
 REFLECT_CASES = _load_cases("reflect_cases.json")
+REPAIR_CASES = _load_cases("repair_cases.json")
+REPAIR_CASES_VERSION = json.loads((CASES_DIR / "repair_cases.json").read_text(encoding="utf-8"))["version"]
+REPAIR_BY_ID = {c["id"]: c for c in REPAIR_CASES}
 PLAN_BY_ID = {c["id"]: c for c in PLAN_CASES}
 NARR_BY_ID = {c["id"]: c for c in NARRATIVE_CASES}
 REFL_BY_ID = {c["id"]: c for c in REFLECT_CASES}
@@ -254,9 +259,11 @@ async def run_plan(caller: Caller, case: dict, group: str) -> dict:
     first = await caller.chat(group, messages, part="plan", case=case["id"])
     attempts.append(first)
     plan, errors, parsed_first = None, [], False
-    # 「现状+校验」类的组：格式合格后再过 §5.3 第 13、15 条校验（resolve.query_checks），不过也打回重写一次
+    # 「现状+校验」类的组：格式合格后再过 §5.3 第 7 条校验一半、第 13–15、19 条（resolve.tagged_checks），不过也打回
+    # 重写一次；说明的两段同线上（normalize.split_checks）
     checks = bool(GROUPS[group].get("query_checks"))
     query_errors: list[str] = []
+    tagged: list[tuple[int, str]] = []
     if first["error"] is None:
         try:
             plan = scoring.parse_reply(first["content"])
@@ -265,11 +272,13 @@ async def run_plan(caller: Caller, case: dict, group: str) -> dict:
         except (ValueError, json.JSONDecodeError) as exc:
             errors = [f"不是合格的 JSON：{exc}"]
         if not errors and checks:
-            query_errors = resolve.query_checks(resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome")), case["q"], case)
+            tagged = resolve.tagged_checks(resolve.apply(plan, case["q"], case.get("previous_plan"), case.get("previous_outcome")), case["q"], case)
+            query_errors = [m for _, m in tagged]
         if errors or query_errors:
             first_plan = plan if not errors else None
+            must, verify = (errors, []) if errors else resolve.normalize.split_checks(tagged)
             repair_msgs = [*messages, {"role": "assistant", "content": first["content"]},
-                           {"role": "user", "content": prompts.repair_user(errors or query_errors)}]
+                           {"role": "user", "content": prompts.repair_user(must, verify)}]
             second = await caller.chat(group, repair_msgs, part="plan", case=case["id"])
             attempts.append(second)
             plan, errors2 = None, ["修正那次调用出错"]
@@ -285,6 +294,35 @@ async def run_plan(caller: Caller, case: dict, group: str) -> dict:
             errors = errors + query_errors + ["（修正后）" + e for e in errors2]
     return {"attempts": attempts, "parsed_first": parsed_first, "valid_first": parsed_first and len(attempts) == 1,
             "plan": plan, "errors": errors, "query_errors": query_errors}
+
+
+def repair_note(case: dict, group: str) -> str:
+    """修一次那一项的打回说明：照当前代码现算（同线上 `Planner.plan`）；「旧打回说法」组用存下的原文。"""
+    if GROUPS[group].get("old_repair"):
+        return case["old_repair"]
+    tagged = resolve.tagged_checks(resolve.apply(case["first"], case["q"]), case["q"], case)
+    return prompts.repair_user(*resolve.normalize.split_checks(tagged))
+
+
+async def run_repair(caller: Caller, case: dict, group: str) -> dict:
+    """修一次（`cases/repair_cases.json`）：第一次的计划由用例给出，看模型收到打回说明后写成什么。
+
+    模型自己很少写出会被第 7 条校验一半、第 13 条拦下的计划（p2.4 的 1,245 次一次都没拦），自然跑对照集量不到
+    打回说明的效果，所以把第一次的回复固定下来。修后格式不合格时照用第一次的计划，同线上。
+    """
+    note = repair_note(case, group)
+    messages = with_policy(PLAN_SYSTEM, [{"role": "user", "content": prompts.planner_user(case)},
+                                         {"role": "assistant", "content": json.dumps(case["first"], ensure_ascii=False)},
+                                         {"role": "user", "content": note}])
+    rec = await caller.chat(group, messages, part="repair", case=case["id"])
+    plan, errors = None, ["修正那次调用出错"]
+    if rec["error"] is None:
+        try:
+            plan = scoring.parse_reply(rec["content"])
+            errors = scoring.validate_plan(plan)
+        except (ValueError, json.JSONDecodeError) as exc:
+            plan, errors = None, [f"不是合格的 JSON：{exc}"]
+    return {"attempts": [rec], "repair": note, "plan": None if errors else plan, "errors": errors}
 
 
 # 写分析的核数 S2 起调 src（`factory_issue_module.present.narrative`，设计 §8.3），这里只按对照集的形状转接；
@@ -457,6 +495,8 @@ async def run_jobs(cfg: Cfg, jobs: list[tuple[str, str, str, int]], raw_path: Pa
                     res = await run_narrative(caller, NARR_BY_ID[cid], group)
                 elif part == "reflect":
                     res = await run_reflect(caller, REFL_BY_ID[cid], group)
+                elif part == "repair":
+                    res = await run_repair(caller, REPAIR_BY_ID[cid], group)
                 else:
                     res = await run_stats(caller, TASK_BY_ID[cid], group)
             except Exception as exc:  # noqa: BLE001
@@ -503,6 +543,9 @@ def build_jobs(args: argparse.Namespace) -> list[tuple[str, str, str, int]]:
         jobs += [("reflect", c["id"], g, r) for g in aux for c in REFLECT_CASES[:lim] for r in range(args.aux_repeats)]
     if "stats" in parts:
         jobs += [("stats", t["id"], g, r) for g in aux for t in stats_tasks.TASKS[:lim] for r in range(args.aux_repeats)]
+    if "repair" in parts:
+        jobs += [("repair", c["id"], g, r) for g in args.repair_groups.split(",") for c in REPAIR_CASES[:lim]
+                 for r in range(args.repeats)]
     return jobs
 
 
@@ -573,6 +616,66 @@ def _replan(rec: dict) -> dict | None:
         if not scoring.validate_plan(plan):
             return plan
     return None
+
+
+def score_repair(rec: dict) -> dict:
+    """修一次的一条记录：修后的计划（格式不合格时照用第一次的）过规整后打分；`kept` 表示与第一次的计划相同。"""
+    case = REPAIR_BY_ID[rec["case"]]
+    first = resolve.apply(case["first"], case["q"])
+    final = resolve.apply(rec.get("plan") or case["first"], case["q"])
+    return {"ok": scoring.score_plan(case, final)["all_ok"],
+            "kept": scoring.plan_signature(final) == scoring.plan_signature(first),
+            "bad_format": rec.get("plan") is None, "final": final}
+
+
+def summarize_repair(records: list[dict]) -> tuple[dict[str, dict], list[str], list[list]]:
+    """误拦：计划本来对，期望照原写法；该改：计划本来错，期望改对。按当前打分规则重算，不用运行时存下的结果。"""
+    by_g: dict[str, list[dict]] = {}
+    for r in records:
+        by_g.setdefault(r["group"], []).append(r)
+    groups = list(by_g)
+    summary: dict[str, dict] = {}
+    rows: list[list] = []
+    per_case: dict[str, dict[str, list[bool]]] = {}
+    for g, recs in by_g.items():
+        tally = {"误拦": [0, 0], "该改": [0, 0]}
+        bad = errs = 0
+        for r in recs:
+            case = REPAIR_BY_ID[r["case"]]
+            s = score_repair(r)
+            tally[case["kind"]][0] += int(s["ok"])
+            tally[case["kind"]][1] += 1
+            bad += int(s["bad_format"])
+            errs += bool(r["attempts"][0].get("error"))
+            per_case.setdefault(r["case"], {}).setdefault(g, []).append(s["ok"])
+            if not s["ok"]:
+                why = "误拦后没照原写法" if case["kind"] == "误拦" else ("该改却照原写法" if s["kept"] else "该改没改对")
+                got = json.dumps(r.get("plan"), ensure_ascii=False) if r.get("plan") else "；".join(r.get("errors") or [])
+                fixed = json.dumps(s["final"], ensure_ascii=False)[:1500] if s["final"] != r.get("plan") else ""
+                rows.append(["repair", g, r["case"], r["rep"], why, case["q"],
+                             json.dumps(case["expect"][0], ensure_ascii=False)[:1500], got[:1500], fixed])
+        summary[g] = {k: _rate(ok, n) for k, (ok, n) in tally.items()}
+        summary[g].update(runs=len(recs), bad_format=bad, http_err=errs)
+    md = ["## 打回后怎么改（修一次）", "",
+          f"用例 {REPAIR_CASES_VERSION}，{len(REPAIR_CASES)} 条。第一次的计划由用例给出，打回说明由当前代码现算；"
+          "「现状·旧打回说法」组用改措辞之前的原文。误拦 = 计划本来对、校验按词的位置误判，照原写法算对；"
+          "该改 = 计划本来错、校验拦得对，改对算对。", "",
+          "| 指标 | " + " | ".join(groups) + " |", "|---|" + "---|" * len(groups)]
+    for label, key in (("误拦：照原写法", "误拦"), ("该改：改对", "该改")):
+        md.append(f"| {label} | " + " | ".join(_fmt(summary[g][key]) for g in groups) + " |")
+    for label, key in (("运行次数", "runs"), ("修后格式不合格（照用第一次的计划）", "bad_format"), ("调用出错", "http_err")):
+        md.append(f"| {label} | " + " | ".join(str(summary[g][key]) for g in groups) + " |")
+    md += ["", "**逐条（每格：对的次数 / 运行次数）**", "", "| 编号 | 类 | 校验 | 问句 | " + " | ".join(groups) + " |",
+           "|---|---|---|---|" + "---|" * len(groups)]
+    for case in REPAIR_CASES:
+        cells = []
+        for g in groups:
+            got = per_case.get(case["id"], {}).get(g, [])
+            cells.append(f"{sum(got)} / {len(got)}" if got else "—")
+        rules = "、".join(f"第 {x} 条" for x in case["rules"])
+        md.append(f"| {case['id']} | {case['kind']} | {rules} | {case['q']} | " + " | ".join(cells) + " |")
+    md.append("")
+    return summary, md, rows
 
 
 def summarize_plan(records: list[dict]) -> tuple[dict[str, dict], list[list]]:
@@ -995,6 +1098,12 @@ def write_report(out_dir: Path, models: Any = None) -> dict:
                     err_rows.append(["stats", g, r["case"], r["rep"], why, TASK_BY_ID[r["case"]]["ask"], "", ""])
         md += ["", "门槛：一次跑对 ≥ 70%，改一次后 ≥ 85%。", ""]
 
+    if parts.get("repair"):
+        rep_sum, rep_md, rep_rows = summarize_repair(parts["repair"])
+        summary["repair"] = rep_sum
+        md += rep_md
+        err_rows += rep_rows
+
     (out_dir / "汇总.md").write_text("\n".join(md), encoding="utf-8")
     with (out_dir / "错例.csv").open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -1020,7 +1129,9 @@ def _mock_handler(request: httpx.Request) -> httpx.Response:
     part, cid = request.headers.get("x-spike-part"), request.headers.get("x-spike-case")
     # 是不是「改一次」那次调用：消息里已经有模型上一次的回复
     repairing = any(m.get("role") == "assistant" for m in body.get("messages") or [])
-    if part == "plan":
+    if part == "repair":
+        content = json.dumps(scoring.render_expected(REPAIR_BY_ID[cid]), ensure_ascii=False)
+    elif part == "plan":
         content = json.dumps(scoring.render_expected(PLAN_BY_ID[cid]), ensure_ascii=False)
         if cid in MOCK_BROKEN_PLANS and not repairing:
             content = "<think>先想一想</think>计划如下：{\"steps\": ["  # 坏 JSON，走「改一次」
@@ -1053,7 +1164,8 @@ def self_check() -> int:
     if raw.exists():
         raw.unlink()
     cfg = Cfg(base_url="http://mock/v1", api_key="", model="mock-model", concurrency=8, timeout=30, self_check=True)
-    args = argparse.Namespace(parts="plan,narrative,reflect,stats", groups="现状,现状+预匹配,现状+校验,关思考", aux_groups="现状",
+    args = argparse.Namespace(parts="plan,narrative,reflect,stats,repair", groups="现状,现状+预匹配,现状+校验,关思考",
+                              aux_groups="现状", repair_groups="现状,现状·旧打回说法",
                               repeats=2, sub_repeats=2, aux_repeats=1, limit=0, only="")
     transport = httpx.MockTransport(_mock_handler)
     bad = prepare_references(stats_tasks.TASKS)
@@ -1071,10 +1183,11 @@ def self_check() -> int:
     st = summary.get("stats", {}).get("现状")
     if st and not (st["first"] or 0) < 1.0:
         problems.append("临时统计「改一次」那条路没走到")
-    for part, key in (("narrative", "sentence_ok"), ("reflect", "ok"), ("stats", "final")):
+    for part, key in (("narrative", "sentence_ok"), ("reflect", "ok"), ("stats", "final"), ("repair", "误拦"),
+                      ("repair", "该改")):
         for g, s in summary.get(part, {}).items():
             if s[key] != 1.0:
-                problems.append(f"{part} {g}：{_fmt(s[key])}")
+                problems.append(f"{part} {g}（{key}）：{_fmt(s[key])}")
     if problems:
         print("自检不通过（期望冒充模型时应当全对）：\n- " + "\n- ".join(problems))
         print(f"明细见 {out_dir / '错例.csv'}")
@@ -1084,7 +1197,7 @@ def self_check() -> int:
         print("自检不通过（打分该判错的没判错，或该判对的没判对）：\n- " + "\n- ".join(problems[:40]))
         return 1
     print(f"自检通过：对照集 {len(PLAN_CASES)} 条、分析 {len(NARRATIVE_CASES)} 条、反思 {len(REFLECT_CASES)} 条、"
-          f"临时统计 {len(stats_tasks.TASKS)} 题，期望冒充模型时全部判对；"
+          f"临时统计 {len(stats_tasks.TASKS)} 题、修一次 {len(REPAIR_CASES)} 条，期望冒充模型时全部判对；"
           f"改坏的计划 {counts['neg']} 份全部判错，只改写法的 {counts['harmless']} 份全部判对；"
           f"写分析与临时统计的反例 {counts['aux']} 条全部判错。输出在 {out_dir}")
     return 0
@@ -1375,6 +1488,21 @@ def _resolve_checks(counts: dict[str, int]) -> list[str]:
     q = "供应商普瑞特的物料问题"
     if resolve.query_checks(resolve.apply({"steps": [lst("s1", filters=[{"field": "供应商", "op": "是", "value": "普瑞特"}])]}, q), q):
         problems.append("校验误拦「名字紧挨着的类别词与计划一致」")
+    # 修一次那一项：第一次的计划必须恰好被用例写明的那几条校验拦下（否则量的不是打回说明）；误拦的第一次计划本身
+    # 判对、该改的判错；新说明里第 7、13 条在「需要核对」那一段，旧说明原文存在
+    for case in REPAIR_CASES:
+        counts["aux"] += 1
+        got = sorted({r for r, _ in resolve.tagged_checks(resolve.apply(case["first"], case["q"]), case["q"], case)})
+        if got != sorted(case["rules"]):
+            problems.append(f"修一次 {case['id']}：第一次的计划被第 {got} 条拦下，用例写的是第 {case['rules']} 条")
+        first_ok = scoring.score_plan(case, resolve.apply(case["first"], case["q"]))["all_ok"]
+        if first_ok != (case["kind"] == "误拦"):
+            problems.append(f"修一次 {case['id']}：第一次的计划判{'对' if first_ok else '错'}，与「{case['kind']}」不符")
+        note = repair_note(case, "现状")
+        if "不合格" in note or "需要核对" not in note:
+            problems.append(f"修一次 {case['id']}：新打回说明没写成「需要核对」")
+        if not str(case.get("old_repair") or "").startswith("上面的计划不合格"):
+            problems.append(f"修一次 {case['id']}：缺改措辞之前的打回说明原文")
 
     # 号码直通：命中的必须恰好是这些问句，且直通出的计划判对
     want_shortcut = {f"M-0{i}" for i in range(1, 10)} | {"CN-042", "CN-048", "CN-059", "BR-010", "XC-012", "V-36", "V-37"}
@@ -1493,6 +1621,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--parts", default="plan,narrative,reflect,stats")
     ap.add_argument("--groups", default="现状,关思考,思考low,推荐采样", help="规划跑哪几组；第一组跑全部问句，其余只跑 core")
     ap.add_argument("--aux-groups", default="现状,关思考", help="写分析、反思、临时统计跑哪几组")
+    ap.add_argument("--repair-groups", default="现状,现状·旧打回说法",
+                    help="修一次那一项跑哪几组（--parts 带 repair 时），每条跑 --repeats 次")
     ap.add_argument("--repeats", type=int, default=5, help="第一组每条问句跑几次")
     ap.add_argument("--sub-repeats", type=int, default=3, help="其余各组每条 core 问句跑几次")
     ap.add_argument("--aux-repeats", type=int, default=3)

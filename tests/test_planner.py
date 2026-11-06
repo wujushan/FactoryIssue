@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 import scopes
+import structlog
 from fakes import MANIFEST, data_queries, make_harness, run
 from forge_core.events import EventType
 
@@ -102,6 +103,48 @@ async def test_check_bounce_then_good_repair_uses_repaired_plan():
     assert result.plan["steps"][0]["params"]["time"][0]["said"] == "上个月" and result.check_errors == []
 
 
+#: 开发者 2026-11-06 手动测试的原句：「负责」原先只算人员的类别词，对的计划被第 7 条校验打回，模型照说明改成了跟进人
+DEPT_IN_CHARGE = "巴西的单里，质量部负责跟进且还没结案的有哪些？"
+
+
+def _br_list(field: str) -> dict:
+    return plan_of(step("list_issues", domains={"value": ["巴西"], "from": "user"},
+                        filters=[{"field": field, "op": "是", "value": "质量部", "from": "user"},
+                                 {"field": "状态", "op": "是", "value": "未结案", "from": "user"}]))
+
+
+async def test_department_in_charge_is_not_bounced():
+    """「某部门负责的」按问题跟进部门（巴西、国内业务描述）：一次调用，照模型的计划。"""
+    result, llm = await _plan(DEPT_IN_CHARGE, _br_list("跟进部门"))
+    assert result.calls == 1 and len(llm.calls) == 1 and result.check_errors == []
+    assert result.plan["steps"][0]["params"]["filters"][0]["field"] == "跟进部门"
+
+
+async def test_position_check_asks_to_verify_and_keeps_the_kept_plan():
+    """第 7 条校验一半只看词的位置：说明写「需要核对」、不写「用户说的是」；模型照原写法时按它的计划执行，
+    日志记「核对后未改」。"""
+    first = plan_of(step("list_issues", filters=[{"field": "跟进部门", "op": "是", "value": "研发一部", "from": "user"}]))
+    with structlog.testing.capture_logs() as logs:
+        result, llm = await _plan("研发一部经办的单有哪些", first, first)
+    note = llm.calls[1][0][3]["content"]
+    assert "需要核对" in note and "照原样保留" in note and "不合格" not in note
+    assert "「研发一部」紧挨着「经办」" in note and "用户说的是" not in note
+    assert result.plan["steps"][0]["params"]["filters"][0]["field"] == "跟进部门"
+    actions = [x["action"] for x in logs if x.get("event") == "factory_issue_plan_rule" and x.get("rule") == 7]
+    assert actions == ["打回", "核对后未改"]
+
+
+async def test_must_fix_and_verify_items_go_to_separate_sections():
+    """问句里的时间没进计划（第 14 条，不合格）与名字紧挨着类别词（第 7 条，需要核对）同时打回：分两段写。"""
+    first = plan_of(step("list_issues", filters=[{"field": "跟进部门", "op": "是", "value": "研发一部", "from": "user"}]))
+    fixed = plan_of(step("list_issues", time=[{"said": "上个月", "basis": "建单", "from": "user"}],
+                         filters=[{"field": "跟进部门", "op": "是", "value": "研发一部", "from": "user"}]))
+    _, llm = await _plan("上个月研发一部经办的单有哪些", first, fixed)
+    note = llm.calls[1][0][3]["content"]
+    must, verify = note.index("上面的计划不合格"), note.index("另有几处需要核对")
+    assert must < note.index("上个月") < verify < note.index("「研发一部」紧挨着")
+
+
 async def test_call_error_fails_without_retry():
     result, llm = await _plan("上个月国内的问题有哪些", TimeoutError("超时"))
     assert result.plan is None and len(llm.calls) == 1
@@ -125,7 +168,7 @@ async def test_rule_hits_are_returned():
 def test_system_has_no_date_and_is_cached():
     system = prompt.planner_system(MANIFEST, TOPICS)
     assert system is prompt.planner_system(MANIFEST, TOPICS)
-    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.4"
+    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.5"
     assert "严重的单" in system and "不良率高的单" in system  # p2.4：术语表加的两行（G93、G94）
     assert "一部今年有哪些问题" in system
 

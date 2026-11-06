@@ -177,6 +177,7 @@ def test_rule7_name_matching_two_classes_becomes_clarify(chosen: str) -> None:
     [("跟进人是柯洱斯的单有哪些", "柯洱斯", "跟进人"),  # 说了类别却对不上：不改类
      ("百富的单有哪些", "百富", "加工厂"),  # 一类都没有完全相同的：只有加工厂照包含对得上（G91）
      ("工程部跟进的单有哪些", "工程部", "跟进部门"),  # 「跟进」同时指人员与部门
+     ("工程部负责的单有哪些", "工程部", "跟进部门"),  # 「负责」同样（国内、巴西「某部门负责的」按问题跟进部门）
      ("跟进人是工程部的单有哪些", "工程部", "跟进人")],
 )
 def test_rule7_class_words(query: str, value: str, want: str) -> None:
@@ -244,7 +245,24 @@ def test_rule7_people_do_not_match_by_contains() -> None:
 def test_rule7_check_half_bounces_name_next_to_another_class_word() -> None:
     bounced = checks([lst(filters=[{"field": "供应商", "op": "是", "value": "普瑞特"}])], "普瑞特工厂的物料问题")
     assert [r for r, _ in bounced] == [7]
+    # 只写词的位置与计划写成了什么，不替用户下结论；由模型核对（决策 2026-11-06）
+    note = bounced[0][1]
+    assert "「普瑞特」紧挨着「工厂」" in note and "放进了供应商" in note and "不是就照原写法" in note
+    assert "用户说的是" not in note
+    assert normalize.split_checks(bounced) == ([], [note])
     assert not checks([lst(filters=[{"field": "供应商", "op": "是", "value": "普瑞特"}])], "供应商普瑞特的物料问题")
+
+
+@pytest.mark.parametrize(("query", "value"), [
+    ("巴西的单里，质量部负责跟进且还没结案的有哪些？", "质量部"),  # 开发者 2026-11-06 手动测试
+    ("质量管理部负责跟进且尚未结案的问题列表？", "质量管理部"),  # 巴西示例问题第 5 句
+    ("2026 年 1 月由生产工程部负责跟进处理的制程问题有哪些？", "生产工程部"),  # 巴西示例问题第 7 句
+    ("生产工程部负责的单有哪些", "生产工程部"),  # 国内「某部门负责的」
+    ("工程部负责的未结案问题", "工程部"),  # 部门简称
+])
+def test_rule7_check_half_lets_department_in_charge_pass(query: str, value: str) -> None:
+    """「负责」同时是人员与部门的类别词：部门紧挨着「负责」时，放进跟进部门不打回。"""
+    assert not [r for r, _ in checks([lst(filters=[{"field": "跟进部门", "op": "是", "value": value}])], query) if r == 7]
 
 
 def test_rule7_records_a_hit() -> None:
@@ -298,6 +316,18 @@ def test_rule12_format() -> None:
 
 
 # ---------------------------------------------------------------- 第 13–16 条 校验
+
+
+def test_rule13_note_states_position_and_both_readings() -> None:
+    """第 13 条只看事件词紧跟在时间后面：说明写出原话里的词与计划写的依据，两种读法都给，由模型核对。"""
+    (rule, note), = checks([lst(time=[{"said": "上个月", "basis": "建单"}])], "上个月关闭的单有哪些")
+    assert rule == 13 and normalize.split_checks([(rule, note)]) == ([], [note])
+    assert "「上个月」后面紧跟着「关闭」" in note and "写的是建单" in note and "日期依据写结案" in note
+    assert "仍按建单" in note and "应为" not in note
+    # 状态名里带事件词（「重启审核中」）：照样拦下，靠模型核对放过
+    assert [r for r, _ in checks([lst(time=[{"said": "这个月", "basis": "建单"}],
+                                      filters=[{"field": "状态", "op": "是", "value": "重启审核中"}])],
+                                 "这个月重启审核中的单有哪些")] == [13]
 
 
 def test_rule13_event_word_after_time() -> None:

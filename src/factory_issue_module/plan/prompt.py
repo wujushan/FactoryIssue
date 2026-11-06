@@ -43,7 +43,10 @@ from factory_issue_module.plan.schema import (
 #: （决策 2026-11-03「『我』按当前用户查」）。
 #: p2.4（G4b 收尾，G92–G94）：提示的规则与示例不变，拼进来的术语表多了「严重的单」「不良率高的单」两行
 #: （决策 2026-11-04「按什么理解写在开头」）；对照集 c7 加 V-59–V-61 这类问法。
-PROMPT_VERSION = "p2.4"
+#: p2.5（G5，2026-11-06）：system 与 user 不变，只改修一次的说明（`repair_user`）：按词的位置判断的校验写成「请核对」、
+#: 允许照原写法保留，不再写「用户说的是 X」「应为 X」（决策 2026-11-06「按词的位置判断的校验改为请核对」）；
+#: 对照集 c9 加 V-69–V-73，spike 加修一次一项（`cases/repair_cases.json`）。
+PROMPT_VERSION = "p2.5"
 
 #: 规划器回复的 JSON 序列化参数（示例与上一轮计划都用它）
 _JSON = {"ensure_ascii": False}
@@ -259,9 +262,21 @@ def planner_user(
     return "\n".join(lines)
 
 
-def repair_user(errors: Sequence[str]) -> str:
-    """修一次的打回说明（至多 8 条）。"""
-    return (
-        "上面的计划不合格：\n- " + "\n- ".join(list(errors)[:8])
-        + "\n请按规定的格式重新输出完整的计划，只输出 JSON。"
-    )
+def repair_user(errors: Sequence[str], verify: Sequence[str] = ()) -> str:
+    """修一次的说明，两种合计至多 8 条（设计 §5.3 准入准则）。
+
+    - `errors`：不合格、要改的（格式；问句里的号码、时间、机型没进计划；指上一轮那张单写成超出范围）。
+    - `verify`：程序按词在问句里的位置找出的疑点（第 7 条校验一半、第 13 条，`normalize.VERIFY_RULES`），不一定对。
+      请模型核对、原写法没错就照原样保留：模型几乎照单全收打回说明，写成结论时误判一次就等于替它改错一次。
+    """
+    must = list(errors)[:8]
+    soft = list(verify)[: 8 - len(must)]
+    lines: list[str] = []
+    if must:
+        lines += ["上面的计划不合格：", *(f"- {e}" for e in must)]
+    if soft:
+        lines += [("另有" if must else "上面的计划有") + "几处需要核对。这是程序按词在问句里的位置找出来的，不一定对：",
+                  *(f"- {e}" for e in soft),
+                  "核对后原写法没错的，照原样保留，不要为了避开这几条提示而改。"]
+    lines.append("请按规定的格式重新输出完整的计划，只输出 JSON。")
+    return "\n".join(lines)

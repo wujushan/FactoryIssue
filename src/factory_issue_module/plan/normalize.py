@@ -7,7 +7,9 @@
 - 改口径、判据可证明：第 7 条名字归类；第 8 条写成时间的状态改回条件；第 9 条「X 各款」；第 10 条栏目要点名；
   第 11 条安全问题两路；第 17 条汇总缺时间改为追问；第 18 条上一轮没有结果时「其中」改为追问。
 - 校验、打回重写：第 12 条格式在 `plan/schema.py`；第 7 条的校验一半、第 13、14、15、19 条在 `tagged_checks`
-  （第 14 条在对照集期望计划上误拒为 0，已启用）；第 16 条 `values_not_in_query` 只记日志。
+  （第 14 条在对照集期望计划上误拒为 0，已启用）；第 16 条 `values_not_in_query` 只记日志。按词的位置判断的两条
+  （第 7 条校验一半、第 13 条，`VERIFY_RULES`）打回时请模型核对、允许照原写法保留，说明里只写词的位置与计划写成了
+  什么，不替用户下结论（决策 2026-11-06「按词的位置判断的校验改为请核对」）。
 - 第 20 条 `reading_rule`（决策 2026-11-04「按什么理解写在开头」）：问题等级、状态、问题类型的取值在问句里找不到
   依据时记成助手的理解；清单张数在问句里找不到时改成默认张数并记下；都进 `inferred`，回答开头写「按 X 理解」。
   认出了程度说法、计划没按落盘的读法写时只记日志。
@@ -233,11 +235,12 @@ NAME_GROUPS: dict[str, tuple[str, ...]] = {
 _FIELD_GROUP = {norm_field(f): g for g, fields in NAME_GROUPS.items() for f in fields}
 GROUP_LABEL = {"工厂": "加工厂", "人": "人员", "部门": "部门", "供应商": "供应商", "系列": "系列"}
 
-#: 类别词：用户说了是哪一类。「跟进」同时是人员与部门的类别词（总述「某部门跟进的」即跟进部门）
+#: 类别词：用户说了是哪一类。「跟进」「负责」同时是人员与部门的类别词：总述「某部门跟进的」即跟进部门；国内、巴西
+#: 「某部门负责的」按问题跟进部门，总述「某人负责的单」按责任人
 CLASS_WORDS: dict[str, tuple[str, ...]] = {
     "工厂": ("工厂", "加工厂"),
     "人": ("跟进人", "跟进", "负责", "责任人", "处理人", "经办", "手上", "手里"),
-    "部门": ("部门", "跟进"),
+    "部门": ("部门", "跟进", "负责"),
     "供应商": ("供应商", "厂商", "供方", "供应"),
     "系列": ("系列",),
 }
@@ -386,7 +389,10 @@ def _adjacent_groups(q: str, value: str) -> tuple[str, set[str]] | None:
 
 
 def _class_checks(steps: list[dict], query: str) -> list[str]:
-    """第 7 条的校验一半：名字紧挨着某一类的类别词，计划却放进另一类。"""
+    """第 7 条的校验一半：名字紧挨着某一类的类别词，计划却放进另一类。
+
+    只看词的位置，会误判（「研发一部经办的单」的「经办」说的是部门怎么处理，不是说研发一部是人），所以说明里只写
+    位置与计划写成了什么，由模型核对（`VERIFY_RULES`）。"""
     q = norm(query)
     errors: list[str] = []
     for s in steps:
@@ -400,7 +406,8 @@ def _class_checks(steps: list[dict], query: str) -> list[str]:
                 hit = _adjacent_groups(q, v) if isinstance(v, str) else None
                 if hit and group not in hit[1]:
                     said = "或".join(GROUP_LABEL[g] for g in sorted(hit[1]))
-                    errors.append(f"问句里「{v}」紧挨着「{hit[0]}」，用户说的是{said}，{s.get('id')} 却把它放进了{f.get('field')}")
+                    errors.append(f"问句里「{v}」紧挨着「{hit[0]}」，{s.get('id')} 把「{v}」放进了{f.get('field')}。"
+                                  f"「{hit[0]}」若是在说「{v}」是{said}，按{said}写；不是就照原写法")
     return errors
 
 
@@ -456,12 +463,18 @@ _EVENT_BASIS = (("现场发现", "现场发现"), ("停过线", "停线"), ("停
                 ("结案", "结案"), ("关闭", "结案"), ("关掉", "结案"), ("建单", "建单"), ("新建", "建单"), ("创建", "建单"))
 
 
-def _event_basis(query: str, said: str) -> str | None:
+def _event_hit(query: str, said: str) -> tuple[str, str] | None:
+    """(时间原话后面紧跟的事件词, 它定的日期依据)。"""
     at = query.find(said)
     if at < 0:
         return None
     rest = _SKIP_AFTER_TIME.sub("", query[at + len(said):].lstrip(" ，,的"))
-    return next((b for w, b in _EVENT_BASIS if rest.startswith(w)), None)
+    return next(((w, b) for w, b in _EVENT_BASIS if rest.startswith(w)), None)
+
+
+def _event_basis(query: str, said: str) -> str | None:
+    hit = _event_hit(query, said)
+    return hit[1] if hit else None
 
 
 def _time_rules(p: dict, query: str | None) -> None:
@@ -1000,19 +1013,33 @@ def _out_of_scope_on_previous_issue(steps: list[dict], query: str, issue: str | 
             "问的是本助手没有的数据项，或要做只读之外的事时，仍写 introduce")
 
 
+#: 按词的位置判断的校验：第 7 条的校验一半、第 13 条。打回时请模型核对，原写法没错就照原样保留；其余校验（第 14、
+#: 15、19 条）与格式（第 12 条）写「不合格」、要改（设计 §5.3 准入准则，决策 2026-11-06「按词的位置判断的校验改为
+#: 请核对」）。模型核对后照原写法时按它的计划执行，第 13 条照旧在开头写明按什么日期理解
+VERIFY_RULES = frozenset({7, 13})
+
+
+def split_checks(checks: Sequence[tuple[int, str]]) -> tuple[list[str], list[str]]:
+    """`tagged_checks` 的结果 → (不合格、要改的说明, 请模型核对的说明)，给 `prompt.repair_user`。"""
+    return ([m for r, m in checks if r not in VERIFY_RULES], [m for r, m in checks if r in VERIFY_RULES])
+
+
 def tagged_checks(
     plan: dict, query: str, entities: Mapping[str, Sequence[str]], today: date | None = None,
     previous_issue: str | None = None,
 ) -> list[tuple[int, str]]:
-    """第 7 条的校验一半、第 13、14、15、19 条：[(规则编号, 打回时交给模型的错误说明)]。`plan` 用规整后的。
+    """第 7 条的校验一半、第 13、14、15、19 条：[(规则编号, 打回时交给模型的说明)]。`plan` 用规整后的。
 
     `entities` 是预匹配用的「名字 → 它在库里属于哪几类」（可查的域的主数据）。`previous_issue` 是上一轮单独
-    说到的那张单（`previous_issue()`），第 19 条用。
+    说到的那张单（`previous_issue()`），第 19 条用。第 7、13 条的说明只写词的位置与计划写成了什么（`VERIFY_RULES`）。
     """
     errors: list[tuple[int, str]] = []
     steps = [s for s in plan.get("steps") or [] if isinstance(s, dict)]
-    for sid, said, _basis, hit in basis_mismatches(plan, query):
-        errors.append((13, f"问句里「{said}」后面是「{hit}」这件事，{sid} 这项时间的日期依据应为{hit}"))
+    for sid, said, basis, hit in basis_mismatches(plan, query):
+        word = (_event_hit(query, said) or (hit, hit))[0]
+        errors.append((13, f"问句里「{said}」后面紧跟着「{word}」，{sid} 这项时间的日期依据写的是{basis}。"
+                           f"若问的是这段时间里{word}的单，日期依据写{hit}；若问的是现在处于某种状态的单"
+                           "（如「6 月还没结案的单」），仍按建单"))
     scope = _out_of_scope_on_previous_issue(steps, query, previous_issue)
     if scope is not None:
         errors.append((19, scope))
