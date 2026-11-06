@@ -89,7 +89,7 @@ COLUMNS: tuple[Col, ...] = (
     Col(_s("machine"), "multi", _all("_machines")),
     Col(_s("series"), "multi", _only("_series", _CN, _BR)),
     Col(_s("type"), "text", _all("type")),
-    Col(_s("factory"), "multi", _all("factory")),
+    Col(_s("factory"), "multi", {_CN.label: "factory", _BR.label: "_factories", _OS.label: "factory"}),
     Col(_s("level"), "text", _all("level")),
     Col(_s("status"), "text", _all("status")),
     Col(columns.STAGE, "multi", _all("_stages")),
@@ -118,7 +118,7 @@ COLUMNS: tuple[Col, ...] = (
     Col(columns.HAS_COST, "bool", _only("_has_cost", _BR)),
 )
 #: 口径函数要的几列名（外壳写进沙箱的 `CS_NAMES`；分母国内是生产数量、巴西是影响数量，总述「汇总不良率」）
-NAMES = {"domain": columns.OWNER_DOMAIN, "bad": _s("bad_qty"),
+NAMES = {"domain": columns.OWNER_DOMAIN, "number": _s("number"), "bad": _s("bad_qty"),
          "den": {_CN.label: _s("prod_qty"), _BR.label: _s("impact_qty")}}
 #: 脚本用到这些列或口径函数时，统计口径补上对应的一项（§5.5「统计口径照统计那一套」）
 RATE_WORDS = (columns.RATE, "合计不良率")
@@ -225,12 +225,14 @@ def _content(resp: Any) -> str:
 # ---------------------------------------------------------------------------- 脚本：照存下的跑，或模型写
 
 
-async def _try(ctx: Any, code: str, frame: pd.DataFrame) -> tuple[dict | None, list[str]]:
-    """AST 检查 → 沙箱 ② → 形状检查。返回 (整理后的返回值, 问题)。"""
+async def _try(ctx: Any, code: str, frame: pd.DataFrame,
+               keep: Mapping[str, Sequence[str]] | None = None) -> tuple[dict | None, list[str]]:
+    """AST 检查 → 沙箱 ② → 形状检查。返回 (整理后的返回值, 问题)。`keep`：沙箱 ① 给的按多值列筛的取值，交
+    `拆多值`（按同一列分组时只留筛选的取值）。"""
     problems = checks.check_script(code)
     if problems:
         return None, problems
-    outcome, offset = await runner.run_custom(ctx, code, frame, {"names": NAMES})
+    outcome, offset = await runner.run_custom(ctx, code, frame, {"names": NAMES, "keep": dict(keep or {})})
     if not outcome.ok:
         lines = code.strip("\n").count("\n") + 1  # 与 `runner.custom_script` 拼进去的模型代码同一段
         return None, ["脚本运行出错：\n" + checks.model_error(outcome.error or "", offset, lines)]
@@ -240,7 +242,8 @@ async def _try(ctx: Any, code: str, frame: pd.DataFrame) -> tuple[dict | None, l
 
 
 async def write_and_run(llm: Any, ctx: Any, describe: str, query: str | None, cols: Sequence[tuple[str, str, str]],
-                        sample: Sequence[Mapping], frame: pd.DataFrame) -> tuple[str | None, dict | None]:
+                        sample: Sequence[Mapping], frame: pd.DataFrame,
+                        keep: Mapping[str, Sequence[str]] | None = None) -> tuple[str | None, dict | None]:
     """模型写脚本并跑；不过时带着错处修一次。返回 (脚本, 返回值)；修一次仍不过、调用出错时为 (None, None)。"""
     if llm is None:
         return None, None
@@ -253,7 +256,7 @@ async def write_and_run(llm: Any, ctx: Any, describe: str, query: str | None, co
             logger.warning("factory_issue_custom_llm_failed", attempt=attempt + 1, error=type(exc).__name__)
             return None, None
         code = checks.extract_code(text)
-        out, problems = await _try(ctx, code, frame)
+        out, problems = await _try(ctx, code, frame, keep)
         if out is not None:
             return code, out
         logger.info("factory_issue_custom_rejected", attempt=attempt + 1, problems=len(problems),
@@ -410,13 +413,14 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
     stored = stored_for(T, describe)
     code, result = None, None
     if stored is not None:
-        result, why = await _try(T.ctx, stored, frame)
+        result, why = await _try(T.ctx, stored, frame, res.get("keep"))
         code = stored if result is not None else None
         if result is None:
             logger.info("factory_issue_custom_stored_failed", problems=len(why))
     if result is None and mode == "full":
         code, result = await write_and_run(getattr(T.ctx, "llm", None), T.ctx, describe, T.query,
-                                           describe_columns(cols, executed), res.get("sample") or [], frame)
+                                           describe_columns(cols, executed), res.get("sample") or [], frame,
+                                           res.get("keep"))
     if result is None or code is None:
         if mode == "full":
             out.events.append(Event.delta("。".join([*dict.fromkeys(head), errors.CUSTOM_FAILED]) + "。"))

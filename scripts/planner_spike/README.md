@@ -131,6 +131,13 @@ uv run python scripts/planner_spike/spike.py --run --confirm-local
 
   看 `汇总.md` 的「打回后怎么改（修一次）」一节：误拦照原写法、该改改对两个比例，以及逐条的次数；错的在 `错例.csv` 里（项为 `repair`）。`--repair-groups` 可改跑哪几组。
 
+- **问一批单谁在处理**（2026-11-06，p2.6，对照集 c10）：先只跑新加的 V-74–V-78（25 次），再全量跑一次对照集，看新加的那句提示有没有带坏「某人手上的」（CN-036、V-06、V-47、ME 组）：
+
+  ```powershell
+  uv run python scripts/planner_spike/spike.py --run --confirm-local --parts plan --groups 现状+校验 --only V-74,V-75,V-76,V-77,V-78 --out runtime/planner_spike/<日期>-p2.6-谁在处理
+  uv run python scripts/planner_spike/spike.py --run --confirm-local --parts plan --groups 现状+校验 --out runtime/planner_spike/<日期>-p2.6
+  ```
+
 - **中断了可以续跑**：同一天再运行同一条命令，已完成的跳过，调用出错的重跑。换一天运行要用 `--out runtime/planner_spike/<原目录名>` 指回原目录。某一项出了工具自己的错时，只跳过这一项并打 ⚠ 行，其余照跑，再运行一次会补跑。
 - **换模型要换目录**：临时换模型可在同一个 PowerShell 窗口里先执行 `$env:FI_LLM_MODEL = "<模型名>"`（优先于 `.env`），再加 `--out runtime/planner_spike/<新目录名>`。目录里已有别的模型或提示词版本的结果时，脚本拒绝运行，免得新旧结果混在一起。
 - **临时统计的沙箱同时只跑 2 个**：Windows 上同时跑十几个沙箱子进程时，偶有子进程直接崩掉（exit=3221227274），与脚本内容无关。参考结果在调模型之前先逐题算好；遇到这类崩溃会自动重试两次。

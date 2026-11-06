@@ -168,9 +168,10 @@ async def test_rule_hits_are_returned():
 def test_system_has_no_date_and_is_cached():
     system = prompt.planner_system(MANIFEST, TOPICS)
     assert system is prompt.planner_system(MANIFEST, TOPICS)
-    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.5"
+    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.6"
     assert "严重的单" in system and "不良率高的单" in system  # p2.4：术语表加的两行（G93、G94）
     assert "一部今年有哪些问题" in system
+    assert "巴西的单现在都是谁在处理" in system  # p2.6：问一批单谁在处理（G97）
 
 
 def test_user_carries_history_previous_plan_and_outcome():

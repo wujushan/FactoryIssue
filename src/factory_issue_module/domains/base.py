@@ -474,6 +474,17 @@ def person_shown(values: Sequence[str], R: Resolver) -> str:
     return join([me.name if (me is not None and names.is_self(v)) else str(v) for v in values])
 
 
+def person_names(ids: Sequence[int], R: Resolver) -> list[str]:
+    """员工 ID → 姓名（人员主数据；「我」是当前用户）。按人员筛、又按同一人员维度分组时，分组只留这几位
+    （条件的 `group_values`，`views.vw_keep`）。"""
+    want = set(ids)
+    got = [p.name for p in R.master.people if p.id in want]
+    me = R.master.me
+    if me is not None and me.id in want:
+        got.append(me.name)
+    return unique(x for x in got if x)
+
+
 def departments(values: Sequence[str], R: Resolver) -> list[str] | Ask:
     """部门说法 → 部门名称（完整名称 → 简称 → 包含，总述「部门名称怎么对」）；对不上时请用户核对。"""
     from factory_issue_module.plan import names

@@ -23,6 +23,9 @@ from factory_issue_module.stats.lib.views import vw_rate
 CS_BLANK = ("未填", "—", "未指定", "未识别机型")
 #: 帧里几列的显示名（所属域、不良数量与两域的分母），由外壳按参数写入
 CS_NAMES = {}
+#: {帧的列名: {"域|问题编号": [取值…]}}：本步按多值维度筛过时各单在这一列下计入的取值（第一次调用给出的 `keep`，
+#: 只有与原值不同的单），由外壳按参数写入
+CS_KEEP = {}
 
 
 def cs_value(x, kind):
@@ -107,9 +110,24 @@ def cs_sample(df, k):
 
 
 def 拆多值(df, col, sep="、"):
-    """把一单多值的列（如机型「A920、A920PRO」）拆成一值一行，其余列照抄；这一列为空的单去掉。"""
+    """把一单多值的列（如机型「A920、A920PRO」）拆成一值一行，其余列照抄；这一列为空的单去掉。本步按这一列或与它
+    成对的列筛过时，各单只拆出与筛选取值对应的值（`CS_KEEP`，同统计 `views.vw_kept_values`）：问 Q92、IM30 时，
+    登记了 Q92、Q60 的单只拆出 Q92 一行。df 里没有所属域、问题编号两列时照原样拆。"""
     out = df.copy()
-    out[col] = out[col].apply(lambda x: [] if fi_blank(x) else [s.strip() for s in str(x).split(sep) if s.strip()])
+    rows_keep = CS_KEEP.get(col) or {}
+    dom_col, num_col = CS_NAMES.get("domain"), CS_NAMES.get("number")
+    keyed = bool(rows_keep) and dom_col in out.columns and num_col in out.columns
+
+    def split(x, key=None):
+        if key is not None and key in rows_keep:
+            return list(rows_keep[key])
+        return [] if fi_blank(x) else [s.strip() for s in str(x).split(sep) if s.strip()]
+
+    if keyed:
+        keys = [f"{d}|{n}" for d, n in zip(out[dom_col].tolist(), out[num_col].tolist())]
+        out[col] = [split(x, k) for x, k in zip(out[col].tolist(), keys)]
+    else:
+        out[col] = out[col].apply(split)
     out = out.explode(col)
     return out[out[col].apply(lambda x: not fi_blank(x))]
 

@@ -5,7 +5,7 @@
   问题类型（「其他|备注」也算「其他」）、问题等级、状态、加工厂（逗号多值逐段比）、机型与系列（大机型逐段）、
   问题跟进人与跟进部门（最新一条处理过程）、不良率（现算）、PN（关联申请单）、物料名称、建单以外的日期
   （文本日期先解析）、涉及费用（费用明细合计大于 0）。
-- 巴西没有的：当前责任人（「巴西不提供当前责任人，未计入」）、停线重启时间、产品在制属性、IQC 意见、原因分类、
+- 巴西没有的：当前责任人（按它筛时「巴西不提供当前责任人，未计入」；清单点名这一列时给问题跟进人）、停线重启时间、产品在制属性、IQC 意见、原因分类、
   处理结果、海外单上的国内工厂。按它们筛时巴西整域不计入；责任归属部门按问题跟进部门、只说「责任人」按问题
   跟进人解释，并写明。
 - 取数：主表与处理过程每次都取（处理过程 204 行，跟进人、跟进部门、结案日期、扣款都靠它）；费用明细、关联申请单
@@ -54,9 +54,12 @@ NOT_DELETED = cond("m.Status", "NE", enums.BR_DELETED)
 BASES = ("建单", "现场发现", "停线", "结案", "统计日期")
 TRAITS: dict[str, Any] = {"metrics": ["单数", "占比", "未结案数", "合计不良率", "结案周期", "费用美元", "费用雷亚尔", "扣款"],
                           "rate": "sum", "rate_den": "影响数量", "small_sample": True, "close": "结案日期"}
-#: 清单列：巴西只说「责任人」给问题跟进人；没有责任归属部门，按问题跟进部门；当前状态即主表状态（术语表「当前状态」）
+#: 清单列：巴西只说「责任人」给问题跟进人；没有责任归属部门，按问题跟进部门；当前状态即主表状态（术语表「当前状态」）；
+#: 不提供当前责任人，点名这一列时给问题跟进人，开头写明（`CURRENT_AS_FOLLOWER`，决策 2026-11-06「问一批单谁在处理」）
 KEY_ALIAS: dict[str, list[str] | None] = {"responsible": ["follower"], "resp_dept": ["follow_dept"],
-                                          "current_state": ["status"], "state_for_filter": ["status"]}
+                                          "current_state": ["status"], "state_for_filter": ["status"],
+                                          "current_people": ["follower"]}
+CURRENT_AS_FOLLOWER = "巴西不提供当前责任人，下面给出问题跟进人"
 
 COLUMN_NEEDS = {"inv_name": "inventory", "inv_std": "inventory", "pn": "pn", "cost_usd": "cost", "cost_brl": "cost"}
 #: 靠主数据才写得出来的列（同 `domestic.MASTER_USES`）：大机型、系列按产品主数据对 ID，产品没取到时不写成「未识别机型」
@@ -173,7 +176,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 continue
             if kind == "has":
                 out.notes.append(f"巴西按以下机型统计：{base.join(hit)}")
-            out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg, "label": "机型"})
             out.echo.append(("机型", base.join(hit)))
         elif fld == "系列":
             got_series = domestic.series_of(values, m, DOMAIN, misses=miss if ref else None)
@@ -181,7 +184,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 return got_series
             if base.ref_misses(out, LABEL, "系列", got_series, miss):
                 continue
-            out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg, "label": "系列"})
             out.echo.append(("系列", base.join(got_series)))
         elif fld == "加工厂":
             hit = []
@@ -196,7 +199,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             if base.ref_misses(out, LABEL, "加工厂", hit, miss):
                 continue
             # 逗号多值：任一段等于该工厂即命中（「CA」命中「CA」与「CA,TT」）
-            out.conds.append({"kind": "any_of", "col": "_factories", "values": hit, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_factories", "values": hit, "neg": neg, "label": "加工厂"})
             out.echo.append(("加工厂", base.join(hit)))
         elif fld == "物料名称":
             out.conds.append({"kind": "contains", "col": "_inv_name", "values": values, "neg": neg})
@@ -233,7 +236,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             if isinstance(got_s, Ask):
                 return got_s
             if got_s:
-                out.conds.append({"kind": "status", "items": got_s, "neg": neg})
+                out.conds.append({"kind": "status", "items": got_s, "neg": neg, "label": columns.STAGE})
                 out.echo.append(("状态", shown))
         elif fld in ("跟进部门", "责任归属部门"):
             got_d = base.departments(values, R)

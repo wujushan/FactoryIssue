@@ -165,7 +165,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 continue
             if kind == "has":
                 out.notes.append(f"海外按以下机型统计：{base.join(hit)}")
-            out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg, "label": "机型"})
             out.echo.append(("机型", base.join(hit)))
         elif fld in ("加工厂", "国内工厂"):
             pool = m.os_factories if fld == "加工厂" else m.factory_names()
@@ -234,7 +234,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             if isinstance(got_s, Ask):
                 return got_s
             if got_s:
-                out.conds.append({"kind": "status", "items": got_s, "neg": neg})
+                out.conds.append({"kind": "status", "items": got_s, "neg": neg, "label": columns.STAGE})
                 out.echo.append(("状态", shown))
         elif fld in ("跟进部门", "责任归属部门"):
             got_d = base.departments(values, R)
@@ -256,12 +256,16 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 ids_all += got_p
             shown = base.person_shown(values, R)
             if fld == "跟进人":
-                out.conds.append({"kind": "any_of", "col": "_follower_ids", "values": ids_all, "neg": neg})
+                out.conds.append({"kind": "any_of", "col": "_follower_ids", "values": ids_all, "neg": neg,
+                                  "group_col": "_follower_names", "group_values": base.person_names(ids_all, R),
+                                  "label": "问题跟进人"})
                 out.echo.append(("问题跟进人", shown))
             else:
                 if fld == "责任人":
                     out.notes.append("海外的责任人按当前责任人")
-                out.conds.append({"kind": "any_of", "col": "_current_ids", "values": ids_all, "neg": neg})
+                out.conds.append({"kind": "any_of", "col": "_current_ids", "values": ids_all, "neg": neg,
+                                  "group_col": "_current_names", "group_values": base.person_names(ids_all, R),
+                                  "label": "当前责任人"})
                 out.echo.append(("当前责任人", shown))
         elif fld in ("IQC意见", "处理结果"):
             table = {"IQC意见": enums.OS_IQC_OPINION, "处理结果": enums.OS_DESIGN_RESULT}[fld]
