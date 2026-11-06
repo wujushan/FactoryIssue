@@ -346,7 +346,10 @@ async def test_similar_says_none_found_when_nothing_is_close():
     h.retrieval.hits = _sim_hits()
     h.llm.routes[SIM_MARK] = _related(False, False, False)
     events = await run(h, "国内有没有开机后设备自动播放音乐的")
-    assert not _tables(events) and "国内按现象描述没有找到相近的问题" in _text(events)
+    text = _text(events)
+    assert not _tables(events) and "国内没有找到与「开机后设备自动播放音乐」相近的问题" in text
+    assert text_search.SIM_NONE_HINT in text and "每域最多" not in text
+    assert not any("看看涉及" in b["label"] for b in _buttons(events))  # 现象里没有说法清单里的说法：不给按话题找
 
 
 async def test_similar_floor_is_configurable_and_zero_turns_it_off():
@@ -559,7 +562,7 @@ async def test_text_search_answer_follows_the_skeleton():
     assert before[0].startswith("按这些词找（出现任一个）：排线、开裂、NFC")  # 提示行在最前
     assert "共 3 张" in before[1] and before[1].startswith("\n\n**国内，")  # 结论（模板句）
     assert "\n- **" in before[1] and "**需关注**" in before[1]  # 要点与需关注照常给
-    assert before[2] == "\n\n**国内比对范围内的文字里出现任一个词「排线」、「开裂」、「NFC」的单（3 张）**"  # 小标题写张数
+    assert before[2] == "\n\n**国内出现任一个词「排线」、「开裂」、「NFC」的单（3 张）**"  # 小标题写张数
     after = "".join(e.data["text"] for e in events[table_at:] if e.type is EventType.DELTA)
     assert "**查找说明**" in after and "排线、开裂、NFC" not in after  # 说法在提示行，结尾不重复
     assert all("；\n" not in e.data["text"] for e in events if e.type is EventType.DELTA)

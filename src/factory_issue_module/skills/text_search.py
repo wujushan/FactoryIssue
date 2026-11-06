@@ -128,6 +128,12 @@ def _texts(frame: pd.DataFrame | None) -> dict[int, str]:
 # ---------------------------------------------------------------------------- 开头与按钮
 
 
+def _place(tp: TermPlan) -> str:
+    """关键词搜索的小标题、开头一句里「在哪些文字里」：点名了栏目才写（「问题描述里」）；没点名时那一长串栏目只在
+    查找说明里写一次，小标题不带（决策 2026-11-06「类似问题没找到时给下一步」）。"""
+    return "" if tp.where == terms.ALL_SCOPE else f"{tp.where}里"
+
+
 def _n(seg: Mapping[str, Any], key: str) -> int:
     value = seg.get(key)
     return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
@@ -144,7 +150,7 @@ def opening(tp: TermPlan, seg: Mapping[str, Any], label: str, scope: str, counts
     if tp.mode == "关键词":
         how = "同时出现" if tp.logic == "和" and len(tp.used) > 1 else ("出现任一个词" if len(tp.used) > 1 else "出现")
         words = "、".join(f"「{w}」" for w in tp.used)
-        return f"{head}{tp.where}里{how}{words}的单共 {_n(seg, 'kw')} 张"
+        return f"{head}{_place(tp)}{how}{words}的单共 {_n(seg, 'kw')} 张"
     if tp.intersect:
         both = _n(seg, "kw")
         text = f"{head}用{tp.approach}处理过、又涉及{tp.label}的单 {both} 张"
@@ -194,13 +200,29 @@ def adjust_hint(tp: TermPlan) -> str:
     return "要增减说法时可以直接说「再加上『某个说法』」或「去掉『某个说法』」重新找"
 
 
+#: 类似问题一张都不相近时结论后面那一句（总述「类似问题没找到时」）
+SIM_NONE_HINT = ("没找到不代表以前没出现过，可以换个说法描述现象（写明是哪个部件、什么表现）再问，"
+                 "或直接按关键词搜索，例如「搜索描述中有『某个词』的问题」")
+
+
+def _sim_none(tp: TermPlan, segs: Sequence[Mapping[str, Any]]) -> bool:
+    return tp.mode == "类似问题" and bool(segs) and all(s.get("empty") for s in segs)
+
+
+def none_hint(tp: TermPlan, segs: Sequence[Mapping[str, Any]], sem_notes: Sequence[str]) -> str:
+    """类似问题一张都不相近时给下一步（总述「类似问题没找到时」）。按意思找暂不可用时这次没找成，不说这句。"""
+    if not _sim_none(tp, segs) or any(n.startswith(errors.SEMANTIC_UNAVAILABLE) for n in sem_notes):
+        return ""
+    return SIM_NONE_HINT
+
+
 def _what(tp: TermPlan) -> str:
     """各域小标题里「找到的是什么单」（决策 2026-11-03「回答骨架与排版」）。"""
     if tp.mode == "类似问题":
         return "最相近的问题"
     if tp.mode == "关键词":
         how = "同时出现" if tp.logic == "和" and len(tp.used) > 1 else ("出现任一个词" if len(tp.used) > 1 else "出现")
-        return f"{tp.where}里{how}{'、'.join(f'「{w}」' for w in tp.used)}的单"
+        return f"{_place(tp)}{how}{'、'.join(f'「{w}」' for w in tp.used)}的单"
     if tp.intersect:
         return f"用{tp.approach}处理过、又涉及{tp.label}的单"
     if tp.grouped:
@@ -280,12 +302,12 @@ def fallback(tp: TermPlan, segs: Sequence[Mapping[str, Any]], scope: str, counts
     labels = "、".join(str(s.get("domain")) for s in segs)
     hit = [s for s in segs if not s.get("empty")]
     miss = [str(s.get("domain")) for s in segs if s.get("empty")]
+    if not hit and tp.mode == "类似问题":  # 一张都不相近：说按什么现象找的，用户看得出有没有理解对
+        return f"{labels}{scope}{'都' if len(segs) > 1 else ''}没有找到与「{tp.label}」相近的问题。"
     if len(segs) == 1:
         seg = segs[0]
         return opening(tp, seg, str(seg.get("domain")), scope, counts.get(str(seg.get("domain"))) or {}) + "。" + tail
     if not hit:
-        if tp.mode == "类似问题":
-            return f"{labels}{scope}按现象描述都没有找到相近的问题。"
         return layout.sentences([f"{labels}{scope}{_what(tp)}都没有找到"]
                                 + [opening(tp, s, str(s.get("domain")), "", counts.get(str(s.get("domain"))) or {})
                                    for s in segs if tp.intersect])
@@ -306,11 +328,18 @@ def first_fields(seg: Any) -> str:
     return "、".join(next(iter(titles[c].values())) for c in seg.groups["first"] if c in titles)
 
 
-def buttons(tp: TermPlan, res: Mapping[str, Any], counts: Mapping[str, Any], first: str = "") -> list[dict[str, str]]:
+def buttons(tp: TermPlan, res: Mapping[str, Any], counts: Mapping[str, Any], first: str = "",
+            topics: Any = None) -> list[dict[str, str]]:
     """文字查找的可点选项（最小版，开发者 2026-10-30 定，2026-10-31 补「只看问题本身涉及的」；按钮形状照 §9.5）。
-    张数与有没有某一组都取自沙箱。"""
+    张数与有没有某一组都取自沙箱。类似问题一张都不相近、现象描述对得到说法清单里的一个话题时，给按这个话题找
+    （总述「类似问题没找到时」；`topics` 是本轮的说法清单）。"""
     out: list[dict[str, str]] = []
     totals = res.get("totals") or {}
+    if _sim_none(tp, res.get("segments") or []) and topics is not None:
+        topic = terms.topic_of(tp.label, topics)
+        if topic is not None:
+            label = f"看看涉及{topic.name}的问题"
+            out.append({"id": "t5", "name": label, "label": label, "query": f"按{topic.name}话题找"})
     if tp.scope == "比话题小" and tp.topic is not None and not tp.intersect and tp.mode == "话题":
         out.append({"id": "t1", "name": "按整个话题找", "label": "按整个话题找", "query": f"按整个{tp.topic.name}话题找"})
     # 清单外的话题（说法由助手提）：只看第一组。问句写成点名这几栏，规划器照点名字段写计划，不用改计划格式；
@@ -447,14 +476,15 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
     conclusion = await _narrative(T, X, tp, res, segs, run, layout.sentences(notice),
                                   fallback(tp, segs, scope, by_domain, named(res, segs, T.sites)))
     out.events += layout.para(notice)
-    out.events += _present(T, tp, segs, by_domain, conclusion, crowded_hint(run.step) if crowded else "")
+    out.events += _present(T, tp, segs, by_domain, conclusion,
+                           crowded_hint(run.step) if crowded else none_hint(tp, segs, sem_notes))
     _caliber(C, run, tp, segs, sem_notes, X, T.answer.similar_rows)
     if res.get("exported"):
         await summaries.fill_exports(T.ctx, outcome_frames, executed)
         text = await export.save_lists(T.ctx, res["exported"], outcome_frames, EXPORT_FILENAME)
         T.record.exports.append(text)
         out.exported = text != f"{errors.EXPORT_FAILED}。"
-    out.buttons = buttons(tp, res, counts, first_fields(T.seg or config_files.default(SEGMENTATION)))
+    out.buttons = buttons(tp, res, counts, first_fields(T.seg or config_files.default(SEGMENTATION)), topics)
     return out
 
 
@@ -620,17 +650,18 @@ def crowded_hint(step: Mapping[str, Any]) -> str:
 
 def _present(T: Any, tp: TermPlan, segs: Sequence[dict[str, Any]], counts: Mapping[str, Mapping[str, Any]],
              conclusion: str, hint: str = "") -> list[Event]:
-    """结论 → 每域一节（小标题、表格、表格下面几句）→ 各节之后的提示（要增减说法、候选太多时加条件）。
-    提示行在调用方（决策 2026-11-03「回答骨架与排版」）。"""
+    """结论 → 每域一节（小标题、表格、表格下面几句）→ 各节之后的提示（要增减说法、候选太多时加条件、类似问题
+    没找到时的下一步）。提示行在调用方（决策 2026-11-03「回答骨架与排版」）。"""
     from factory_issue_module.turn import execute as X
 
     events: list[Event] = [Event.delta(conclusion)]
-    multi = len(segs) > 1
+    say_empty = len(segs) > 1 and any(not s.get("empty") for s in segs)
     for seg in segs:
         dom = X._BY_LABEL.get(str(seg.get("domain")), Domain.DOMESTIC)
         got = counts.get(dom.label) or {}
-        if seg.get("empty"):  # 没有单的域：几域一起时原位置一句，只有这一域时由结论说
-            if multi:
+        # 没有单的域：几域一起、别的域有单时原位置一句；只有这一域或几域都没有单时由结论说（一样信息只在一处说）
+        if seg.get("empty"):
+            if say_empty:
                 events.append(Event.delta(opening(tp, seg, dom.label, "", got) + "。"))
             continue
         events.append(layout.heading(heading(tp, seg, dom.label)))
@@ -684,7 +715,11 @@ def _caliber(C: cal.Caliber, run: Any, tp: TermPlan, segs: Sequence[dict[str, An
     words = ""
     if tp.mode == "类似问题":
         words = "按现象描述找意思相近的单"
-        complete = f"逐张判断是同一类现象的才列出，每域最多 {similar_rows} 张、按相近程度排序，不保证完整"
+        complete = "逐张判断是同一类现象的才列出"
+        # 一张都没列出时「每域最多几张、按相近程度排序」说的是不存在的表格，只说不保证完整
+        if any(_n(s, "g3") for s in segs):
+            complete += f"，每域最多 {similar_rows} 张、按相近程度排序"
+        complete += "，不保证完整"
     elif tp.user_words:
         complete = "列出全部命中的单"
     else:

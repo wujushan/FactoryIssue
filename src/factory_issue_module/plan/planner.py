@@ -4,10 +4,13 @@
 2. 一次模型调用写计划（`[system, user]`，temperature 0，要 JSON）。先查格式（第 12 条）；格式合格后规整，
    再对规整后的计划做其余校验（第 7 条的校验一半、第 13–15 条）。
 3. 格式或校验不过时带着错处修一次（`[system, user, assistant, user]`，前两条原样沿用），两者合计只修一次，
-   修后的计划再规整一遍。修后格式仍不合格：第一次只是校验被打回的，用第一次的计划，否则规划失败（§14）。
-   只是校验仍不过，按修后的计划执行，`check_errors` 带回去（第 13 条：开头写明按什么理解）。
+   修后的计划再规整一遍。说明分两段：格式与判据可证明的校验写「不合格」；按词的位置判断的（第 7 条校验一半、
+   第 13 条）写「需要核对」，允许照原写法保留（`normalize.split_checks`）。修后格式仍不合格：第一次只是校验被打回
+   的，用第一次的计划，否则规划失败（§14）。只是校验仍不过，按修后的计划执行，`check_errors` 带回去（第 13 条：
+   开头写明按什么理解）。
 4. 每次改写、打回各打一条 `factory_issue_plan_rule`（规则编号、技能、改前改后的条件名，不含问句与取值）；
-   第 16 条只记日志。模型调用出错或超时同样是规划失败。
+   请模型核对的那几条修后仍在时记「核对后未改」，G5 看日志就知道误判多不多。第 16 条只记日志。模型调用出错或
+   超时同样是规划失败。
 
 主数据按需取（决策 2026-11-01「寒暄不取主数据与追问用例的取数断言」）：给了 `enrich` 时，`inputs` 里先没有
 主数据，只在用得到时调 `enrich` 补上。号码直通先不带机型清单判断（机型清单只会多拒几种直通），会直通时才补上
@@ -129,10 +132,12 @@ def with_master(inputs: PlanInputs, *, classes: Mapping[str, Sequence[str]],
     return dataclasses.replace(inputs, classes=classes, entities=entities, machines=machines)
 
 
-def _log_bounce(rules: Sequence[int], plan: dict | None) -> None:
+def _log_bounce(rules: Sequence[int], plan: dict | None, *, after_repair: bool = False) -> None:
+    """打回各记一条；修后仍不过时，请模型核对的那几条（`VERIFY_RULES`）记「核对后未改」。"""
     skill = "+".join(str(s.get("skill")) for s in (plan or {}).get("steps") or [] if isinstance(s, dict))
     for rule in sorted(set(rules)):
-        logger.info("factory_issue_plan_rule", rule=rule, action="打回", skill=skill)
+        action = "核对后未改" if after_repair and rule in normalize.VERIFY_RULES else "打回"
+        logger.info("factory_issue_plan_rule", rule=rule, action=action, skill=skill)
 
 
 class Planner:
@@ -207,8 +212,9 @@ class Planner:
                 return self._done(result, first_done, inputs)
         _log_bounce([12] if errors else [r for r, _ in checks], plan)
 
+        must, verify = (errors, []) if errors else normalize.split_checks(checks)
         repair = [*messages, {"role": "assistant", "content": first},
-                  {"role": "user", "content": prompt.repair_user(errors or [m for _, m in checks])}]
+                  {"role": "user", "content": prompt.repair_user(must, verify)}]
         try:
             second = _content(await llm.chat(repair, **_CHAT_KW))
         except Exception as exc:  # noqa: BLE001
@@ -226,7 +232,7 @@ class Planner:
         fixed = self._normalize(plan2, inputs)
         still = self._checks(fixed.plan, inputs)
         if still:
-            _log_bounce([r for r, _ in still], fixed.plan)
+            _log_bounce([r for r, _ in still], fixed.plan, after_repair=True)
             result.check_errors = [m for _, m in still]
         return self._done(result, fixed, inputs)
 

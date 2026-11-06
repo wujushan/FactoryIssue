@@ -318,7 +318,10 @@ def _scope_text(fields: Fields) -> str:
     return "、".join(fields.titles) if fields.titles else ""
 
 
-ALL_SCOPE = "比对范围内的文字"
+#: 没点名栏目时「在哪些文字里找」的说法（总述「统计口径说明」文字查找一行：不对用户说「比对范围」）
+ALL_SCOPE = "问题现象、问题描述、原因分析、改善措施、处理步骤等文字"
+#: 类似问题没点名栏目时的说法：只按意思找，建单时选的问题现象不参与（总述「预设的问题现象只按词找」）
+SIM_SCOPE = "问题描述、原因分析、改善措施、处理步骤等文字"
 MEASURE_SCOPE = "措施类文字（改善建议、改善措施、预防对策、处理步骤，巴西另有 SQE 跟进结果）"
 NEEDS_PREVIOUS = "接不上上一轮"
 
@@ -364,7 +367,7 @@ async def _plan(llm: Any, step: dict, topics: TopicTerms, seg: Segmentation) -> 
                             fill=base.FILL_NONE)
         codes = fields.codes or None
         return TermPlan(mode="类似问题", semantic={"query": said, "codes": codes, "kind": "sim", "from": "cond"},
-                        label=said, where=_scope_text(fields) or ALL_SCOPE, notes=notes,
+                        label=said, where=_scope_text(fields) or SIM_SCOPE, notes=notes,
                         missing=missing_in(fields) if fields.codes else {})
 
     if mode == "关键词" or (words and mode != "点名字段" and not topic):
