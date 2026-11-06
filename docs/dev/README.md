@@ -11,9 +11,9 @@
 | # | 文档 | 什么时候看 |
 |---|---|---|
 | 01 | [从零上手 Getting Started](01-getting-started.md) | 建仓、装 SDK、跑起第一个模块、验证；**已建好的仓要[升级 SDK 版本](01-getting-started.md#升级-sdk-版本已建好的仓)也看这篇** |
-| 02 | [SDK API 参考](02-sdk-reference.md) | 写代码时查 `paxsz-forge-core` / `paxsz-forge-data` / `paxsz-forge-sandbox` / `paxsz-forge-governance` 的类与函数签名（import 名仍是 `forge_core` 等）；**做多轮对话看[多轮上下文](02-sdk-reference.md#多轮上下文-forge_coreconversation)**（历史怎么取、谁负责指代消解）；末尾还有[怎么打日志](02-sdk-reference.md#打日志无需任何-sdk-api)（无需任何 API，平台自动打模块标签） |
+| 02 | [SDK API 参考](02-sdk-reference.md) | 写代码时查 `paxsz-forge-core` / `paxsz-forge-data` / `paxsz-forge-sandbox` / `paxsz-forge-governance` 的类与函数签名（import 名仍是 `forge_core` 等）；**做多轮对话看[多轮上下文](02-sdk-reference.md#多轮上下文-forge_coreconversation)**（历史怎么取、谁负责指代消解）；末尾还有[怎么打日志](02-sdk-reference.md#打日志无需任何-sdk-api)（无需任何 API，平台自动打模块标签）；**被业务页面调用（自动审核、填单）看[任务面](02-sdk-reference.md#任务面-v2tasks-与-manifesttasks)** |
 | 03 | [事件协议与流式输出](03-events-and-streaming.md) | `handle()` 里该 `yield` 什么、怎么流式回话 |
-| 04 | [权限与受控取数](04-permissions-and-data-access.md) | 做**数据查询**模块必读：`field_mappings`、行/列权限、`ctx.data`、沙箱数字处理 |
+| 04 | [权限与受控取数](04-permissions-and-data-access.md) | 做**数据查询**模块必读：`field_mappings`、行/列权限、`ctx.data`、沙箱数字处理；任务要用超出用户权限的数据时读[任务级系统数据范围](04-permissions-and-data-access.md#任务级系统数据范围data_scopesystem) |
 | 05 | [从 Dify 应用迁移](05-migration-from-dify.md) | 把现有 Dify 应用重建为 forge 模块的概念映射与步骤 |
 | 06 | [forge CLI 速查（业务仓本地）](06-cli-reference.md) | `forge dev serve`（含本地能力桩）/ `modules` / `capabilities` / `jobs` / `vectorize` / `eval` / `data check`；**只收在你仓里跑得通的**，平台服务器运维命令不在此列 |
 | 07 | [能力 Profile 指引](07-capability-profiles.md) | **初始化选 profile / 追加某 profile 能力时必读**：每个 profile 的声明/依赖/代码/平台前置/DoD |

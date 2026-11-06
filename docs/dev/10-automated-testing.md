@@ -87,7 +87,7 @@ X-Forge-Test-Key: fdt_xxxxxxxx.yyyyyyyy
 | `user_id` | string | | 测试身份。权限不看它（绿灯），但模块内部若按 user_id 走业务逻辑则有用。默认 `qa-<key前缀>` |
 | `user_name` / `department` | string | | 注入 `ctx.user.name` / `.department`。测试轮**不查用户档案**，依赖姓名/部门的业务分支只能靠这里显式给；不给即空串（与真实环境「查无档案」一致） |
 | `attributes` | object | | 透传给 `UserContext.attributes` |
-| `ext_param` | object | | 客户端定制参数，原样交给模块（必带保留键 `task`）。**任务式模块的用例靠它**——不传就只覆盖得到「没给任务码」的分支。字段口径见 02 · SDK 参考的「客户端定制参数」 |
+| `ext_param` | object | | 客户端定制参数，原样交给模块（必带保留键 `task`）。**任务式模块的用例靠它**——不传就只覆盖得到「没给任务码」的分支。字段口径见 02 · SDK 参考的「客户端定制参数」。⚠️ 本通道不校验 `manifest.tasks` 声明、也不区分 `data_scope`（绿灯树下取数本就全放开），故 `/v2/tasks` 的「任务码是否已声明」要另在单测里对 `manifest.find_task(...)` 断言 |
 | `include_trace` | bool | | 回传本轮 SQL/LLM 明细，默认 `false`（见 §3.3） |
 | `files` | array | | 本轮附带的文件，**base64 内联**：`[{"filename": "单据.png", "content_base64": "..."}]`。带文件的模块靠它做回归（见 §3.4）|
 
@@ -152,6 +152,18 @@ CI 的第一步建议先打它：凭据问题当场暴露，而不是等到第�
       "as_of": "2026-09-21", "notes": "其中 1 个是替代料…", "citation_count": 0,
       "duration_ms": 85.3, "error_code": "", "error": "", "problems": [],
       "chain": ["SHIPMENT", "MATERIAL_QUERY"], "invoked_at": "2026-09-21T10:00:00.123"
+    }],
+    "stats_runs": [{
+      "module": "SHIPMENT", "ok": true,
+      "script": "def run(data):
+    df = data[\"demand\"]
+    …",
+      "datasets": [{"name": "demand", "rows": 120,
+                    "columns": [{"name": "part_no", "dtype": "str"}, {"name": "qty", "dtype": "int64"}]}],
+      "timeout_s": 60, "return_frames": false,
+      "result": {"rows": [{"月份": "2026-09", "台数": 42}]}, "frames": [],
+      "stdout": "", "error": "", "meta": {"result_chars": 38},
+      "duration_ms": 412.7, "called_at": "2026-09-21T10:00:00.456"
     }]
   }
 }
@@ -180,6 +192,11 @@ assert [(i["target"], i["capability"], i["error_code"]) for i in inv] == [
 ]
 assert inv[0]["rows"] > 0
 ```
+
+`stats_runs` 是本轮每次 `ctx.stats.run`，**成功与失败都在**，按完成顺序排。`script` 是你**实际交给
+沙箱的那一份**——LLM 写的脚本经你抽代码块、拼模板、重试之后长什么样，只有这里看得到；`datasets` /
+`frames` 只有结构（名字、行数、列名与 dtype），不含数据本体；`error` 是脚本的 traceback。统计数字不对
+时先看它：`result` 对得上而答案错了是呈现问题，`result` 就错了才是脚本或喂进去的数据问题。
 
 不含 prompt / 模型输出正文（那会让响应体涨到几 MB）。**默认关**：全量回归时它是纯负载，
 真要排错就对着失败的那一条单独重跑一次。
@@ -441,8 +458,6 @@ export FORGE_TEST_BASE_URL=http://<平台主机>:8090
 export FORGE_TEST_API_KEY=fdt_xxxxxxxx.yyyyyyyy
 uv run python scripts/qa_test.py docs/testcases/golden/cases.example.json
 ```
-
-用例上写了非空的 `skip`（一句话原因）时，runner 不发请求，报告里单列「跳过」，不算通过也不算失败。`--only` 点名它同样跳过。去掉这个字段即恢复。
 
 最小调用（自己写 runner 时的核心就这几行）：
 
