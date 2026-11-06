@@ -235,6 +235,12 @@ def cn_view(data, E, desc_text):
             "_pn_names": fi_unique([str(o.get("PartName")).strip() for o in orders.get(pid, [])
                                     if not fi_blank(o.get("PartName"))]),
             "_material_flag": material_flag, "_machines": machines, "_series": series,
+            # 成对列（`views.VW_LINKS`）：按系列筛、按机型分组只计该系列的机型；按当前责任人筛、按环节分组只计这个人
+            # 所在那几行的环节，反过来同理（决策 2026-11-06「按多值维度既筛又分组」补记）
+            "_machine_pairs": [[str(m.get("ProductName")).strip(),
+                                None if fi_blank(m.get("Series")) else str(m.get("Series")).strip()]
+                               for m in ms if not fi_blank(m.get("ProductName"))],
+            "_state_pairs": [] if done else [[stage, list(ids), list(people)] for stage, people, ids in st_rows],
             "_stages": fi_unique([stage for stage, _p, _i in st_rows]), "_current_ids": cur_ids,
             "_state_lines": [stage + (" " + ",".join(people) if people else "") for stage, people, _i in st_rows],
             "_current_names": cur_names, "_responsible_ids": [] if resp is None else [resp],

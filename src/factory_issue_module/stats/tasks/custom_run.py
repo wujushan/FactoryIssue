@@ -5,11 +5,12 @@
 `run` 才是入口：把帧的列名写进口径函数要用的 `CS_NAMES`，调模型的 `run`，返回值经 `cs_finish` 整理后放在 `out`。
 """
 
-from factory_issue_module.stats.lib.custom import CS_NAMES, cs_finish
+from factory_issue_module.stats.lib.custom import CS_KEEP, CS_NAMES, cs_finish
 
 PARAMS = {}
 
 CS_NAMES.update(PARAMS.get("names") or {})
+CS_KEEP.update(PARAMS.get("keep") or {})
 
 
 def run(data):

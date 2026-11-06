@@ -198,7 +198,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 continue
             if kind == "has":
                 out.notes.append(f"按以下机型统计：{base.join(hit)}")
-            out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg, "label": "机型"})
             out.echo.append(("机型", base.join(hit)))
         elif fld == "系列":
             got_series = series_of(values, m, DOMAIN, misses=miss if ref else None)
@@ -206,7 +206,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 return got_series
             if base.ref_misses(out, LABEL, "系列", got_series, miss):
                 continue
-            out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg, "label": "系列"})
             out.echo.append(("系列", base.join(got_series)))
         elif fld == "加工厂":
             rest = base.rest_of(fld, values, neg, R)
@@ -279,7 +279,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 items.append([got_s[0], got_s[1]])
                 if got_s[0] == "环节":
                     out.needs.add("state")
-            out.conds.append({"kind": "status", "items": items, "neg": neg})
+            out.conds.append({"kind": "status", "items": items, "neg": neg, "label": columns.STAGE})
             out.echo.append(("状态", shown))
         elif fld in ("跟进部门", "责任归属部门"):
             got_d = base.departments(values, R)
@@ -297,7 +297,8 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 if several:
                     out.breakdowns.append({"title": columns.shown("resp_dept"), "col": "_resp_dept_names",
                                            "multi": True, "values": got_d})
-                out.conds.append({"kind": "any_of", "col": "_resp_dept_ids", "values": ids, "neg": neg})
+                out.conds.append({"kind": "any_of", "col": "_resp_dept_ids", "values": ids, "neg": neg,
+                                  "group_col": "_resp_dept_names", "group_values": got_d, "label": "责任归属部门"})
                 out.conds.append({"kind": "flag", "col": "_resp_material", "value": False})
                 out.echo.append(("责任归属部门", base.join(got_d)))
         elif fld in ("跟进人", "当前责任人", "责任人"):
@@ -312,7 +313,9 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 out.sql.append(cond("m.RUser", "NOT_IN" if neg else "IN", [str(i) for i in ids_all]))
                 out.echo.append(("问题跟进人", shown))
             elif fld == "当前责任人":
-                out.conds.append({"kind": "any_of", "col": "_current_ids", "values": ids_all, "neg": neg})
+                out.conds.append({"kind": "any_of", "col": "_current_ids", "values": ids_all, "neg": neg,
+                                  "group_col": "_current_names", "group_values": base.person_names(ids_all, R),
+                                  "label": "当前责任人"})
                 out.needs.add("state")
                 out.echo.append(("当前责任人", shown))
             else:

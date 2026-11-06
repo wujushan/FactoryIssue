@@ -5,11 +5,13 @@
 `_stopped_now`、`_restarted`、`_not_stopped`、`_stop_code`、`_stages`、`_machines`、`_series`、`_current_ids`、
 `_current_names`、`_responsible_ids`、`_follower_ids`、`_resp_dept_ids`、`_resp_material`、`_rate_value`、`_bad`、
 `_den`、`_impact`、`_close_days`、`_stop_days`、`_inv_name`、`_pn_codes`、`_pn_names`。巴西另有费用的 `_usd`、
-`_brl`、`_debit`、`_has_cost`。
+`_brl`、`_debit`、`_has_cost`。成对列（`VW_LINKS`）：国内、巴西的 `_machine_pairs`，国内的 `_state_pairs`。
 
 条件由 `handle()` 一侧对好库、写成参数（`domains/<域>.py`）：
 - `{"kind": "status", "items": [[种类, 值], …], "neg": 否}`：状态说法，几项之间为「或」；
 - `{"kind": "any_of", "col": 多值列, "values": […], "neg": 否}`：多值列与取值有交集即命中（比较前统一写法）；
+  按 ID 筛、分组列是名称的（当前责任人、责任归属部门、海外问题跟进人）另带 `"group_col": 分组列,
+  "group_values": [名称…]`；带 `"label": 叫法` 的（状态条件同）参加分组限定（`vw_keep`）；
 - `{"kind": "contains", "col": 列, "values": […], "neg": 否}`：包含任一取值；
 - `{"kind": "num", "col": 列, "op": eq/ne/gt/lt/ge/le/between, "values": [数…]}`：数值比较，空值不命中；
 - `{"kind": "ids", "values": [单 ID…]}`：在前一步的结果里找。
@@ -208,8 +210,109 @@ def vw_period_range(start, end, dim):
     return out
 
 
+#: 单上成对登记的几列：成对列 → 各位置对应的视图列。成对列每一项是一组，位置上可以是一个值或一串值。
+#: 国内、巴西的机型与系列（一个机型属于一个系列）；国内当前状态每一行的环节、员工 ID、姓名
+VW_LINKS = {"_machine_pairs": ["_machines", "_series"], "_state_pairs": ["_stages", "_current_ids", "_current_names"]}
+#: 按 ID 筛、按姓名分组的同一维度：ID 列 → 姓名列（口径写「筛选的当前责任人」，不写「与之对应的」）
+VW_SAME = {"_current_ids": "_current_names", "_follower_ids": "_follower_names", "_resp_dept_ids": "_resp_dept_names"}
+
+
+def vw_keep(conds):
+    """按一单可多值的维度筛了哪些取值（总述「统计口径说明」多值归属），分组时用来限定（`vw_restrict`）。
+
+    返回 [{"label": 条件的叫法, "show": [口径里写的取值…], "cols": {视图列: [取值…]}}]，同一叫法的几个条件合成一项。
+    参加的是带 `label` 的肯定条件：any_of 条件按条件里的列与取值，带 `group_col` 的另加它与 `group_values`；状态条件
+    的几项都是「环节」时按处理环节。否定的条件不限定（留下的单本来就没有那些取值）。"""
+    by_label = {}
+    for c in conds or []:
+        if c.get("neg") or not c.get("label"):
+            continue
+        if c.get("kind") == "any_of":
+            cols = {c["col"]: list(c.get("values") or [])}
+            if c.get("group_col"):
+                cols[c["group_col"]] = list(c.get("group_values") or [])
+            show = list(c.get("show") or c.get("group_values") or c.get("values") or [])
+        elif c.get("kind") == "status" and c.get("items") and all(k == "环节" for k, _v in c["items"]):
+            cols = {"_stages": [v for _k, v in c["items"]]}
+            show = list(cols["_stages"])
+        else:
+            continue
+        e = by_label.setdefault(c["label"], {"label": c["label"], "show": [], "cols": {}})
+        e["show"] += [x for x in show if x not in e["show"]]
+        for col, vals in cols.items():
+            got = e["cols"].setdefault(col, [])
+            got += [x for x in vals if x not in got]
+    return [e for e in by_label.values() if any(e["cols"].values())]
+
+
+def vw_link_of(e, col):
+    """这一项条件经哪个成对列连到分组列 `col`：(成对列, 条件列在组里的位置, 分组列在组里的位置)；连不上为 None。"""
+    for pairs, names in VW_LINKS.items():
+        if col not in names:
+            continue
+        src = next((k for k in e["cols"] if k in names and k != col), None)
+        if src is not None:
+            return pairs, names.index(src), names.index(col)
+    return None
+
+
+def vw_restrict(dims, keep):
+    """多值维度与哪几项条件有关（同一列，或经成对列连上），就带上这几项（`keep`）与口径要写的
+    （`only_by`：[[叫法, 取值, 是否同一维度]…]）。"""
+    out = []
+    for d in dims or []:
+        col = d.get("col")
+        if d.get("multi"):
+            rel = [e for e in keep or [] if col in e["cols"] or vw_link_of(e, col) is not None]
+            if rel:
+                same = [col in e["cols"] or any(VW_SAME.get(k) == col for k in e["cols"]) for e in rel]
+                d = {**d, "keep": rel, "only_by": [[e["label"], list(e["show"]), s] for e, s in zip(rel, same)]}
+        out.append(d)
+    return out
+
+
+def vw_as_list(x):
+    return list(x) if isinstance(x, (list, tuple)) else [x]
+
+
+def vw_allowed(row, col, keep):
+    """这一单在分组列 `col` 下可以计入哪些取值（统一写法后的集合；None = 不限定），以及有没有经成对列限定。
+
+    同一列的条件直接取它的取值；别的列经成对列（`VW_LINKS`）取与筛选取值同组的那些。几项条件都有关时取交集。"""
+    allowed, linked = None, False
+    for e in keep or []:
+        if col in e["cols"]:
+            got = {fi_key(x) for x in e["cols"][col]}
+        else:
+            link = vw_link_of(e, col)
+            if link is None or link[0] not in row.index:
+                continue
+            pairs, i, j = link
+            src = VW_LINKS[pairs][i]
+            want = {fi_key(x) for x in e["cols"][src]}
+            got = {fi_key(y) for t in (row[pairs] or []) if any(fi_key(x) in want for x in vw_as_list(t[i]))
+                   for y in vw_as_list(t[j]) if not fi_blank(y)}
+            linked = True
+        allowed = got if allowed is None else allowed & got
+    return allowed, linked
+
+
+def vw_kept_values(row, col, keep):
+    """一单在多值列 `col` 下计入的取值。按同一列筛时一个都对不上（人员姓名的写法与主数据不同）照原样，不让这张单
+    掉出分组；经成对列限定、一个都不剩时为空（如按环节筛、那一行环节上没有人：这张单没有可计入的当前责任人）。"""
+    vals = list(row[col] or [])
+    if not keep:
+        return vals
+    allowed, linked = vw_allowed(row, col, keep)
+    if allowed is None:
+        return vals
+    got = [x for x in vals if fi_key(x) in allowed]
+    return got if (got or linked) else vals
+
+
 def vw_group(view, dim, total_ids=None):
-    """一个分组维度 → {取值: 该组的单 ID 集合}；`dim` 是参数里的维度说明。"""
+    """一个分组维度 → {取值: 该组的单 ID 集合}；`dim` 是参数里的维度说明。多值维度带 `keep` 时只在与筛选取值对应的
+    取值下计（`vw_restrict`、`vw_kept_values`）。"""
     groups = {}
     col = dim.get("col")
     for _, r in view.iterrows():
@@ -218,7 +321,7 @@ def vw_group(view, dim, total_ids=None):
         elif dim.get("const") is not None:
             vals = [dim["const"]]
         elif dim.get("multi"):
-            vals = list(r[col] or [])
+            vals = vw_kept_values(r, col, dim.get("keep"))
         else:
             vals = [r[col]]
         vals = [v for v in vals if v not in (None, "", "—") and (v != "未填" or dim.get("keep_blank"))]

@@ -128,6 +128,8 @@ def br_view(data, E, desc_text):
         segs = fi_ids(r.get("ProductIDAll"))
         machines = fi_unique([product_names[i] for i in segs if i in product_names])
         series = fi_unique([product_series[i] for i in segs if i in product_series])
+        # 成对列（`views.VW_LINKS`）：按系列筛、按机型分组只计该系列的机型，反过来同理
+        machine_pairs = [[product_names[i], product_series.get(i)] for i in segs if i in product_names]
         if machines:
             machine_text = "、".join(machines)
         else:
@@ -163,6 +165,7 @@ def br_view(data, E, desc_text):
             "_not_stopped": not is_stop, "_stop_code": None,
             "_stop_label": stop_label,
             "_stages": [status.get(s, fi_show(s))], "_machines": machines, "_series": series,
+            "_machine_pairs": machine_pairs,
             # 大机型有值但一段都对不上产品主数据：按机型统计时归「未识别机型」，不归「未填」（与清单显示一致）
             "_machines_unknown": machine_text == "未识别机型",
             "_factories": factories, "_current_ids": [], "_current_names": [],

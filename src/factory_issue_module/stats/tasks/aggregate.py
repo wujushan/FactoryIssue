@@ -24,12 +24,14 @@ from factory_issue_module.stats.lib.views import (
     vw_days,
     vw_filter,
     vw_group,
+    vw_keep,
     vw_period,
     vw_period_range,
     vw_period_start,
     vw_merge_missing,
     vw_rate,
     vw_rate_list,
+    vw_restrict,
     vw_time,
 )
 
@@ -165,6 +167,17 @@ def ag_ordered_keys(groups, dim, v_list, period_bounds):
     return list(dict.fromkeys(order + rest))
 
 
+def ag_only_by(dims):
+    """几个域的维度说明里分组按哪些条件限定过（`views.vw_restrict` 的 `only_by`）→ [[叫法, [取值…], 是否同一维度]…]，
+    同一叫法的取值合并（统计口径「多值归属」那一句）。"""
+    out = {}
+    for d in dims:
+        for label, vals, same in d.get("only_by") or []:
+            got = out.setdefault(label, [label, [], bool(same)])
+            got[1] += [x for x in vals if x not in got[1]]
+    return list(out.values())
+
+
 def ag_dim_table(v, dim, A, C, period_bounds, metrics=None):
     """一个分组维度的表与图数据（一域）。"""
     groups = vw_group(v, dim)
@@ -216,6 +229,8 @@ def ag_dim_table(v, dim, A, C, period_bounds, metrics=None):
     caliber = {"多值归属": bool(dim.get("multi")), "各组合计": summed}
     if dim.get("multi"):
         facts["各组合计（一单可计入多组）"] = summed
+    if dim.get("only_by"):
+        caliber["只列筛选的取值"] = ag_only_by([dim])
     blank = int(len(v) - len({i for ids in groups.values() for i in ids}))
     if blank > 0:
         caliber["没有" + dim["title"]] = blank
@@ -277,6 +292,8 @@ def ag_compare(parts, A, C):
     if len(parts) > 1:
         facts["计入的域"] = [dom for dom, _v, _d in parts]
     caliber = {"未计入": vw_merge_missing(missing), "多值归属": any(d.get("multi") for d in dims)}
+    if any(d.get("only_by") for d in dims):
+        caliber["只列筛选的取值"] = ag_only_by(dims)
     # 画图用的行：两段各一组柱子，数取自上面的表；合计不画（会把各组压扁），增减量、变化率单位不同也不画
     if dims:
         chart = {"dimension": title, "series": [a["label"], b["label"]],
@@ -559,6 +576,8 @@ def ag_cross_dim(parts, A, C, P, refs):
     if multi:
         facts["各组合计（一单可计入多组）"] = summed
     caliber = {"多值归属": multi, "各组合计": summed, "跨域归并": dim0.get("name")}
+    if any(d.get("only_by") for _dom, _v, d in parts):
+        caliber["只列筛选的取值"] = ag_only_by([d for _dom, _v, d in parts])
     if blank > 0:
         caliber["没有" + title] = blank
     if dim0.get("period"):
@@ -637,6 +656,9 @@ def run(data):
             missing_domains.append(dom)
             continue
         views[dom] = vw_filter(v, P["conds"].get(dom)) if len(v) else v
+        # 按同一个多值维度既筛又分组：分组只留筛选的取值（`views.vw_keep`）
+        if dom in A["dims"]:
+            A["dims"][dom] = vw_restrict(A["dims"][dom], vw_keep(P["conds"].get(dom)))
     if A.get("compare"):
         for dom, v in views.items():
             periods = (A["compare"].get(dom) or []) if len(v) else []

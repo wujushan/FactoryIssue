@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
 BASIS_TEXT = {"建单": "建单时间", "现场发现": "现场发现日期", "停线": "停线日期", "重启": "重启日期", "结案": "结案时间",
@@ -289,6 +289,15 @@ def small_sample(domain: str, n: int) -> str:
 
 def multi(total_rows: int, issues: int) -> str:
     return f"多值归属：一单在它所属的每个分组下各计一次，各组合计 {total_rows} 张，去重后问题单 {issues} 张"
+
+
+def only_filtered(title: str, label: str, values: Sequence[str], *, same: bool = True) -> str:
+    """按一单可多值的维度分组、又按它或与它成对的维度筛（总述「统计口径说明」多值归属）：分组只列与筛选取值对应的。
+    `same`：筛的就是这一维度（按机型筛、按机型分组）；否则是成对的另一维度（按系列筛、按机型分组）。"""
+    shown = "、".join(values)
+    if same:
+        return f"按{title}分组只列筛选的{title}（{shown}），单上同时登记的其他{title}不另列"
+    return f"按{title}分组只列与筛选的{label}（{shown}）对应的{title}，单上同时登记的其他{title}不另列"
 
 
 def rejected(n: int) -> str:

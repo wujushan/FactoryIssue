@@ -695,6 +695,8 @@ def _add_caliber(C: cal.Caliber, run: StepRun, seg: dict[str, Any], dims: Sequen
     if raw.get("多值归属"):
         C.item(cal.multi(raw.get("各组合计", 0), seg.get("found", 0)))
     title = str(seg.get("title") or "")
+    for label, values, same in (raw.get("只列筛选的取值") or []) if title else []:
+        C.item(cal.only_filtered(title, str(label), [str(x) for x in values], same=bool(same)))
     if raw.get("没有" + title) and seg.get("name") != "责任归属部门":
         C.item(cal.without(title, raw["没有" + title]))
     for d in dims:

@@ -176,7 +176,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 continue
             if kind == "has":
                 out.notes.append(f"巴西按以下机型统计：{base.join(hit)}")
-            out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_machines", "values": hit, "neg": neg, "label": "机型"})
             out.echo.append(("机型", base.join(hit)))
         elif fld == "系列":
             got_series = domestic.series_of(values, m, DOMAIN, misses=miss if ref else None)
@@ -184,7 +184,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
                 return got_series
             if base.ref_misses(out, LABEL, "系列", got_series, miss):
                 continue
-            out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_series", "values": got_series, "neg": neg, "label": "系列"})
             out.echo.append(("系列", base.join(got_series)))
         elif fld == "加工厂":
             hit = []
@@ -199,7 +199,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             if base.ref_misses(out, LABEL, "加工厂", hit, miss):
                 continue
             # 逗号多值：任一段等于该工厂即命中（「CA」命中「CA」与「CA,TT」）
-            out.conds.append({"kind": "any_of", "col": "_factories", "values": hit, "neg": neg})
+            out.conds.append({"kind": "any_of", "col": "_factories", "values": hit, "neg": neg, "label": "加工厂"})
             out.echo.append(("加工厂", base.join(hit)))
         elif fld == "物料名称":
             out.conds.append({"kind": "contains", "col": "_inv_name", "values": values, "neg": neg})
@@ -236,7 +236,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             if isinstance(got_s, Ask):
                 return got_s
             if got_s:
-                out.conds.append({"kind": "status", "items": got_s, "neg": neg})
+                out.conds.append({"kind": "status", "items": got_s, "neg": neg, "label": columns.STAGE})
                 out.echo.append(("状态", shown))
         elif fld in ("跟进部门", "责任归属部门"):
             got_d = base.departments(values, R)
