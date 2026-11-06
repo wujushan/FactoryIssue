@@ -12,7 +12,14 @@
 
 import pandas as pd
 
-from factory_issue_module.stats.lib.common import fi_int, fi_named_facts, fi_num, fi_round, fi_with_counts
+from factory_issue_module.stats.lib.common import (
+    fi_int,
+    fi_named_facts,
+    fi_num,
+    fi_records,
+    fi_round,
+    fi_with_counts,
+)
 from factory_issue_module.stats.lib.domains import dm_view
 from factory_issue_module.stats.lib.insights import in_insights, in_similar
 from factory_issue_module.stats.lib.views import vw_counts, vw_filter, vw_sorted, vw_time
@@ -25,7 +32,7 @@ def tm_hits(frame):
     out = {}
     if frame is None or len(frame) == 0:
         return out
-    for r in frame.to_dict("records"):
+    for r in fi_records(frame):
         iid = fi_int(r.get("issue_id"))
         if iid is not None:
             out[iid] = (int(fi_int(r.get("grp")) or 0), str(r.get("context") or ""))
@@ -38,7 +45,7 @@ def tm_sem(frame, threshold, related_only):
     if frame is None or len(frame) == 0:
         return []
     rows = []
-    for r in frame.to_dict("records"):
+    for r in fi_records(frame):
         iid = fi_int(r.get("issue_id"))
         if iid is None:
             continue
@@ -59,7 +66,7 @@ def tm_scores(frame):
     out = {}
     if frame is None or len(frame) == 0:
         return out
-    for r in frame.to_dict("records"):
+    for r in fi_records(frame):
         iid = fi_int(r.get("issue_id"))
         if iid is not None and iid not in out:
             verdict = (1 if bool(r.get("related")) else 0) if bool(r.get("judged")) else None

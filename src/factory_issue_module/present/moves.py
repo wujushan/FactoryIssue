@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -531,6 +532,8 @@ def _numbers(issues: Mapping[str, Any]) -> list[str]:
 
 
 def _usable(value: Any) -> bool:
+    if isinstance(value, float) and math.isnan(value):  # 空值别写成「nan」拿去当条件
+        return False
     text = str(value or "").strip()
     return bool(text) and text not in PLACEHOLDERS and "、" not in text
 

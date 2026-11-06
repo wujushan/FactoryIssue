@@ -67,7 +67,7 @@ def vw_cond_mask(view, cond):
         hit = view[cond["col"]].apply(lambda xs: any(fi_key(x) in want for x in (xs or [])))
     elif kind == "contains":
         want = [fi_key(v) for v in cond.get("values") or [] if fi_key(v)]
-        hit = view[cond["col"]].apply(lambda x: x is not None and any(w in fi_key(x) for w in want))
+        hit = view[cond["col"]].apply(lambda x: not fi_blank(x) and any(w in fi_key(x) for w in want))
     elif kind == "in":
         want = {fi_key(v) for v in cond.get("values") or []}
         hit = view[cond["col"]].apply(lambda x: fi_key(x) in want)
@@ -324,13 +324,14 @@ def vw_group(view, dim, total_ids=None):
             vals = vw_kept_values(r, col, dim.get("keep"))
         else:
             vals = [r[col]]
-        vals = [v for v in vals if v not in (None, "", "—") and (v != "未填" or dim.get("keep_blank"))]
+        # 空值用 fi_blank 判：pandas 3 的文本列里 None 存成 NaN，`v is None` 认不出，会多出一组空白的取值
+        vals = [v for v in vals if not fi_blank(v) and v != "—" and (v != "未填" or dim.get("keep_blank"))]
         if not vals and dim.get("unknown_col") and bool(r.get(dim["unknown_col"])):
             vals = ["未识别机型"]  # 巴西、海外大机型有值但对不上产品主数据
         if not vals and dim.get("empty") is not None:
             vals = [dim["empty"]]
         for v in dict.fromkeys(vals):
-            if v is None:
+            if fi_blank(v):
                 continue
             groups.setdefault(v, set()).add(r["_id"])
     return groups

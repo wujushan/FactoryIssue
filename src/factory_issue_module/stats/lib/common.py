@@ -153,9 +153,11 @@ def fi_lookup(df, key, value, cast=None):
 
 
 def fi_records(df):
+    """一行一个 dict；空值（NaN、NaT）一律给 None。pandas 3 的文本列空值是 NaN 而不是 None，不转的话
+    `str(x or "")` 一类写法会把没填的写成「nan」。"""
     if df is None or len(df) == 0:
         return []
-    return df.to_dict("records")
+    return df.astype(object).where(df.notna(), None).to_dict("records")
 
 
 def fi_group(records, key):
@@ -177,6 +179,8 @@ def fi_unique(items):
 
 def fi_key(text):
     """名字比较：去空格、连字符、下划线，转小写（与 `plan/names.py::key` 同一种写法，不做 NFKC）。"""
+    if fi_blank(text):  # NaN 不写成「nan」（pandas 3 文本列的空值是 NaN）
+        return ""
     return re.sub(r"[\s\-_]+", "", to_halfwidth(str(text or ""))).lower()
 
 
