@@ -88,6 +88,37 @@ async def test_write_requires_the_first_to_be_named():
     assert await narrative.write(llm, MANIFEST, Q, None, None, FACTS, {}, "模板句。", must=["A920"]) == "模板句。"
 
 
+def test_repeated_notes_only_counts_copied_clauses():
+    """结论句照抄提示行的分句才算重复（去掉空白、引号与标点后比）；换了说法的、太短的分句不算。"""
+    note = "巴西不提供当前责任人，巴西未计入。"
+    assert narrative.repeated_notes(note, "巴西不提供当前责任人，无法查询谁在处理") == ["巴西不提供当前责任人"]
+    assert narrative.repeated_notes(note, "国内共 3 张，巴西未计入") == []  # 「巴西未计入」太短，不算
+    assert narrative.repeated_notes(note, "巴西没有记录当前处理人") == []  # 换了说法：不认
+    assert narrative.repeated_notes("「比较严重」按问题等级 A+、A 理解。", "国内 A+、A 级的问题单共 3 张") == []
+    assert narrative.repeated_notes("以下为临时统计。", "**以下为临时统计：**共 3 张") == ["以下为临时统计"]
+    assert narrative.repeated_notes(None, "巴西不提供当前责任人") == []
+
+
+BR_FACTS = {"时间范围": "不限建单时间", "张数": 4, "未结案": 1}
+BR_Q = "巴西的单里，谁现在在处理？"
+BR_NOTE = "巴西不提供当前责任人。"
+
+
+async def test_points_head_repeating_the_note_is_rewritten_once():
+    """手动测试 2026-11-06：开头已写「巴西不提供当前责任人。」，结论句又照抄一遍、也没说这次查了什么。打回重写一次。"""
+    llm = FakeLLM(["**巴西不提供当前责任人，无法查询谁在处理。**", "**巴西共 4 张单，其中未结案 1 张。**"])
+    head, bullets = await narrative.write_points(llm, BR_Q, None, BR_NOTE, BR_FACTS, [], {}, "巴西共 4 张。")
+    assert head == "**巴西共 4 张单，其中未结案 1 张。**" and bullets == []
+    ask = llm.calls[1][-1]["content"]
+    assert "「巴西不提供当前责任人」已经写在【说明】里" in ask and "【本次查的是】" in ask
+
+
+async def test_points_head_still_repeating_falls_back_to_template():
+    llm = FakeLLM(["**巴西不提供当前责任人，无法查询谁在处理。**", "**巴西不提供当前责任人，共 4 张。**"])
+    head, _ = await narrative.write_points(llm, BR_Q, None, BR_NOTE, BR_FACTS, [], {}, "巴西共 4 张。")
+    assert head == "**巴西共 4 张。**" and len(llm.calls) == 2
+
+
 async def test_write_passes_rows_guide_and_drops_dimensions_when_asked():
     llm = FakeLLM(["国内有现象相近的问题。最像的是 ZC9901001，已结案。"])
     rows = "国内｜ZC9901001｜问题描述：镜片脏污｜已结案"

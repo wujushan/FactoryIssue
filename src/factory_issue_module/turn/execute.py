@@ -777,10 +777,8 @@ def _future(run: StepRun) -> str:
 
 
 def _absent_note(d: Domain, absent: Sequence[str]) -> str:
-    """本域没有的列（总述「跨域规则」清单呈现：用户点名的列某域可能没有）。"""
-    if d is Domain.BRAZIL and columns.shown("current_people") in absent:
-        rest = [a for a in absent if a != columns.shown("current_people")]
-        return "巴西不提供当前责任人" + (f"，也没有『{'』『'.join(rest)}』这几项" if rest else "")
+    """本域没有的列（总述「跨域规则」清单呈现：用户点名的列某域可能没有）。巴西的当前责任人不在这里：那一列给问题
+    跟进人（`brazil.CURRENT_AS_FOLLOWER`）。"""
     return f"{d.label}没有『{'』『'.join(absent)}』这{'几' if len(absent) > 1 else '一'}项"
 
 
@@ -847,6 +845,8 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
             keys_by[d.label], absent = list_issues.domain_keys(keys, d, ADAPTERS[d].KEY_ALIAS)
             if absent:
                 head.append(_absent_note(d, absent))
+        if Domain.BRAZIL in executed and "current_people" in keys:
+            head.append(brazil.CURRENT_AS_FOLLOWER)
         if "cn_factory" in keys_by.get(Domain.OVERSEAS.label, []):
             head.append(overseas.CN_FACTORY_NOTE)
         P["list"] = {**list_issues.params(run.step, keys_by, T.answer), "export_ok": present}

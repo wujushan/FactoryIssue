@@ -338,6 +338,41 @@ async def test_current_responsible_excludes_brazil():
     assert not any(q.tables[0] == "BrazilProblemList" for q in data_queries(h))
 
 
+async def test_brazil_who_is_handling_says_the_note_once():
+    """手动测试 2026-11-06「巴西的单里，谁现在在处理？」：开头写了巴西不提供当前责任人，结论句照抄一遍、也没说这次
+    查了什么。照抄的打回重写一次，仍照抄就用模板句（说这次查了几张）；整轮只说一次。"""
+    reply = plan(step("list_issues", domains=BR, columns=["当前责任人"]))
+    copied = "**巴西不提供当前责任人，无法查询谁在处理。**"
+    h, events = await _go("巴西的单里，谁现在在处理？", [reply, copied, copied])
+    text = _text(events)
+    assert text.count("不提供当前责任人") == 1
+    assert "**巴西共 4 张" in text
+    # 巴西不提供当前责任人：这一列给问题跟进人，开头写明（决策 2026-11-06「问一批单谁在处理」）
+    assert text.startswith("巴西不提供当前责任人，下面给出问题跟进人。")
+    assert _tables(events)[0]["columns"] == ["问题编号", "问题跟进人"]
+
+
+async def test_brazil_who_is_handling_lists_unclosed_with_the_follower():
+    """p2.6 的计划：未结案的单，默认列后面加当前责任人；巴西这一列是问题跟进人，没有「当前责任人」列。"""
+    reply = plan(step("list_issues", domains=BR, add_columns=["当前责任人"],
+                      filters=[{"field": "状态", "op": "是", "value": "未结案", "from": "user"}]))
+    _h, events = await _go("巴西的单里，谁现在在处理？", [reply])
+    text = _text(events)
+    assert text.startswith("巴西不提供当前责任人，下面给出问题跟进人。") and text.count("不提供当前责任人") == 1
+    table = _tables(events)[0]
+    assert table["columns"][-1] == "问题跟进人" and "当前责任人" not in table["columns"]
+    assert [r[0] for r in table["rows"]] == ["BR9901001"]  # 未结案的只有这一张
+
+
+async def test_overseas_and_domestic_keep_the_current_people_column():
+    reply = plan(step("list_issues", add_columns=["当前责任人"],
+                      filters=[{"field": "状态", "op": "是", "value": "未结案", "from": "user"}]))
+    _h, events = await _go("现在各张单的当前处理人是谁", [reply, "共 3 张。最需要关注的是 ZC9901001。"])
+    heads = {t["columns"][-1] for t in _tables(events)}
+    assert heads == {"当前责任人", "问题跟进人"}
+    assert _text(events).count("巴西不提供当前责任人，下面给出问题跟进人") == 1
+
+
 async def test_short_type_name_only_elsewhere_is_named_in_full():
     """简称「软件」三域一起：国内、海外按软件问题查；巴西没有这个类型，写明「巴西无『软件问题』类型」，不追问。"""
     reply = plan(step("aggregate", time=T30, filters=[{"field": "问题类型", "op": "是", "value": "软件",

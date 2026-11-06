@@ -6,7 +6,8 @@ spike 搬来。2026-11-03 起这一段是回答最前面的结论，由它一个
 
 - 输入：用户问题、表格的说明、程序写在上面的提示行（【说明】）、`facts`（沙箱产出，列表已附项数）；按文字找单另有
   每域前几张单的内容（【列出的单】）与这类问法的写法（【写法】）。类似问题的 system 不带分析维度（`dims=False`）。
-- 问「哪个最多」时第一名（并列的全部）必须点到（`must`），没点全按不合格重写一次。
+- 问「哪个最多」时第一名（并列的全部）必须点到（`must`），没点全按不合格重写一次。结论句照抄了提示行的分句时同样
+  重写一次（`repeated_notes`）。
 - 结论句与要点另有【本次查的是】（实际查的条件与列法，与统计口径「筛选条件」同一份）；开头写了「按 X 理解」的
   条件取值（`cover`）第一行要点到（决策 2026-11-04「按什么理解写在开头」，`POINTS_SYSTEM` 第 8 条）。
 - 核数逐句做：数、约数与比值、日期、点名的问题编号与机型 / 系列 / 工厂 / 部门 / 供应商都要能在事实、表格、问句里
@@ -335,6 +336,28 @@ def _body(item: str, name: str) -> str:
     return core
 
 
+_CLAUSE = re.compile(r"[，,。；;！？!?\n]+")
+_PLAIN = re.compile(r"[\s「」『』\"'“”‘’*（）()：:、]+")
+#: 提示行里短于这个字数（去掉空白、引号与标点后）的分句不算重复：「巴西未计入」这类短句在结论句里常是正常说法
+_REPEAT_MIN = 6
+
+
+def repeated_notes(note: str | None, text: str) -> list[str]:
+    """结论句里照抄了的提示行分句（总述「先给结论」：写结论的模型能看到提示行，不重复它）。
+
+    只认照抄：提示行的某个分句去掉空白、引号与标点后整段出现在结论句里。换了说法的不认，漏了只是多一句重复；
+    认错了只是多重写一次，仍不行用模板句，两头都不会写错。"""
+    if not note:
+        return []
+    body = _PLAIN.sub("", text)
+    out: list[str] = []
+    for clause in _CLAUSE.split(note):
+        core = _PLAIN.sub("", clause)
+        if len(core) >= _REPEAT_MIN and core in body and clause.strip() not in out:
+            out.append(clause.strip())
+    return out
+
+
 def _ok(question: str, note: str | None, table: str | None, facts: Any, text: str,
         entities: Mapping[str, Sequence[str]]) -> tuple[bool, list[dict]]:
     if not text.strip():
@@ -352,6 +375,8 @@ async def write_points(llm: Any, question: str, table: str | None, note: str | N
     - 结论句逐句核数，`must` 里的名字（问「哪个最多」时的第一名）要点全；不过时带着错处重写一次，仍不过用 `fallback`。
     - `reading` 是【本次查的是】（实际查的条件与列法，决策 2026-11-04「按什么理解写在开头」）；`cover` 是开头写了
       「按 X 理解」的条件取值（「A+」「A」），结论句要点到，没点到同样重写一次、仍不行用 `fallback`。
+    - 结论句照抄了提示行（`note`，已显示在结论上面）的某个分句时同样重写一次、仍不行用 `fallback`（`repeated_notes`；
+      手动测试 2026-11-06：开头「巴西不提供当前责任人。」，结论句又是「巴西不提供当前责任人，无法查询谁在处理。」）。
     - 要点逐条核：模型写的条数与【要点】项数一样时一条对一条，不合格的那一条换成程序的模板句（`point_text`）；
       条数对不上时全部用模板句。模型调用出错时结论句用 `fallback`、要点用模板句。"""
     from factory_issue_module.present import insights
@@ -391,10 +416,11 @@ async def write_points(llm: Any, question: str, table: str | None, note: str | N
         good, bad = _ok(question, checked, table, scope, core, entities)
         missed = [m for m in must if m and m not in core]
         uncovered = [c for c in cover if c and c not in core]
-        if good and not missed and not uncovered:
+        repeated = repeated_notes(note, core)
+        if good and not missed and not uncovered and not repeated:
             return insights.bold(core), bullets
         logger.info("factory_issue_narrative_rejected", attempt=attempt, bad=len(bad), missed=len(missed),
-                    uncovered=len(uncovered))
+                    uncovered=len(uncovered), repeated=len(repeated))
         wrong = "；".join(f"「{b['句子']}」里的「{'、'.join(map(str, b['事实里没有的数']))}」" for b in bad)
         if wrong:
             ask = f"第一行里这些在【事实】【要点】里找不到，请只用里面的数字和名称重写：{wrong}"
@@ -402,6 +428,9 @@ async def write_points(llm: Any, question: str, table: str | None, note: str | N
             ask = f"第一行要点名最多的：{'、'.join(missed)}（并列的都要点到）。请重写。"
         elif uncovered:
             ask = f"第一行要照【本次查的是】写明这些单是按什么查的，点到：{'、'.join(uncovered)}。请重写。"
+        elif repeated:
+            ask = (f"「{'」「'.join(repeated)}」已经写在【说明】里、显示在你这段上面，第一行不要再说。第一行照"
+                   "【本次查的是】【事实】直接回答用户的问题：这次查的这些单合计几张、未结案几张、哪个最多等。请重写。")
         else:
             ask = "请按要求重写：第一行是加粗的一句结论，之后每条要点一行。"
         messages = [*messages[:2], {"role": "assistant", "content": text}, {"role": "user", "content": ask}]
