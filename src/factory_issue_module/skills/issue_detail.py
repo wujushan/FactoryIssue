@@ -394,6 +394,7 @@ def render(ticket: dict[str, Any], keys: Sequence[str], notes: Sequence[str], la
                 lines.append(f"共 {table['total']} 条，表格列出前 {table['shown']} 条。")
             flush()
             events.append(_table_event(table, f"{dom.label} {ticket['number']} {table['title']}", sites))
+        lines += _tail_lines(b, key, keys, blocks, sites, once)
     if "驳回" in aspects:
         n = (ticket.get("facts") or {}).get("驳回次数")
         if isinstance(n, int):
@@ -403,14 +404,27 @@ def render(ticket: dict[str, Any], keys: Sequence[str], notes: Sequence[str], la
     return events
 
 
+def _tail_lines(b: dict[str, Any], key: str, keys: Sequence[str], blocks: Mapping[str, Any], sites: Any,
+                once: Any) -> list[str]:
+    """块的 `tail`（排在表格之后的几行，现在只有巴西费用下的扣款）。本轮要给的别的块里已有同一栏时不给，
+    留给那一块（整张详情时扣款在责任人确认里与费用转嫁、扣款单号一起给）。"""
+    tail = b.get("tail") or {}
+    elsewhere = {f[0] for k in keys if k != key and k in blocks for f in blocks[k]["fields"]}
+    fields = [f for f in tail.get("fields") or [] if f[0] not in elsewhere]
+    out = [line for line in (_field_line(f, sites, None) for f in fields) if once(line)]
+    return (out + [n for n in tail.get("notes") or [] if once(n)]) if out else []
+
+
 def caliber_items(ticket: dict[str, Any], keys: Sequence[str]) -> list[str]:
     """给了合计、次数时的统计口径（没有数字结论时不附，设计 §4.3）。"""
     out = []
     blocks = ticket["blocks"]
     if "delivery" in keys and blocks.get("delivery", {}).get("tables"):
         out.append("订单数量合计：该单各行发货单的订单数量之和")
-    if "cost" in keys and blocks.get("cost", {}).get("fields"):
-        out.append("费用：只合计费用明细，美元、雷亚尔分别合计，不换算、不相加；扣款单独列出、未计入费用")
+    cost = blocks.get("cost", {})
+    if "cost" in keys and cost.get("tables"):
+        debit = "；扣款单独列出、未计入费用" if (cost.get("tail") or {}).get("fields") else ""
+        out.append(f"费用：只合计费用明细，美元、雷亚尔分别合计，不换算、不相加{debit}")
     return out
 
 

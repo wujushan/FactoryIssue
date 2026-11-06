@@ -2,7 +2,8 @@
 巴西「单张单详情」，海外「单张单详情」；总述「原因与措施怎么给」）。
 
 输入是一域本步取回的帧（主表含叙述列、全部子表、文档、主数据），输出每张单的各块：
-`{"key", "title", "fields": [[标签, 文字] 或 [标签, 文字, [[文档 ID, 文档名称], …]]], "tables": [...], "notes": [...]}`。
+`{"key", "title", "fields": [[标签, 文字] 或 [标签, 文字, [[文档 ID, 文档名称], …]]], "tables": [...], "notes": [...]}`，
+个别块另有 `tail`（`{"fields", "notes"}`，排在表格之后，现在只有巴西费用下的扣款）。
 标签都是显示名（参数 `labels`，`present/columns.py::DETAIL`），给用户的句子来自参数 `texts`（`turn/errors.py`）。
 文档 ID、CAR 报告 ID 只用来拼链接，不作文字展示（链接在 `handle()` 一侧拼：附件摘要要的值不进沙箱脚本）。
 
@@ -131,6 +132,12 @@ def dt_pick(view, P, domain):
 
 def dt_money(x):
     return f"{fi_round(x, 2):.2f}"
+
+
+def dt_rate(x):
+    """汇率：0 或空是没填的占位（金额为 0 的费用行上常见），写「未填」。"""
+    x = fi_num(x)
+    return fi_show(fi_round(x, 4)) if x else "未填"
 
 
 def dt_numbered(lines):
@@ -707,21 +714,24 @@ def dt_br(data, E, L, T, P):
         if claim_docs:
             h.append([L["claim_docs"], dt_doc_text(claim_docs), claim_docs])
         blocks["header"] = dt_block("header", T["br_header_title"], h)
-        # 费用明细与合计（含 0 金额行、汇率、备注）；扣款另列
+        # 费用明细与合计：一张表，全部明细行（含 0 金额行、汇率、备注），表末一行合计（美元、雷亚尔分别合计）
         costs = sorted(cost_by.get(pid, []), key=lambda c: fi_int(c.get("ID")) or 0)
-        crow = [[fi_show(c.get("CostType")), dt_money(fi_num(c.get("CostMoney")) or 0.0),
-                 dt_money(fi_num(c.get("CostBrlMoney")) or 0.0), fi_show(fi_round(fi_num(c.get("ConstBrlRate")), 4)),
+        # 列名与列序同管理页面「涉案金额」：项目名称、雷亚尔、汇率、美元、备注
+        crow = [[fi_show(c.get("CostType")), dt_money(fi_num(c.get("CostBrlMoney")) or 0.0),
+                 dt_rate(c.get("ConstBrlRate")), dt_money(fi_num(c.get("CostMoney")) or 0.0),
                  dt_text(c.get("CostMemo"), T) or "未填"] for c in costs]
-        ccols = [L["brc." + c] for c in ("CostType", "CostMoney", "CostBrlMoney", "ConstBrlRate", "CostMemo")]
-        usd = sum(fi_num(c.get("CostMoney")) or 0.0 for c in costs)
-        brl = sum(fi_num(c.get("CostBrlMoney")) or 0.0 for c in costs)
-        cf = [[L["cost_usd"], dt_money(usd)], [L["cost_brl"], dt_money(brl)]]
+        ccols = [L["brc." + c] for c in ("CostType", "CostBrlMoney", "ConstBrlRate", "CostMoney", "CostMemo")]
+        if crow:
+            usd = sum(fi_num(c.get("CostMoney")) or 0.0 for c in costs)
+            brl = sum(fi_num(c.get("CostBrlMoney")) or 0.0 for c in costs)
+            crow.append([T["cost_total"], dt_money(brl), "—", dt_money(usd), "—"])
+        blocks["cost"] = dt_block("cost", T["cost_title"], tables=[dt_table(T["cost_title"], ccols, crow)] if crow else [],
+                                  notes=[] if crow else [T["no_cost"]])
+        # 扣款不是费用：费用转嫁为是（或填了大于 0 的扣款）时在表下另给一行；同一轮给责任人确认那一块时
+        # 扣款在那里与费用转嫁、扣款单号一起给，这里不重复（`issue_detail.render`）
         debit = fi_num(p.get("DebitMoney"))
-        if debit is not None:
-            cf.append([L["brp.DebitMoney"], dt_money(debit)])
-        blocks["cost"] = dt_block("cost", T["cost_title"], cf,
-                                  [dt_table(T["cost_title"], ccols, crow)] if crow else [],
-                                  [T["debit_apart"]] if debit is not None else ([] if crow else [T["no_cost"]]))
+        if debit is not None and (str(p.get("IsCostShift") or "").strip() == yes or debit > 0):
+            blocks["cost"]["tail"] = {"fields": [[L["brp.DebitMoney"], dt_money(debit)]], "notes": [T["debit_apart"]]}
         # 责任人确认、SQE 确认、效果确认、结案确认（最新一条处理过程）
         order = ["header", "cost"]
         if p:

@@ -206,14 +206,39 @@ async def test_brazil_detail_current_and_follower():
 
 
 async def test_brazil_detail_costs_stock_and_five_why():
-    """巴西费用明细给全部行（含 0 金额行），合计由沙箱算，扣款另列；库存处理为「是」时给数量；5Why 暂不提供。"""
+    """巴西费用明细给全部行（含 0 金额行），表末一行合计（沙箱算）；扣款在表下另列；库存处理为「是」时给数量；
+    5Why 暂不提供。"""
     _h, events = await _go("BR9901001 花了多少钱、库存处理、5Why",
                            [plan(detail("BR9901001", "费用", "库存处理", "5Why"))])
     text = _text(events)
-    cost = next(t for t in _tables(events) if "费用明细" in t["title"])
-    assert len(cost["rows"]) == 2 and cost["rows"][1][1] == "0.00"
-    assert "费用美元合计**：100.00" in text and "扣款费用（美元）**：10.00" in text and "扣款单独列出" in text
-    assert "库存处理数量**：12" in text and "5Why分析过程" in text and "统计口径" in text
+    cost = next(t for t in _tables(events) if "费用明细与合计" in t["title"])
+    # 列名与列序同管理页面「涉案金额」
+    assert cost["columns"] == ["项目名称", "金额（单位：雷亚尔）", "汇率（美元兑雷亚尔）", "金额（单位：美元）", "费用备注"]
+    assert len(cost["rows"]) == 3 and cost["rows"][1][3] == "0.00" and cost["rows"][0][2] == "未填"  # 汇率 0 是占位
+    assert cost["rows"][-1] == ["合计", "0.00", "—", "100.00", "—"]
+    assert "费用美元合计" not in text and "**费用明细与合计**" not in text  # 合计只在表里给，不另起标题
+    at = next(i for i, e in enumerate(events) if e.type is EventType.TABLE and e.data is cost)
+    after = "".join(e.data.get("text", "") for e in events[at:] if e.type is EventType.DELTA)
+    assert "扣款费用（美元）**：10.00" in after and "未计入上表的费用合计" in after  # 扣款在表下
+    assert "库存处理数量**：12" in text and "5Why分析过程" in text and "扣款单独列出、未计入费用" in text
+
+
+async def test_brazil_full_detail_debit_once_with_cost_shift():
+    """整张详情：扣款只在责任人确认里与费用转嫁、扣款单号一起给一次，费用表下不重复。"""
+    _h, events = await _go("BR9901001", [])
+    text = _text(events)
+    assert text.count("扣款费用（美元）") == 1 and "未计入上表的费用合计" not in text
+    confirm = text.split("**责任人确认**", 1)[1]
+    assert confirm.index("费用转嫁") < confirm.index("扣款费用（美元）**：10.00") < confirm.index("扣款单号")
+
+
+async def test_brazil_detail_no_debit_line_without_cost_shift():
+    """没有转嫁（费用转嫁不是「是」、扣款为 0）时不提扣款：BR9901003 最新处理过程的扣款是 0、费用转嫁为否。"""
+    _h, events = await _go("BR9901003 花了多少钱", [plan(detail("BR9901003", "费用"))])
+    text = _text(events)
+    cost = next(t for t in _tables(events) if "费用明细与合计" in t["title"])
+    assert cost["rows"][-1] == ["合计", "500.00", "—", "0.00", "—"]
+    assert "扣款" not in text
 
 
 async def test_overseas_detail_phenomena_candidates_and_current():
