@@ -1662,7 +1662,7 @@ def show_all_button(T: Turn, r: StepRun, out: StepOut) -> tuple[dict[str, str], 
 def plan_alternatives(T: Turn) -> list[dict[str, str]]:
     """计划的 `alternatives`（其他理解）：「换个理解：…」（§9.5，`plan/clarify.py::alternative_recommendations`）。"""
     plan = T.result.plan or {}
-    return clarify.alternative_recommendations(plan.get("alternatives"))
+    return clarify.alternative_recommendations(plan.get("alternatives"), plan=plan)
 
 
 async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Event]:

@@ -17,6 +17,7 @@ import cn_data
 import fakes
 import pandas as pd
 import pytest
+import s3_data
 import s4_data
 import scopes
 from fakes import make_harness, run
@@ -24,7 +25,7 @@ from forge_core.events import EventType
 
 from factory_issue_module.config import files as config_files
 from factory_issue_module.config.files import ConfigFormatError
-from factory_issue_module.plan import timespan
+from factory_issue_module.plan import clarify, timespan
 from factory_issue_module.present import moves, suggest, suggestions
 from factory_issue_module.turn import workspace
 
@@ -261,6 +262,45 @@ def test_query_over_30_uses_a_complete_short_label():
     assert len(query) > 30
     assert moves._short_label(query, "只看该加工厂") == "只看该加工厂"
     assert suggestions.follow_up("ZC9901001 的完整处理过程")["label"] == "ZC9901001 的完整处理过程"
+
+
+def test_label_missing_a_must_value_falls_back():
+    """按钮上少了必带的取值：这条标签作废，按钮改用问句（决策 2026-11-06「其他理解与接着问的按钮不自相矛盾」）。"""
+    pool = _pool()
+    by_id = {f"c{i}": c for i, c in enumerate(pool.items, start=1)}
+    got = suggest.check({"ids": ["c3"], "query": "按问题类型统计这些单", "label": "统计一下"}, by_id, pool, set())
+    assert isinstance(got, suggest.Chosen) and got.label == ""
+    assert suggestions.follow_up(got.query, got.label)["label"] == "按问题类型统计这些单"
+
+
+async def test_reported_rest_of_types_turn_gives_no_contradicting_buttons():
+    """开发者实测「巴西除了物料问题，其他类型今年各多少张？」：按除物料问题外的其余类型统计是对的，按钮却给了一句里
+    两种读法的其他理解（「指问题类型叫『其他』的单（但……更可能指除物料问题外的全部类型）」），和读不出是哪个
+    「其他」的「列出其他的单」（决策 2026-11-06「其他理解与接着问的按钮不自相矛盾」）。"""
+    rows = s3_data.br_rows()
+    other = {**rows[1], "ID": 5, "OrderNumber": "BR9901005", "Status": 20, "AddDate": s3_data._ts(6)}
+    h = make_harness(scopes.GREEN, history=[], config_files={"link_sites.toml": SITES})
+    s3_data.load(h, br=pd.DataFrame([*rows, other]))
+    rest = {"field": "问题类型", "op": "不是", "value": "物料问题", "from": "user"}
+    reply = {"understanding": "巴西近 30 天除物料问题外各问题类型的单数", "alternatives": [
+        "「其他类型」指问题类型字段取值为「其他」的单（但巴西有该类型，结合「除了物料问题」更可能指除物料问题外的全部类型）",
+        "「其他类型」指问题类型字段里叫「其他」的取值，而非除物料问题外的所有类型"],
+        "steps": [step("aggregate", domains={"value": ["巴西"], "from": "user"}, time=T30, filters=[rest],
+                       group_by=["问题类型"])]}
+
+    def pick_other(messages):
+        ids = {q: cid for cid, q in fakes.candidates_in(messages)}
+        return {"suggestions": [{"ids": [ids["列出问题类型为「其他」的单"]], "query": "列出问题类型为其他的单",
+                                 "label": "列出其他的单"}]}
+    h.llm.suggest_reply = pick_other
+    h.llm.replies += [reply, RuntimeError("模型出错")]
+    events = await run(h, "巴西除了物料问题，其他类型近 30 天各多少张？")
+    recs = _buttons(events)
+    assert recs and not any(r["name"] == clarify.ALTERNATIVE_NAME for r in recs)
+    drill = next(r for r in recs if r["name"] == suggestions.TEMPLATE_NAME)
+    assert drill["label"] == drill["query"] == "列出问题类型为其他的单"
+    stored = h.workspace.store[workspace.SUGGEST]["offered"][0]["plan"]["steps"][0]["params"]["filters"]
+    assert stored == [{"field": "问题类型", "op": "是", "value": "其他", "from": "user"}]
 
 
 def test_good_picks_build_the_plan_to_run():

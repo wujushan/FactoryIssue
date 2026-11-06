@@ -149,10 +149,13 @@ def check(item: Mapping[str, Any], by_id: Mapping[str, moves.Candidate], pool: m
 
 
 def _label(raw: Any, got: moves.Candidate, source: str) -> str:
-    """模型写的按钮文字单独核，不过不丢这一条：1–30 个字、不以省略号结尾，数与单号要在这条候选里出现过，不露表名
-    字段名；带张数的候选要写上张数。不过时用候选的默认按钮文字（空时调用方用问句全文）。"""
+    """模型写的按钮文字单独核，不过不丢这一条：1–30 个字、不以省略号结尾，必带的都出现（按钮上少了取值，「列出其他
+    的单」就读不出是哪个「其他」，决策 2026-11-06「其他理解与接着问的按钮不自相矛盾」），数与单号要在这条候选里出现
+    过，不露表名字段名；带张数的候选要写上张数。不过时用候选的默认按钮文字（空时调用方用问句全文）。"""
     label = _clean(raw)
-    ok = (bool(label) and not label.endswith("…") and len(label) <= LABEL_MAX and _numbers(label) <= _numbers(source)
+    ok = (bool(label) and not label.endswith("…") and len(label) <= LABEL_MAX
+          and all(moves.compact(m) in moves.compact(label) for m in got.must)
+          and _numbers(label) <= _numbers(source)
           and set(moves.issue_numbers(label)) <= set(moves.issue_numbers(source)) and not _LEAK.search(label)
           and (got.count is None or str(got.count) in _numbers(label)))
     return label if ok else got.label

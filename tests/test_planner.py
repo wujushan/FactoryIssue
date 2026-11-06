@@ -238,6 +238,47 @@ def test_alternatives_become_switch_to_that_understanding():
     assert clarify.alternative_recommendations(None) == []
 
 
+#: 规划器写进 alternatives 的原文（内网对照集 p2.6，P-07「除了物料问题，其他类型各多少？」与另几句）
+_JUDGED_ALTERNATIVES = [
+    "「其他类型」指问题类型字段里叫「其他」的取值（但结合「各多少」更可能是除物料问题外的所有类型）",
+    "「亮亮」可能是物料名称而非供应商，但按最可能的理解先按供应商查",
+    "用户可能想查询跟进部门或责任归属部门为「惠州百富」的单（可能性较低，通常指工厂）",
+]
+
+
+def test_alternatives_with_the_planners_own_judgment_are_not_buttons():
+    """其他理解里带着规划器自己的判断（「但」「更可能」「可能性较低」）：一句里两种读法、点了发出去的也是这句，
+    不做按钮（决策 2026-11-06「其他理解与接着问的按钮不自相矛盾」）。「也可能指」照常做按钮。"""
+    kept = "「电量虚高」也可能指电池与充电话题下的电量异常，按话题找"
+    recs = clarify.alternative_recommendations([*_JUDGED_ALTERNATIVES, kept])
+    assert [r["label"] for r in recs] == [kept] and recs[0]["id"] == "1"
+    assert all(clarify.alternative_problem(a) == "带判断" for a in _JUDGED_ALTERNATIVES)
+
+
+def test_dropped_alternatives_do_not_take_a_slot():
+    recs = clarify.alternative_recommendations([*_JUDGED_ALTERNATIVES, "A920 系列", "A920 各款"], limit=2)
+    assert [r["query"] for r in recs] == ["换个理解：A920 系列", "换个理解：A920 各款"]
+
+
+@pytest.mark.parametrize("alt", [
+    "「其他类型」指问题类型字段里叫「其他」的取值，而非除物料问题外的所有类型",  # p2.6 P-07 原文
+    "指问题类型为其他的单",
+    "只看问题类型是「其它」的单",
+])
+def test_literal_other_is_not_offered_once_the_plan_takes_the_rest(alt):
+    """计划已按其余类型查（问题类型「不是」物料问题）：把「其他」读成问题类型「其他」的那条与总述「『其他』『剩下的』
+    指什么」相反，不做按钮；计划没这样查时照常做按钮。"""
+    rest = plan_of(step("aggregate", domains={"value": ["巴西"], "from": "user"},
+                        filters=[{"field": "问题类型", "op": "不是", "value": "物料问题", "from": "user"}],
+                        group_by=["问题类型"]), alternatives=[alt])
+    assert clarify.alternative_recommendations(rest["alternatives"], plan=rest) == []
+    assert clarify.alternative_problem(alt, rest) == "与口径相反"
+    other = plan_of(step("aggregate", domains={"value": ["巴西"], "from": "user"}, group_by=["问题类型"]))
+    assert [r["label"] for r in clarify.alternative_recommendations([alt], plan=other)] == [clarify.button_label(alt)]
+    # 「其他类型」三个字本身不算读成取值
+    assert clarify.alternative_problem("按问题类型为其他类型以外的单统计", rest) is None
+
+
 def test_short_code_options_send_the_option_itself():
     """代码追问、`pending_clarify` 写进去了：按钮的 `query` 就是选项本身，与问句全文的按钮同一顺序。"""
     params = {"reason": "名称对上多个", "question": "…", "options": ["惠州百富", "惠州二厂", "TT：巴西的加工厂"]}
