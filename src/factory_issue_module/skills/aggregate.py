@@ -184,14 +184,30 @@ def _only_text(seg: dict[str, Any]) -> str:
 def unranked_note(seg: dict[str, Any], label: str, ranking: bool) -> str:
     """结论句后面那句（总述「排名、长清单与导出」）：「另有 N 张没填机型（其中物料单 M 张），不参加排名」，没填的比第一名
     还多时再加一句。只有这几组时已写在模板句里（`_only_text`），这里不写；`label` 是几张表共用一段结论时的域名。"""
-    info = seg.get("unranked") or {}
-    if seg.get("kind") != "group" or not info.get("rows") or info.get("only"):
+    if seg.get("kind") != "group":
         return ""
+    text = left_out_note(seg, label)
+    info = seg.get("unranked") or {}
+    if not info.get("rows") or info.get("only"):
+        return text
     title = str(info.get("title") or "")
-    text = f"{label}另有 " + "、".join(_blank_parts(info)) + ("，不参加排名" if ranking else "") + "。"
+    text += f"{label}另有 " + "、".join(_blank_parts(info)) + ("，不参加排名" if ranking else "") + "。"
     if info.get("over_first"):
         text += f"没填{title}的单比排第一的还多，排名只反映已填{title}的单。"
     return text
+
+
+def left_out_note(seg: dict[str, Any], label: str) -> str:
+    """表里不列「未填」一行的维度（跟进人、跟进部门、加工厂等），没有这一项的单不进表，表里各组加起来比总数少：
+    结论句后面写「另有 N 张没有问题跟进人，未计入上表」，免得用户拿表里的数对不上总数（张数来自沙箱口径的
+    「没有 X」）。责任归属部门另有「无需定责」「未定责」的说法，不写这句。"""
+    title = str(seg.get("title") or "")
+    n = int((seg.get("caliber") or {}).get("没有" + title) or 0)
+    if seg.get("kind") != "group" or not n or seg.get("name") == "责任归属部门":
+        return ""
+    if not (seg.get("table") or {}).get("rows"):  # 一组都没有时模板句已写「没有可以按 X 统计的单」
+        return ""
+    return f"{label}另有 {n} 张没有{title}，未计入上表。"
 
 
 def _metrics_text(f: dict[str, Any]) -> str:

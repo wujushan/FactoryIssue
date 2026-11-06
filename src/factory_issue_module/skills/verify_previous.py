@@ -146,7 +146,7 @@ async def run(T: execute.Turn, turn: Mapping[str, Any], results: Mapping[str, An
         tail.append(got.caliber.text())
     if tail:
         events.append(Event.delta("\n\n" + "\n\n".join(tail)))
-    recs = clarify.alternative_recommendations(plan.get("alternatives"))
+    recs = clarify.alternative_recommendations(plan.get("alternatives"), plan=plan)
     if recs:
         events.append(Event.suggestions(recs))
     if not any(out.ok for out in got.outs.values()):

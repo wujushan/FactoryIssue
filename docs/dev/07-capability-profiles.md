@@ -30,7 +30,7 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
    `docs/decisions/` 落 G2 决策**（模板见**本仓** `docs/decisions/README.md`，建仓时已生成），
    确认建不建 `forge_mart_<code>` 产物库、同步 cron、由**平台运维建库**。不涉及则跳过本步。
    ⚠️ **G2 决策必须写死两件事**（模板里是必填栏，不是提醒文字）：① **权限承载列清单**——
-   逐表列出，缺列平台启动期直接拒绝，返工要改迁移 + 重建表 + 全量重跑 embedding；
+   逐表列出，缺列平台启动期直接把该模块隔离下线，返工要改迁移 + 重建表 + 全量重跑 embedding；
    ② **受列级管控字段的处置**——列级权限当前不作用于检索路径，详见本文 `semantic-retrieval`
    小节的权限边界。**评审要发生在申请建库之前**：`provision-mart` 是运维当场传口令、跑完即走
    的动作，不是「先建了再改」的东西。
@@ -86,7 +86,7 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
   `stats-sandbox` 那条，以及 [04 · 聚合与分组](04-permissions-and-data-access.md)。
   两处最容易出事的：**聚合参数与投影列同权**（`AVG(salary)` 无权即 `ColumnNotPermitted`，因为分组键
   足够细时聚合就是投影）；**结果列名由框架生成**（`sum_amount` / `count_star`），`df[...]` 按它取。
-- **平台前置**：`data_sources` 声明的别名**必须已在平台 `data_sources.json` 登记**，否则平台**拒绝启动**。
+- **平台前置**：`data_sources` 声明的别名**必须已在平台 `data_sources.json` 登记**，否则平台启动期**隔离该模块**（平台与其他模块照常启动，`/healthz` 报 `degraded`）。
   行数上限 `FORGE_QUERY_MAX_ROWS`（默认 10000，**只作用于 `.fetch()`**）与相对时间时区
   `FORGE_QUERY_TIMEZONE`（默认服务器本地）由平台配置，模块不用管。
 - **DoD**：`data_sources` 别名并集 = `db_description` 各表 `source` 并集；`field_mappings` 覆盖全部权限承载字段；
@@ -234,9 +234,9 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
   **权限透传硬约束（平台启动期校验）**：向量表必须带齐权限承载列、不得跨权限维度预聚合——行级规则
   是在**向量表**上编译成 WHERE 的，规则引用的列不在表上即 fail-closed 报错（见 04）。
   平台启动时扫 `information_schema`，要求该 mart 库内**每张**向量表都带齐 `field_mappings[<mart 别名>]`
-  的全部物理列，**缺列即拒绝启动**（`VECTOR_SCOPE_COLUMNS_MISSING`），不必等到首次检索才发现。
+  的全部物理列，**缺列即隔离该模块**（`VECTOR_SCOPE_COLUMNS_MISSING`，平台照常启动），不必等到首次检索才发现。
   故同一 mart 别名下的向量表**权限口径须一致**；无需管控的向量库别填 `field_mappings`。
-  用了 `manifest.vectorize` 的模块还多一层：**声明了的向量表不存在也拒绝启动**（声明与现实矛盾）。
+  用了 `manifest.vectorize` 的模块还多一层：**声明了的向量表不存在也隔离该模块**（声明与现实矛盾）。
 - **⚠️ 两个必须知道的权限边界**（详见 [04](04-permissions-and-data-access.md#语义检索semantic-retrieval)）：
   - **列级权限（`dataScope.column`）当前不作用于检索路径**（协议层语义空缺，平台侧待办、未定）。若本模块的**向量化字段受列级管控**，
     须在 G2 决策里显式处理：不向量化该字段，或按敏感度分表/分区把列级**降维成行级**
@@ -282,7 +282,7 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
     编排用 `forge_data.etl.run_incremental_sync`。**别自己 new 连接、别自己读 env**（见 02）。
   - ⚠️ `ctx.etl` **不受权限过滤管辖**（ETL 期没有 AgentNode，系统级全量读写）——所以你的 SELECT
     **必须带上权限承载列**并原样落进 mart 表，那是查询期能施加行级过滤的唯一前提。
-    漏了**平台启动期就拒绝**（`TABLE_SCOPE_COLUMNS_MISSING`，见下「平台前置」）。
+    漏了**平台启动期就隔离该模块**（`TABLE_SCOPE_COLUMNS_MISSING`，见下「平台前置」）。
   - **治理后表的建表 DDL 归你写，就写在这个 job 里**：`ctx.etl.write(...).execute("CREATE TABLE
     IF NOT EXISTS ...")` 放在 job 开头，每轮重放都是空操作、首轮自动建表。
     **不需要 Alembic，模板里也没有。**
@@ -293,7 +293,7 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
         dst.execute(
             "CREATE TABLE IF NOT EXISTS issues ("
             "  id text PRIMARY KEY, content text,"
-            "  dept_id text,"          # ← 权限承载列：漏了平台启动期就拒绝
+            "  dept_id text,"          # ← 权限承载列：漏了平台启动期就隔离该模块
             "  ts timestamptz)"
         )
         ...
@@ -311,7 +311,7 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
   --module <编码>`，建库 + 建一对专属账号 `forge_mart_<code>_ro`/`_etl` + 授权）；**该源配
   `write_user`/`write_password_env`**（否则 `ctx.etl.write()` fail-closed）；jobs 调度接入。
   **权限透传硬约束（平台启动期校验）**：`manifest.data_sources[].tables` 里声明的表若已存在，
-  必须带齐 `field_mappings[<别名>]` 的全部物理列，**缺列即拒绝启动**（`TABLE_SCOPE_COLUMNS_MISSING`）。
+  必须带齐 `field_mappings[<别名>]` 的全部物理列，**缺列即隔离该模块**（`TABLE_SCOPE_COLUMNS_MISSING`，平台照常启动）。
   分级与向量表那侧同款，但有两处**刻意不同**：① 按你**声明的 tables** 校验而不是全库扫
   （mart 库里合法地有水位表 / 中间表，它们没有承载权限的义务）——**不声明就查不到，`tables` 是可选字段**；
   ② **表不存在只告警**（`declared_table_absent`），因为治理后表由 job 首轮跑时才建，启动时缺席是正常中间态。
@@ -352,7 +352,7 @@ copier 的 `profiles` 问题按需选（逗号分隔，默认 `structured-query`
   **粒度按检索域、不按 dataset**：一个模块声明 N 个知识库别名，别为每个库建一个仓
   （2026-07-17 起的口径）。
 - **声明**：`profiles` 含 `knowledge-qa`；`knowledge_bases: [{alias, description}, ...]` 列出要检索的
-  别名。别名须已在平台 `knowledge_bases.json` 登记——**启动期校验，缺则拒绝启动**。
+  别名。别名须已在平台 `knowledge_bases.json` 登记——**启动期校验，缺则隔离该模块**（`KNOWLEDGE_BASE_NOT_REGISTERED`）。
 - **依赖**：`paxsz-forge-core`（只用 `ctx.knowledge`，不直接依赖 forge-data）。
 - **代码**：
   ```python

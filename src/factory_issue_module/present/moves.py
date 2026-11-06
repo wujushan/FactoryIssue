@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -73,6 +74,10 @@ DRILL_LIST_MAX = 2
 DRILL_GROUPS = 2
 #: 上卷用的时间
 UP_TIME = "近 90 天"
+#: 取值本身是常用字（问题类型「其他」、系列「其它」）：问句写明是哪一维的取值、这一维也算必带。只写「列出其他的单」
+#: 读不出是问题类型「其他」还是上文以外的其余类型（总述「『其他』『剩下的』指什么」，决策 2026-11-06
+#: 「其他理解与接着问的按钮不自相矛盾」）
+GENERIC_VALUES = ("其他", "其它")
 #: 不是用户能拿来筛的取值
 PLACEHOLDERS = ("", "未填", "—", "-", "无", "未指定", "未识别机型", "物料", enums.OS_UNKNOWN_TYPE)
 #: 块里的这些值不算有内容
@@ -527,8 +532,15 @@ def _numbers(issues: Mapping[str, Any]) -> list[str]:
 
 
 def _usable(value: Any) -> bool:
+    if isinstance(value, float) and math.isnan(value):  # 空值别写成「nan」拿去当条件
+        return False
     text = str(value or "").strip()
     return bool(text) and text not in PLACEHOLDERS and "、" not in text
+
+
+def _named_value(dim: str, value: str) -> str | None:
+    """取值本身是「其他」「其它」时写成「问题类型为『其他』」（`GENERIC_VALUES`），其余 None（问句里只写取值）。"""
+    return f"{dim}为「{value}」" if value in GENERIC_VALUES else None
 
 
 def _after_list(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
@@ -580,9 +592,13 @@ def _after_list(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
                 parts = [f"filter:{fld}"]
                 if fld == "加工厂" and len(segs) > 1:  # 加工厂只在一域：域也限定到它
                     patch["domains"], parts = [str(s.get("domain"))], [*parts, "domains"]
-                query = f"只看{value}" if fld == "问题类型" else _words("只看", value, "的")
-                add.patched(NARROW, base_id, patch, parts, query, [value], f"{fact}最多的是{value}（{n} 张）",
-                            _short_label(query, f"只看该{fld}"))
+                named = _named_value(fld, value)
+                if named:
+                    query = f"只看{named}的单"
+                else:
+                    query = f"只看{value}" if fld == "问题类型" else _words("只看", value, "的")
+                add.patched(NARROW, base_id, patch, parts, query, [fld, value] if named else [value],
+                            f"{fact}最多的是{value}（{n} 张）", _short_label(query, f"只看该{fld}"))
                 break
     if d.truncated and not d.exported:
         plan = build(pool.bases[base_id], [{"export": True}])
@@ -622,9 +638,13 @@ def _after_aggregate(d: Done, C: Context, pool: Pool, add: _Adder) -> None:
                 patch, parts = {"skill": "list_issues", "filters": [_eq(_DIM_FIELD[dim], value)]}, [f"filter:{_DIM_FIELD[dim]}"]
             else:
                 continue
-            query = _words("列出", value, "级的单") if dim == "问题等级" else _words("列出", value, "的单")
-            add.patched(DRILL, base_id, patch, parts, query, [value], f"{title}为{value}的 {n} 张",
-                        _short_label(query, f"列出该{dim}"))
+            named = _named_value(dim, value)
+            if named:
+                query = f"列出{named}的单"
+            else:
+                query = _words("列出", value, "级的单") if dim == "问题等级" else _words("列出", value, "的单")
+            add.patched(DRILL, base_id, patch, parts, query, [dim, value] if named else [value],
+                        f"{title}为{value}的 {n} 张", _short_label(query, f"列出该{dim}"))
     if compare:
         _domain_moves(d, C, add, base_id)
         return

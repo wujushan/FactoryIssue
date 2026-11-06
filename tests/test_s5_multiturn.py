@@ -610,6 +610,8 @@ async def test_aggregate_template_lists_the_first():
     (["月"], [["2026-10", 3]], []),  # 按时间分组不给
     (["加工厂", "问题类型"], [["柯洱斯", 3]], []),  # 两个维度说不清
     (["问题类型"], [["未填", 3], ["硬件问题", 1]], ["列出硬件问题的单"]),  # 「未填」不是能拿来筛的说法
+    # 「列出其他的单」读不出是哪个「其他」：写明问题类型（决策 2026-11-06「其他理解与接着问的按钮不自相矛盾」）
+    (["问题类型"], [["其他", 11], ["生产问题", 3]], ["列出问题类型为「其他」的单", "列出生产问题的单"]),
 ])
 def test_aggregate_drill_shapes(group_by, pairs, want):
     title = group_by[0]
@@ -623,6 +625,8 @@ def test_aggregate_drill_shapes(group_by, pairs, want):
             p = c.plan["steps"][0]["params"]
             assert c.plan["steps"][0]["skill"] == "list_issues" and p["time"][0]["from"] == "previous"
             assert p["filters"][-1]["from"] == "user" and "group_by" not in p
+            value = p["filters"][-1]["value"]
+            assert c.must == ((title, value) if value in moves.GENERIC_VALUES else (value,))
 
 
 def _fix_today(monkeypatch, day: date) -> None:

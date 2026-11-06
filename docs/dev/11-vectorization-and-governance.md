@@ -87,7 +87,7 @@ A 轨全部做完（wheel 已发布）之后，B 轨才开始。**建向量表�
 ```
 6 建库 + 登记别名  →  7 装配（装 wheel → 🅥 建向量表 → 重启）  →  8 首轮跑数
    ↑ 不需要 wheel        ↑ 建向量表要 wheel，又必须早于重启         ↑ 🅖 首轮建治理后表并填数
-   漏了：平台拒绝启动     漏了：平台拒绝启动                        ↑ 🅥 首轮把向量填满
+   漏了：该模块被隔离     漏了：该模块被隔离                        ↑ 🅥 首轮把向量填满
                                                                  漏了：查不到/检索 0 条，且不报错
 ```
 
@@ -134,7 +134,7 @@ A 轨全部做完（wheel 已发布）之后，B 轨才开始。**建向量表�
 async def _sync(self, ctx: JobContext) -> None:
     dst = ctx.etl.write("forge_mart_kb")
     dst.execute("CREATE TABLE IF NOT EXISTS issues (id text PRIMARY KEY, content text,"
-                " dept_id text, ts timestamptz)")   # dept_id = 权限承载列，漏了平台启动期就拒绝
+                " dept_id text, ts timestamptz)")   # dept_id = 权限承载列，漏了平台启动期就隔离该模块
     ...
 ```
 
@@ -199,9 +199,9 @@ uv run forge data provision-mart --module <编码> --host <PG主机> --vector --
 你仓里读不到；这一步本来就不归你做）。
 
 - **这一步不需要模块 wheel**（库名只由 `--module` 推出），所以它能、也**必须**排在装配之前。
-- **必须早于阶段 7**：平台启动期会校验模块声明的别名已登记，没登记就**拒绝启动**。
+- **必须早于阶段 7**：平台启动期会校验模块声明的别名已登记，没登记就把**该模块隔离下线**（平台与其他模块照常启动，`/healthz` 报 `degraded`）。
   而装配是自动的（测试）或一键 gated（正式）——一旦触发就装 wheel + 重启，
-  此时才发现库没建，平台就起不来了。
+  此时才发现库没建，该模块就被隔离、上不了线了。
 - ⚠️ **必须配 `write_user` / `write_password_env`**（`--write-config` 会写好）：
   🅥 阶段 7 建向量表、🅖 阶段 8 建治理后表并落数，全走它，缺了都 fail-closed。
 
@@ -220,7 +220,7 @@ uv run forge data provision-mart --module <编码> --host <PG主机> --vector --
 装配」这个疑问的答案：
 
 - 建表命令读的是**已装进运行环境的模块的** `manifest.vectorize`，所以它**必须在装 wheel 之后**；
-- 平台一重启就校验声明的向量表存在（缺表**拒绝启动**），所以它**必须在重启之前**。
+- 平台一重启就校验声明的向量表存在（缺表即**隔离该模块**），所以它**必须在重启之前**。
 
 于是窗口只有这一个，部署脚本已经占住了它。**走正常装配链路时，没有人需要手动跑建表命令**
 （手工换过 wheel、或上次建表失败要补跑时，运维会手动补一次；那是平台侧的事）。
@@ -251,7 +251,7 @@ uv run forge jobs run <模块编码>.vectorize:<向量表>   # 🅥 向量化回
 - **平台不报错**——启动期校验只查 `information_schema` 的列结构，不查行数；治理后表不存在时
   更是**只告警**（`declared_table_absent`），因为「首轮还没跑」本就是正常中间态。
 
-也就是说，不跑这一步的症状是「上线了，功能静默不工作，日志干净」。前两步漏了都会以「平台起不来」
+也就是说，不跑这一步的症状是「上线了，功能静默不工作，日志干净」。前两步漏了都会以「模块被隔离、`/healthz` 报 `degraded`」
 的形式当场暴露，**只有这一步是静默的**。**把它写进上线 checklist。**
 
 首轮耗时按行数（🅥 还要按 embedding 吞吐）估，全量可能是小时级；`forge jobs run` 是前台执行，
@@ -311,16 +311,16 @@ deploy.sh  systemctl --user restart forge-jobs
 ## 5. 启动期校验的结局（两张表各一套，严厉程度不同）
 
 平台启动时跑两道权限承载列校验：🅥 一道管向量表，🅖 一道管你声明的其他表。
-**别把告警当拒绝、也别把拒绝当 bug**：
+**别把告警当隔离、也别把隔离当 bug**（隔离 = 该模块下线，平台照常启动、`/healthz` 报 `degraded`）：
 
 | 表 | 情况 | 结局 | 为什么是这个结局 |
 |---|---|---|---|
 | 两者 | 连不上库 / 探测抛异常 | **仅告警**（`vector_scope_probe_failed` / `table_scope_probe_failed`） | 不把启动耦合到库的可用性——库维护期重启不该起不来 |
-| 🅥 向量表 | `manifest.vectorize` 声明的表不存在 | **拒绝启动**（`VECTOR_SCOPE_COLUMNS_MISSING`） | 它必须先于重启建好（阶段 7），不存在就是确定性部署缺口 |
-| 🅥 向量表 | 缺 `field_mappings` 的物理列 | **拒绝启动**（同上） | 缺列 = 检索期编译不出行级 WHERE，权限红线缺口 |
+| 🅥 向量表 | `manifest.vectorize` 声明的表不存在 | **隔离该模块**（`VECTOR_SCOPE_COLUMNS_MISSING`） | 它必须先于重启建好（阶段 7），不存在就是确定性部署缺口 |
+| 🅥 向量表 | 缺 `field_mappings` 的物理列 | **隔离该模块**（同上） | 缺列 = 检索期编译不出行级 WHERE，权限红线缺口 |
 | 🅥 向量表 | 一张都扫不到，且没声明过 | **仅告警**（`vector_table_absent`） | 模块自写向量化时平台无从知道本该有几张表 |
 | 🅖 声明的表 | `data_sources[].tables` 里的表不存在 | **仅告警**（`declared_table_absent`） | 治理后表由 job 首轮跑时才建，启动时缺席是正常中间态 |
-| 🅖 声明的表 | 表在但缺 `field_mappings` 的物理列 | **拒绝启动**（`TABLE_SCOPE_COLUMNS_MISSING`） | 同上，取数期编译不出行级 WHERE |
+| 🅖 声明的表 | 表在但缺 `field_mappings` 的物理列 | **隔离该模块**（`TABLE_SCOPE_COLUMNS_MISSING`） | 同上，取数期编译不出行级 WHERE |
 
 > **两张表的校验对象怎么来，是刻意不同的**：向量表靠**结构识别**（扫全库找含 pgvector 列的表），
 > 「扫到的都得对」；治理后表没有这种标记，只能**按 `data_sources[].tables` 的声明**查——
@@ -339,12 +339,12 @@ deploy.sh  systemctl --user restart forge-jobs
 |---|---|---|
 | 🅥 **检索恒返回 0 条，日志干净** | 阶段 8 没做：向量表是空的，cron 还没到点 | `forge jobs run <编码>.vectorize:<表>` 跑首轮全量回填 |
 | 🅖 **取数报「表不存在」，启动日志有 `declared_table_absent`** | 阶段 8 没做：治理后表由 job 首轮跑时才建，还没跑过 | `forge jobs run <编码>.<治理job名>`；跑完重启平台，让启动期校验真正校验到它 |
-| 🅖 平台起不来，`TABLE_SCOPE_COLUMNS_MISSING` | 治理后表建出来了但缺权限承载列（建表 DDL 与 `field_mappings` 不一致） | 改 job 里的 `CREATE TABLE` 加列 + 改 SELECT 带出该列，然后加列 `ALTER TABLE ... ADD COLUMN` 或重建表后重跑 job（`IF NOT EXISTS` 不会替你改已存在的表） |
+| 🅖 模块被隔离（`/healthz` `failed_modules` / Console 模块页），`TABLE_SCOPE_COLUMNS_MISSING` | 治理后表建出来了但缺权限承载列（建表 DDL 与 `field_mappings` 不一致） | 改 job 里的 `CREATE TABLE` 加列 + 改 SELECT 带出该列，然后加列 `ALTER TABLE ... ADD COLUMN` 或重建表后重跑 job（`IF NOT EXISTS` 不会替你改已存在的表） |
 | 🅖 改了 `field_mappings` 却没报错 | 该源的表没写进 `data_sources[].tables` —— 启动期校验只查已声明的表 | 把治理后表补进 `tables`（不声明 = 自愿放弃这道闸） |
-| 平台起不来，`VECTOR_SCOPE_COLUMNS_MISSING` | ① 向量表没建（阶段 7 的 apply 失败或被跳过）；② 表建了但缺 scope 列（`field_mappings` 后来改过）；③ 表建了、但**只读取数账号没被 GRANT**——校验以只读账号身份查 `information_schema`，看不见与没建同一个报错 | ①③ 归平台侧（重跑建表 / 补只读授权；`\dt` 看得到表**不能**证明读得了它）；② 缺列是结构变更，apply **不会**替你改表：人工加列 + 重跑回填，或重建表后重跑 |
-| 平台起不来，别名未登记 | 阶段 6 没做，或只在另一套环境做过 | `forge data provision-mart`，确认写进的是**这台机器**的 `config/data_sources.json` |
+| 模块被隔离，`VECTOR_SCOPE_COLUMNS_MISSING` | ① 向量表没建（阶段 7 的 apply 失败或被跳过）；② 表建了但缺 scope 列（`field_mappings` 后来改过）；③ 表建了、但**只读取数账号没被 GRANT**——校验以只读账号身份查 `information_schema`，看不见与没建同一个报错 | ①③ 归平台侧（重跑建表 / 补只读授权；`\dt` 看得到表**不能**证明读得了它）；② 缺列是结构变更，apply **不会**替你改表：人工加列 + 重跑回填，或重建表后重跑 |
+| 模块被隔离，别名未登记（`DATA_SOURCE_NOT_REGISTERED`） | 阶段 6 没做，或只在另一套环境做过 | `forge data provision-mart`，确认写进的是**这台机器**的 `config/data_sources.json` |
 | 日志 `vector_table_absent`，但表明明建了 | 只读账号没被 GRANT（`ALTER DEFAULT PRIVILEGES` 漏了 `FOR ROLE <etl>`） | 找平台方重做只读账号授权（`GRANT USAGE ON SCHEMA public` + `ALTER DEFAULT PRIVILEGES FOR ROLE <etl>`） |
-| 日志 `vector_scope_probe_failed`（带 `declared=N`） | 该别名**连库/取数本身**就不通（凭据、网络、驱动、库维护中） | 先修连通性（平台侧 `forge data check`）。⚠️ **这条不是无害告警**：探测失败时「声明的向量表存在吗」也一并没验，缺表不会再拒绝启动，症状会退化成「检索恒 0 条」 |
+| 日志 `vector_scope_probe_failed`（带 `declared=N`） | 该别名**连库/取数本身**就不通（凭据、网络、驱动、库维护中） | 先修连通性（平台侧 `forge data check`）。⚠️ **这条不是无害告警**：探测失败时「声明的向量表存在吗」也一并没验，缺表不会再触发隔离，症状会退化成「检索恒 0 条」 |
 | 回填 job fail-closed，报「未构造 ETL 写句柄」 | 老版本里 Admin Console 的按钮是在**网关进程**里跑的 | 平台侧 2026-08-09 起改为「网关排队 / jobs worker 执行」，按钮已可用；仍可用 `forge jobs run ...` 兜底。写凭据按设计不进网关内存 |
 | 回填 job 报缺 `FORGE_EMBEDDING_BASE_URL` | 平台没配 embedding 服务 | 配上；同一个配置源也决定 `ctx.retrieval` 是不是 `None` |
 | 🅖 **首轮成功、第二轮起必炸**：`Invalid parameter type … param-type=numpy.int64 (HY105)` | 水位是从上一条查询的 **DataFrame** 里取的（`.max()` / `.iloc[]` / `.at[]` 拿到的是 numpy 标量，不是 Python int），拿去查 SQL Server 即 HY105。首轮空表 `max()` 给的是 `None` 所以没事，**有数据之后才暴露**；同一个值写回 mart（PG）却不报错——psycopg 对 int64 收得下，于是问题只在原始库那一侧现形 | **平台侧已在绑参处归一**（`forge-data ≥ 0.1.10`）：升级 SDK 即可，业务代码不用改。老版本上先自己转：`int(wm)` / `wm.item()`，取整列用 `.tolist()` |
@@ -354,7 +354,7 @@ deploy.sh  systemctl --user restart forge-jobs
 | **带条件（机型/工厂/时间）的检索经常 0 条，不带条件正常** | 模块「全表召回 top_k → 与候选编号求交」：候选窄时相关的几条排不进全表前 top_k | 改用 `ctx.retrieval.search(..., restrict_ids=候选编号)`（精确近邻，候选内召回完整；需 `paxsz-forge-core ≥ 0.3.5` / `paxsz-forge-data ≥ 0.3.1`）；验收用窄条件测 |
 | `restrict_ids` 传了编号却 0 条 | 编号与向量行 `id` 对不上：向量行 id 是**源表 id 列转 text**，传的却是别的列 / 拼了前缀；**切块表**传的是记录编号而向量行 id 是块编号 | 传 `manifest.vectorize` 的 `id_column` 那一列的值；切块表加 `restrict_column="record_id"`；float / 整串字符串会直接 `TypeError`，不会走到这里 |
 | `RETRIEVAL_COLUMN_NOT_DECLARED` | `filters` / `group_by` / `restrict_column` 引用的列不在该表 `manifest.vectorize.metadata_columns` 里（拼错、忘声明、或拿权限列当元数据列） | 在 `metadata_columns` 补声明 → 重跑 `forge vectorize apply`（新表）或手工 `ALTER TABLE … ADD COLUMN … text`（旧表）→ 重跑回填 |
-| 平台起不来，`VECTOR_SCOPE_COLUMNS_MISSING` 且消息含 `metadata_columns` | 向量表已存在、后来才在声明里加了 `metadata_columns`——`apply` 只建新表不改旧表 | 手工 `ALTER TABLE <向量表> ADD COLUMN <列> text` + 建 btree，重跑回填把值补上 |
+| 模块被隔离，`VECTOR_SCOPE_COLUMNS_MISSING` 且消息含 `metadata_columns` | 向量表已存在、后来才在声明里加了 `metadata_columns`——`apply` 只建新表不改旧表 | 手工 `ALTER TABLE <向量表> ADD COLUMN <列> text` + 建 btree，重跑回填把值补上 |
 | `group_by` 返回的记录数不足 `top_n`，但候选明明够 | 没带 `restrict_ids` 时近邻只多取 4 倍再折叠（只能尽量凑）；一条记录块数极多时被挤 | 带候选时走 `restrict_ids`（精确）；不带时放大 `top_k`，或把超长记录在治理 ETL 里切得更均匀 |
 | 按权限分表检索后合并，最相关的那张单排在后面 | 合并按 `score`（向量余弦，跨表不可比） | 改按 `h.rerank_score` 排（`None` 时才退回 `score`） |
 | 换了 embedding 模型后结果变差 | 正常：换模型会触发一次全量重嵌，重嵌完成前新旧向量并存 | 等回填跑完，或手动 `forge jobs run` 催一轮 |

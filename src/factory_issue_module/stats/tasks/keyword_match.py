@@ -18,7 +18,7 @@
 
 import pandas as pd
 
-from factory_issue_module.stats.lib.common import fi_int
+from factory_issue_module.stats.lib.common import fi_int, fi_records
 from factory_issue_module.stats.lib.domains import dm_view
 from factory_issue_module.stats.lib.textmatch import tx_body, tx_lines, tx_match
 from factory_issue_module.stats.lib.views import vw_filter, vw_time
@@ -36,7 +36,7 @@ def km_pieces(dom, data, K, alive, hidden):
     out = {}
     seg = data.get("seg_" + dom)
     if seg is not None and len(seg):
-        for r in seg.to_dict("records"):
+        for r in fi_records(seg):
             iid = fi_int(r.get("issue_id"))
             if iid is None or iid not in alive:
                 continue
@@ -48,7 +48,7 @@ def km_pieces(dom, data, K, alive, hidden):
     col_titles = K["col_titles"].get(dom) or {}
     if txt is not None and len(txt):
         cols = [c for c in txt.columns if c != "issue_id"]
-        for r in txt.to_dict("records"):
+        for r in fi_records(txt):
             iid = fi_int(r.get("issue_id"))
             if iid is None or iid not in alive:
                 continue

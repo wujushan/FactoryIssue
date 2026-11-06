@@ -211,6 +211,18 @@ curl -N -X POST http://127.0.0.1:8090/v2/chat \
 > 未配 `FORGE_LLM_BASE_URL` 时路由退化为关键词匹配 + 澄清引导；`target` 显式指定目标模块可跳过路由，
 > 适合单模块联调。
 
+你的模块被业务页面调用（自动审核、填单助手……）、在 `manifest.tasks` 里声明了任务？用任务面入口联调，
+请求体与上面相同，只是 `target` 与 `ext_param.task` 必填（见 [02 · SDK 参考](02-sdk-reference.md#任务面-v2tasks-与-manifesttasks)）：
+
+```bash
+curl -N -X POST http://127.0.0.1:8090/v2/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"<待审核的单据正文>", "user_id":"dev", "target":"SALES_QUERY", "ext_param":{"task":"review_order"}}'
+```
+
+> 本地 dev serve 用的是全放开的旁路授权树，`data_scope` 声明在本地看不出区别——它的效果只在接了 INFO
+> 的平台上体现。
+
 你的模块调了别的模块的能力（`capability_deps`）？对方不在你的仓里，本地一调就是「模块未装配」。
 加 `--capability-stubs tests/contracts`，dev serve 按你入库的签名快照给对方起一个**本地桩**，回放
 `tests/contracts/fixtures/` 里你写的样例数据（照样按对方签名校验）；桩不抢路由，问题照旧直达你的模块。

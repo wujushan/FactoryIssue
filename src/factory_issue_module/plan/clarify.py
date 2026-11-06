@@ -14,18 +14,26 @@
   - 时间认不出：把原话里那段说法换成选定的时间，免得新问句里仍带着认不出的说法、再追问一次。
   - 第 18 条「上一轮没有结果」：选项已是更早那次的原话接上本轮原话，`label`「按更早那次的条件查」。
 - 计划的 `alternatives`（其他理解）做成答后按钮（`alternative_recommendations`）：「换个理解：这条理解」。
-  规划器从历史与上一轮计划知道是哪一问（`turn/execute.py` 交 `present/suggestions.py` 合并）。
+  规划器从历史与上一轮计划知道是哪一问（`turn/execute.py` 交 `present/suggestions.py` 合并）。两种不做按钮
+  （`alternative_problem`，决策 2026-11-06「其他理解与接着问的按钮不自相矛盾」）：带着规划器自己的判断（「但」
+  「更可能」「结合」一类，多是在说为什么不按这条查）；计划已按其余类型查（问题类型「不是」某几类），这条却把
+  「其他」读成问题类型「其他」（总述「『其他』『剩下的』指什么」，这种问法读法已定）。
 - 按钮至多 4 个。`label` 是一句说完的话，不超过 30 个字：不超过就用原文，超过则换成另一句完整短说法，
   不用省略号截断（决策 2026-11-04「按钮文字不截断」）。
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 
+import structlog
 from forge_core.events import Event
 
+from factory_issue_module.plan import schema
 from factory_issue_module.plan.normalize import NO_RESULT_REASON
+
+logger = structlog.get_logger(__name__)
 
 #: 选项文字直接作问句的追问原因（原话本身没有可接的意思）
 DIRECT_REASONS = ("接不上上一轮",)
@@ -36,6 +44,10 @@ EARLIER_LABEL = "按更早那次的条件查"
 ALTERNATIVE_NAME = "其他理解"
 #: 其他理解按钮的问句开头
 ALTERNATIVE_PREFIX = "换个理解："
+#: 其他理解里带着规划器自己的判断（哪种更可能、为什么先按另一种查）。「也可能指」是在说这条理解，不算
+_JUDGED = re.compile(r"但|不过|然而|可是|更可能|最可能|可能性|更像|大概率|倾向|结合")
+#: 把「其他」读成问题类型「其他」这一个取值（「叫『其他』的取值」「问题类型为其他的单」）
+_LITERAL_OTHER = re.compile(r"[「『“\"]其[他它][」』”\"]|问题类型(?:为|是|叫)其[他它](?!类型)")
 
 MAX_OPTIONS = 4
 #: 按钮文字的上限。INFO 网页前端显示 `label`，截断加省略号会把选项切成读不成的半句（决策 2026-11-04）
@@ -96,11 +108,37 @@ def short_recommendations(params: dict) -> list[dict[str, str]]:
             for i, option in enumerate(_texts(params.get("options"))[:MAX_OPTIONS], start=1)]
 
 
-def alternative_recommendations(alternatives: Sequence[object] | None,
-                                limit: int = MAX_OPTIONS) -> list[dict[str, str]]:
-    """计划的 `alternatives` → 答后按钮：`query` 是「换个理解：」加这条理解，规划器拿到时按这条理解重新规划。"""
+def _excludes_types(plan: Mapping | None) -> bool:
+    """计划里有一步按问题类型「不是」某几类筛（按其余类型查）。"""
+    for step in schema.as_list((plan or {}).get("steps")):
+        params = step.get("params") if isinstance(step, Mapping) else None
+        for f in schema.as_list((params or {}).get("filters") if isinstance(params, Mapping) else None):
+            if isinstance(f, Mapping) and f.get("field") == "问题类型" and schema.OP_KINDS.get(str(f.get("op"))) == "ne":
+                return True
+    return False
+
+
+def alternative_problem(alt: str, plan: Mapping | None = None) -> str | None:
+    """这条其他理解不做按钮的原因；能用时 None。"""
+    if _JUDGED.search(alt):
+        return "带判断"
+    if _LITERAL_OTHER.search(alt) and _excludes_types(plan):
+        return "与口径相反"
+    return None
+
+
+def alternative_recommendations(alternatives: Sequence[object] | None, limit: int = MAX_OPTIONS, *,
+                                plan: Mapping | None = None) -> list[dict[str, str]]:
+    """计划的 `alternatives` → 答后按钮：`query` 是「换个理解：」加这条理解，规划器拿到时按这条理解重新规划。
+    `alternative_problem` 挑出的不做按钮，只记原因（不记原文）。"""
     out: list[dict[str, str]] = []
-    for alt in _texts(alternatives)[:limit]:
+    for alt in _texts(alternatives):
+        why = alternative_problem(alt, plan)
+        if why is not None:
+            logger.info("factory_issue_alternative_dropped", reason=why)
+            continue
+        if len(out) >= limit:
+            break
         out.append({"id": str(len(out) + 1), "name": ALTERNATIVE_NAME, "label": button_label(alt),
                     "query": ALTERNATIVE_PREFIX + alt.rstrip(_END_PUNCT)})
     return out
