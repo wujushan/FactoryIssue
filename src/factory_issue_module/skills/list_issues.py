@@ -61,7 +61,8 @@ def columns_for(step: dict) -> tuple[list[str], list[str]]:
         for said in schema.as_list(items):
             key = columns.resolve(str(said))
             if key is None:
-                missing.append(str(said))
+                if not columns.reason_column(str(said)):  # 原因、措施给「原因与措施」一列（`wants_reasons`）
+                    missing.append(str(said))
             elif key not in keys:
                 keys.append(key)
         return keys
@@ -85,6 +86,14 @@ def columns_for(step: dict) -> tuple[list[str], list[str]]:
     keys += pick(p.get("add_columns"))
     keys = list(dict.fromkeys(["number", *keys]))
     return keys, missing
+
+
+def wants_reasons(step: dict) -> bool:
+    """点名的列里有原因、措施（「改善措施」「原因分析」「原因与措施」）：表格最后加「原因与措施」一列，同第 5 条
+    前半并进来的详情（总述「原因与措施怎么给」，设计 §5.3 第 21 条）。"""
+    p = step.get("params") or {}
+    return any(columns.reason_column(str(said))
+               for said in [*schema.as_list(p.get("columns")), *schema.as_list(p.get("add_columns"))])
 
 
 def domain_keys(keys: Sequence[str], domain: Domain, alias: dict[str, list[str] | None]) -> tuple[list[str], list[str]]:

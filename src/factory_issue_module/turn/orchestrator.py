@@ -45,6 +45,7 @@ from factory_issue_module.declarations import (
     LINK_SITES,
     SEGMENTATION,
     TOPIC_TERMS,
+    TYPE_SAYINGS,
 )
 from factory_issue_module.domains import base, shared
 from factory_issue_module.domains.base import Ask
@@ -157,13 +158,15 @@ async def run_turn(
     topics = await config_files.load(ctx, TOPIC_TERMS)
     dept_aliases = await config_files.load(ctx, DEPT_ALIASES)
     regions = await config_files.load(ctx, FACTORY_REGIONS)
+    # 规划后规整第 20 条找依据、对库时对问题类型都用它（总述「问题类型怎么对」）
+    type_sayings = await config_files.load(ctx, TYPE_SAYINGS)
     # 规划前就要：规整第 20 条没说要几张时按 `top_n` 列（与「哪个最多」的前 N 名同一个数）
     answer = await config_files.load(ctx, ANSWER_PARAMS)
     lazy = _LazyMaster(ctx, access, asked, dept_aliases, regions)
     planner = Planner(manifest, topics)
     inputs = PlanInputs(
         query=asked, history=history, previous_plan=previous.plan, previous_outcome=previous.outcome,
-        earlier_query=previous.earlier_query, today=today, default_limit=answer.top_n)
+        earlier_query=previous.earlier_query, today=today, default_limit=answer.top_n, type_sayings=type_sayings)
     llm = getattr(ctx, "llm", None)
     if filled is not None:
         result = PlanResult(plan=filled.plan, source="filled", inferred=list(filled.inferred),
@@ -206,7 +209,7 @@ async def run_turn(
         return execute.Turn(ctx=ctx, manifest=manifest, access=access, master=master, answer=answer,
                             resolver=base.Resolver(master=master, dept_aliases=dept_aliases, regions=regions,
                                                    entities=entities, today=today, query=asked, carried=carried,
-                                                   rest=rest),
+                                                   rest=rest, type_sayings=type_sayings),
                             query=asked, today=today, result=result, entities=entities, sites=sites,
                             previous_turn=previous.turn, previous_results=results, focus=focus,
                             topics=topics, seg=seg, scripts=workspace.stored_scripts(previous.turn),

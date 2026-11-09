@@ -168,11 +168,13 @@ async def test_rule_hits_are_returned():
 def test_system_has_no_date_and_is_cached():
     system = prompt.planner_system(MANIFEST, TOPICS)
     assert system is prompt.planner_system(MANIFEST, TOPICS)
-    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.7"
+    assert "2026-" not in system and prompt.PROMPT_VERSION == "p2.8"
     assert "严重的单" in system and "不良率高的单" in system  # p2.4：术语表加的两行（G93、G94）
     assert "一部今年有哪些问题" in system
     assert "巴西的单现在都是谁在处理" in system  # p2.6：问一批单谁在处理（G97）
     assert "软件bug" in system and "电子料问题" in system  # p2.7：问题类型的口语说法（G100–G102）
+    assert "不要自己用 clarify 问是哪一类" in system  # p2.8：要不要问由程序按类型说法表定
+    assert "追问按物料问题还是硬件问题查" not in system  # 术语表不再替程序点名追问哪几类
 
 
 def test_user_carries_history_previous_plan_and_outcome():

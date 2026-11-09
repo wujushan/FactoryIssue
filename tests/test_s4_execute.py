@@ -418,6 +418,34 @@ async def test_rule5_detail_with_only_reasons_folds_into_the_list():
     assert "单张单详情" not in _text(events)
 
 
+_BR005 = "巴西需要回 8D 的物料问题有哪些？改善措施写了什么？"
+_BR005_FILTERS = [{"field": "问题类型", "op": "是", "value": "物料问题", "from": "user"},
+                  {"field": "是否需要回复8D", "op": "是", "value": "是", "from": "user"}]
+
+
+@pytest.mark.parametrize("cols", [
+    {"add_columns": ["改善措施"]},  # p2.6 及以前的写法：点名的列是措施，原先答成「制程问题单上没有『改善措施』」
+    {"columns": ["问题编号", "机型", "物料名称", "当前状态"]},  # p2.7、p2.8 的写法：漏了改善措施，第 21 条补上
+])
+async def test_br005_list_naming_measures_gets_the_reasons_column(cols):
+    """BR-005 一步清单的两种写法（设计 §5.3 第 21 条，总述「原因与措施怎么给」：清单接着问原因、措施时加「原因与措施」
+    一列）：都在表格最后加这一列，不说制程问题单上没有这项信息。"""
+    reply = plan(step("list_issues", domains={"value": ["巴西"], "from": "user"}, filters=_BR005_FILTERS, **cols))
+    _h, events = await _go(_BR005, [reply, "共 1 张。"])
+    tables = _tables(events)
+    assert len(tables) == 1 and tables[0]["columns"][-1] == "原因与措施"
+    assert "最新的措施" in tables[0]["rows"][0][-1]
+    assert _NOT_AVAILABLE not in _text(events)
+
+
+async def test_list_naming_reason_class_is_a_column_not_the_reasons():
+    """「原因分类」是单上的一列，不是「原因与措施」：照给原因分类一列，不加「原因与措施」。"""
+    reply = plan(step("list_issues", domains={"value": ["国内"], "from": "user"},
+                      filters=[{"field": "原因分类", "op": "是", "value": "人为工作疏忽", "from": "user"}]))
+    _h, events = await _go("原因分类为人为工作疏忽的国内单", [reply, "共 1 张。"])
+    assert all("原因与措施" not in t["columns"] for t in _tables(events))
+
+
 async def test_rule5_folded_cell_is_a_summary_of_five_why_and_keeps_car_link():
     """并进清单的「原因与措施」一格给摘要（决策 2026-11-04「表格里的原因与措施给摘要」）：交模型浓缩的是与详情同样
     合成的内容（国内有 5Why 时附在后面，每项截到 200 字）；没有 CAR 报告权限时那句说明与报告链接不进摘要，照原样接上

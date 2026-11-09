@@ -72,6 +72,8 @@ class PlanInputs:
     today: date | None = None
     #: 第 20 条：没说要几张时列几张（模块配置 `top_n`）；None 用内置默认
     default_limit: int | None = None
+    #: 第 20 条找依据用的问题类型说法表（模块配置 `type_sayings.md`）；None 用内置默认
+    type_sayings: Any = None
 
 
 def _content(resp: Any) -> str:
@@ -151,7 +153,8 @@ class Planner:
         out = normalize.apply(plan, normalize.Context(
             query=inputs.query, previous=inputs.previous_plan, previous_outcome=inputs.previous_outcome,
             earlier_query=inputs.earlier_query, classes=inputs.classes, topics=self.topics,
-            today=inputs.today, hits=done.hits, inferred=done.inferred, default_limit=inputs.default_limit))
+            today=inputs.today, hits=done.hits, inferred=done.inferred, default_limit=inputs.default_limit,
+            type_sayings=inputs.type_sayings))
         if out is not None:
             done.plan = out
         return done

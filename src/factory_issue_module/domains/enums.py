@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable
 
 # ---------------------------------------------------------------------------- 国内主表
 
@@ -175,22 +176,17 @@ def code_of(table: dict[int, str], said: object) -> list[int]:
 
 # ---------------------------------------------------------------------------- 问题类型说法（三域）
 
-#: 口语说法的尾巴（总述「三域共用的说法」，决策 2026-11-09「问题类型的口语说法」）：「硬件毛病」「结构方面的问题」
-#: 「软件相关的单」去掉尾巴后再按类型名对。只在规划器已写成问题类型条件时用；「X 相关」按文字找还是按类型，
-#: 由规划提示按 X 是不是类型定
+#: 口语说法的后半截（总述「问题类型怎么对」第 1 步，决策 2026-11-09「问题类型的口语说法」）：「硬件毛病」「结构方面
+#: 的问题」「软件相关的单」去掉后再按类型名对。只在规划器已写成问题类型条件时用；「X 相关」按文字找还是按类型，
+#: 由规划提示按 X 是不是类型定。类型说法表（第 2 步）由管理员维护，见 `config/files.py::TypeSayings`
 _TYPE_TAIL = re.compile(r"的?(?:毛病|方面的问题|方面问题|方面|相关的问题|相关问题|相关的单|相关单|相关)$")
-#: 直接认作某个类型的说法
-_TYPE_SAYING_WORDS: dict[str, str] = {
-    "bug": "软件问题", "软件bug": "软件问题", "软件的bug": "软件问题", "软件缺陷": "软件问题",
-}
-_TYPE_SAYINGS = {_key(k): v for k, v in _TYPE_SAYING_WORDS.items()}
-#: 不是问题类型、要追问按哪一类查的说法：单上不区分电子料与结构料、五金、塑胶等
-_ELECTRONIC_WORDS = ("电子料", "电子物料")
-ELECTRONIC_OPTIONS = ("物料问题", "硬件问题")
+#: 总述定死的说法（「三域共用的说法」：「物料不良」等同物料问题）。属第 1 步、不在管理员维护的说法表里：改表不影响它。
+#: 规划提示要求照原话写，「高展光电物料不良的单」计划里就是「物料不良」（内网 p2.8 CN-017 5/5）
+_FIXED_SAYINGS = {"物料不良": "物料问题"}
 
 
 def type_core(said: object) -> str:
-    """去掉口语尾巴（可叠用：「软件方面的毛病」→「软件」）；去完为空时保留原样（只说「毛病」认不出）。"""
+    """去掉口语后半截（可叠用：「软件方面的毛病」→「软件」）；去完为空时保留原样（只说「毛病」认不出）。"""
     k = _key(said)
     while True:
         nxt = _TYPE_TAIL.sub("", k)
@@ -199,23 +195,34 @@ def type_core(said: object) -> str:
         k = nxt
 
 
-def _bare(said: object) -> str:
+def type_keys(said: object) -> list[str]:
+    """第 1 步依次试的写法（已归一）：原样与去掉口语后半截后各自的：原样；定死的说法对到的类型（`_FIXED_SAYINGS`）；
+    「X 类」「X 类问题」去掉「类」；末尾补上「问题」。只在末尾补「问题」，不做包含匹配：「制程」补成「制程问题」也对不上任何类型，照旧追问（总述「三域共用
+    的说法」：制程不是问题类型）。"""
+    out: list[str] = []
+    for c in dict.fromkeys([_key(said), type_core(said)]):
+        out.append(c)
+        if c in _FIXED_SAYINGS:
+            out.append(_key(_FIXED_SAYINGS[c]))
+        if c.endswith("类问题"):
+            out.append(c[:-3] + "问题")
+        if c.endswith("类"):
+            out += [c[:-1], c[:-1] + "问题"]
+        if not c.endswith("问题"):
+            out.append(c + "问题")
+    return out
+
+
+def type_by_name(said: object, types: Iterable[str]) -> str | None:
+    """第 1 步：说法按类型名称对到 `types` 里的哪一个；对不上返回 None。"""
+    index = {_key(t): t for t in types}
+    return next((index[k] for k in type_keys(said) if k in index), None)
+
+
+def saying_key(said: object) -> str:
+    """第 2 步类型说法表的比较键：归一、去掉口语后半截，再去掉末尾的「问题」「不良」「类」「单」（「电子料不良」
+    「电子料问题」都对上表里的「电子料」）。"""
     return re.sub(r"(问题|不良|类|单)$", "", type_core(said))
-
-
-def type_saying(said: object) -> str | None:
-    """直接认作某个类型的说法 → 类型名（「软件bug」「bug单」→ 软件问题）；不是返回 None。"""
-    return _TYPE_SAYINGS.get(_bare(said)) or _TYPE_SAYINGS.get(_key(said))
-
-
-def is_electronic(said: object) -> bool:
-    """「电子料问题」「电子料不良」一类：不是问题类型，追问按物料问题还是硬件问题查。"""
-    return _bare(said) in {_key(w) for w in _ELECTRONIC_WORDS}
-
-
-def type_sayings(value: object) -> tuple[str, ...]:
-    """一个类型名在问句里还可能怎么说（规整第 20 条找依据）：`_TYPE_SAYING_WORDS` 里认作它的说法。"""
-    return tuple(k for k, v in _TYPE_SAYING_WORDS.items() if v == str(value))
 
 
 # ---------------------------------------------------------------------------- 状态说法（国内）

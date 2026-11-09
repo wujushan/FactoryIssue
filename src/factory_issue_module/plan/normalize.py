@@ -30,11 +30,14 @@ from datetime import date
 from functools import lru_cache
 from typing import Any
 
+from factory_issue_module.config import files as config_files
 from factory_issue_module.config.defaults import ANSWER_PARAMS as ANSWER_DEFAULTS
 from factory_issue_module.config.files import TopicTerms
+from factory_issue_module.declarations import TYPE_SAYINGS
 from factory_issue_module.domains import enums
 from factory_issue_module.plan import names, schema, timespan
 from factory_issue_module.plan.prematch import ISSUE_NUMBER, find_entities, find_numbers
+from factory_issue_module.present import columns
 
 # ---------------------------------------------------------------------------- 归一
 
@@ -879,6 +882,45 @@ def fold_previous_list(plan: dict) -> None:
         return
 
 
+def _ref_sid(value: Any) -> str | None:
+    """`{"ref": "s1.issues"}`（或带 `value` 的写法）引用的步骤编号；不是引用返回 None。"""
+    v = value.get("value") if isinstance(value, dict) and "value" in value else value
+    v = schema.unwrap_ref(v)
+    return str(v["ref"]).partition(".")[0] if schema.is_ref(v) else None
+
+
+def reason_columns_rule(plan: dict, query: str | None) -> None:
+    """第 21 条（就地改）：问句问到原因、措施（「巴西需要回 8D 的物料问题有哪些？改善措施写了什么？」），计划的清单
+    却没列这一项、也没有一步要原因或措施的详情接着这张清单时，清单加「原因与措施」一列（总述「原因与措施怎么给」：
+    清单接着问原因、措施时加这一列；执行时由 `list_issues.wants_reasons` 认出、与第 5 条前半同一列）。
+
+    判据是问句里的词（`columns.says_reasons`：原因、措施、对策，先去掉「原因分类」「可能问题原因」这类说法）与计划
+    的结构，不看词的位置，误判只是表格多一列原因与措施的摘要，看得见，按准入准则改写。只改清单；文字查找本来就带回
+    原因与措施。用户点名了要哪些列（`columns`）时接在后面，否则加进 `add_columns`。内网 p2.7、p2.8 BR-005 模型把
+    改善措施漏掉 3/5、5/5（p2.6 以前都写了）。
+    """
+    if not query or not columns.says_reasons(query):
+        return
+    steps = [s for s in plan.get("steps") or [] if isinstance(s, dict)]
+    covered: set[str] = set()
+    for s in steps:
+        p = s.get("params") if isinstance(s.get("params"), dict) else {}
+        if s.get("skill") == "issue_detail" and any(columns.says_reasons(a) or str(a) == "处理结果"
+                                                    for a in _as_list(p.get("aspects"))):
+            sid = _ref_sid(p.get("issue"))
+            if sid is not None:
+                covered.add(sid)
+    for s in steps:
+        p = s.get("params")
+        if s.get("skill") != "list_issues" or not isinstance(p, dict) or str(s.get("id")) in covered:
+            continue
+        named = [*_as_list(p.get("columns")), *_as_list(p.get("add_columns"))]
+        if any(columns.reason_column(str(x)) for x in named):
+            continue
+        key = "columns" if p.get("columns") else "add_columns"
+        p[key] = [*_as_list(p.get(key)), columns.REASONS]
+
+
 def _time_options(out: dict, today: date | None) -> dict:
     """模型自己写的「缺时间」追问，选项也换成代码给的那一套（第 17 条）。"""
     for s in out.get("steps") or []:
@@ -910,6 +952,8 @@ class Context:
     inferred: list[Inferred] | None = None
     #: 第 20 条：没说要几张时列几张（模块配置 `top_n`，与「哪个最多」的前 N 名同一个数）；没给用内置默认
     default_limit: int | None = None
+    #: 第 20 条找依据用的问题类型说法表（模块配置 `type_sayings.md`）；没给用内置默认
+    type_sayings: Any = None
 
 
 def apply(plan: dict | None, ctx: Context) -> dict | None:
@@ -943,6 +987,7 @@ def apply(plan: dict | None, ctx: Context) -> dict | None:
             return out
     rec.run(11, out, _safety_rule, out, query)
     rec.run(5, out, fold_previous_list, out)
+    rec.run(21, out, reason_columns_rule, out, query)
     rec.run(2, out, merge_duplicate_aggregates, out)
     if rec.run(18, out, _no_result_rule, out, query, ctx.previous_outcome, ctx.earlier_query):
         return out
@@ -951,7 +996,7 @@ def apply(plan: dict | None, ctx: Context) -> dict | None:
         ctx.hits.append(RuleHit(17, _skills(out), _fields(out), _fields(out), action="只记日志"))
     out = rec.run(17, out, _time_options, out, ctx.today)
     rec.run(20, out, reading_rule, out, query, ctx.default_limit or DEFAULT_LIMIT,
-            ctx.inferred if ctx.inferred is not None else [], ctx.hits)
+            ctx.inferred if ctx.inferred is not None else [], ctx.hits, ctx.type_sayings)
     return out
 
 
@@ -1185,9 +1230,11 @@ def _type_core(value: str) -> str:
     return re.sub(r"(类问题|问题|类型|类)$", "", value)
 
 
-def has_basis(field_name: str, value: object, query: str, levels: set[str] | None = None) -> bool:
+def has_basis(field_name: str, value: object, query: str, levels: set[str] | None = None,
+              sayings: Any = None) -> bool:
     """这一个取值在问句里有没有依据：取值本身，或对库时认的说法（状态 `enums.status_sayings`、等级
-    `levels_in`、问题类型去掉末尾「问题」「类」后的说法与 `enums.type_sayings`）。"""
+    `levels_in`、问题类型去掉末尾「问题」「类」后的说法与类型说法表里只对到这一个类型的说法，`sayings` 没给用
+    内置默认）。"""
     q = norm(query)
     text = str(value)
     if field_name == "问题等级":
@@ -1196,8 +1243,10 @@ def has_basis(field_name: str, value: object, query: str, levels: set[str] | Non
     if field_name == "状态":
         return any(norm(w) and norm(w) in q for w in enums.status_sayings(text))
     core = norm(_type_core(text))
-    return (norm(text) in q or (len(core) >= 2 and core in q)
-            or any(norm(w) in q for w in enums.type_sayings(text)))
+    if norm(text) in q or (len(core) >= 2 and core in q):
+        return True
+    table = sayings if sayings is not None else config_files.default(TYPE_SAYINGS)
+    return any(norm(w) and norm(w) in q for w in table.sayings_of(text))
 
 
 def _add_inferred(inferred: list[Inferred], item: Inferred) -> None:
@@ -1206,7 +1255,7 @@ def _add_inferred(inferred: list[Inferred], item: Inferred) -> None:
 
 
 def reading_rule(plan: dict, query: str | None, default_limit: int, inferred: list[Inferred],
-                 hits: list[RuleHit] | None = None) -> None:
+                 hits: list[RuleHit] | None = None, sayings: Any = None) -> None:
     """第 20 条（就地改）：
 
     - 问题等级、状态、问题类型的取值，本轮说的（不是沿用上一轮的），有一个在问句里找不到依据，就把这一条条件记成
@@ -1245,7 +1294,7 @@ def reading_rule(plan: dict, query: str | None, default_limit: int, inferred: li
             is_severe = (name == "问题等级" and not negated
                          and {re.sub(r"\s+", "", v).upper() for v in values} == set(SEVERE_LEVELS))
             severe_ok = severe_ok or is_severe
-            if all(has_basis(name, v, query, levels) for v in values):
+            if all(has_basis(name, v, query, levels, sayings) for v in values):
                 continue
             m = SEVERE.search(raw) if is_severe else None
             _add_inferred(inferred, Inferred(sid, name + (op if negated else ""), tuple(values), kind=KIND_VALUE,

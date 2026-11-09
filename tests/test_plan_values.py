@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from factory_issue_module.config import files
 from factory_issue_module.declarations import Domain
 from factory_issue_module.domains import base, enums
 
@@ -83,10 +84,48 @@ def test_type_colloquial_still_asks_when_core_is_not_a_type(said):
 
 
 @pytest.mark.parametrize("domain", list(_TYPES))
-@pytest.mark.parametrize("said", ["电子料问题", "电子料不良", "电子料"])
+@pytest.mark.parametrize("said", ["电子料问题", "电子料不良", "电子料", "电子料方面的毛病"])
 def test_electronic_parts_asks_material_or_hardware(domain, said):
-    """「电子料问题」不是类型、单上不区分电子料：追问按物料问题还是硬件问题查，选项直填回计划。"""
+    """说法表里「电子料」对到两类：追问按物料问题还是硬件问题查，选项直填回计划。"""
     got = base.problem_types([said], _TYPES[domain], domain.label, False, base.DomainStep(domain=domain))
     assert isinstance(got, base.Ask)
     assert got.options == ["物料问题", "硬件问题"] and got.said == said and got.fill == base.FILL_VALUE
-    assert "不是问题类型" in got.question
+    assert got.reason == base.TYPE_PICK_REASON
+    assert got.question == f"「{said}」可能指物料问题、硬件问题，想按哪一类查？"
+
+
+def _sayings(rows: str):
+    return files.parse_type_sayings("| 说法 | 对到的问题类型 |\n|---|---|\n" + rows)
+
+
+def test_uploaded_sayings_table_replaces_the_built_in_one():
+    """管理员上传的说法表：新加的说法照它对（不发版），没写进去的内置说法不再认。"""
+    table = _sayings("| 外观 | 结构问题 |\n| 来料 | 物料问题、工厂制程 |\n")
+    step = base.DomainStep(domain=Domain.DOMESTIC)
+    assert base.problem_types(["外观不良"], _TYPES[Domain.DOMESTIC], "国内", False, step, table) == ["结构问题"]
+    got = base.problem_types(["来料问题"], _TYPES[Domain.DOMESTIC], "国内", False, step, table)
+    assert isinstance(got, base.Ask) and got.options == ["物料问题", "工厂制程"]
+    got = base.problem_types(["软件bug"], _TYPES[Domain.DOMESTIC], "国内", False, step, table)
+    assert isinstance(got, base.Ask) and got.reason == "类型对不上"
+
+
+def test_saying_with_several_types_keeps_only_those_this_domain_has():
+    """对到几个类型、本域只有其中一部分：选项只给本域有的；一个都没有时本域不计入并写明。"""
+    table = _sayings("| 图纸 | 设计问题、资料问题 |\n")
+    got = base.problem_types(["图纸问题"], _TYPES[Domain.DOMESTIC], "国内", False,
+                             base.DomainStep(domain=Domain.DOMESTIC), table)
+    assert isinstance(got, base.Ask) and got.options == ["资料问题"]
+    step = base.DomainStep(domain=Domain.OVERSEAS)
+    assert base.problem_types(["图纸问题"], _TYPES[Domain.OVERSEAS], "海外", False, step, table) == []
+    assert step.excluded == ["海外无「设计问题」「资料问题」类型，未计入"]
+
+
+def test_reading_basis_counts_type_sayings_from_the_table():
+    """规整第 20 条：问句说「bug」、计划写成软件问题，按说法表算有依据（不写「按软件问题理解」）；上传的表同样算。"""
+    from factory_issue_module.plan import normalize
+
+    assert normalize.has_basis("问题类型", "软件问题", "上个月国内的bug有哪些")
+    assert not normalize.has_basis("问题类型", "物料问题", "电子料问题有哪些")  # 对到几类的说法不算某一类的依据
+    table = _sayings("| 外观 | 结构问题 |\n")
+    assert normalize.has_basis("问题类型", "结构问题", "国内外观不良的单", sayings=table)
+    assert not normalize.has_basis("问题类型", "结构问题", "国内外观不良的单")

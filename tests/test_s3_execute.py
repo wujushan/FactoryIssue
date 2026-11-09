@@ -383,6 +383,39 @@ async def test_short_type_name_only_elsewhere_is_named_in_full():
     assert "巴西无「软件问题」类型，未计入" in text and "问题类型：软件问题" in text
 
 
+async def test_electronic_parts_asks_once_without_domain_prefix_and_click_resolves():
+    """「电子料问题」三域一起（决策 2026-11-09「问题类型的口语说法」）：说法表里对到两类，本轮不出数，问一次按物料
+    问题还是硬件问题，问句不带域名前缀；点「物料问题」后按物料问题查，不再问。按钮发问句全文的退路（直填见
+    `test_s5_multiturn.py`）。"""
+    reply = plan(step("list_issues", filters=[{"field": "问题类型", "op": "是", "value": "电子料问题", "from": "user"}]))
+    h, events = await _go("电子料问题有哪些", [reply], ws=False)
+    assert _types(events) == [EventType.CLARIFY]
+    question = events[0].data["question"]
+    assert question == "「电子料问题」可能指物料问题、硬件问题，想按哪一类查？" and data_queries(h) == []
+    button = next(r for r in events[0].data["recommendations"] if r["label"] == "物料问题")
+    assert [r["label"] for r in events[0].data["recommendations"]] == ["物料问题", "硬件问题"]
+    picked = plan(step("list_issues", filters=[{"field": "问题类型", "op": "是", "value": "物料问题", "from": "user"}]))
+    h, events = await _go(button["query"], [picked, "共 1 张。"])
+    assert EventType.CLARIFY not in _types(events)
+    assert "问题类型：物料问题" in _text(events)
+
+
+async def test_uploaded_type_sayings_take_effect_without_release():
+    """管理员上传 `type_sayings.md` 加一行「外观 → 结构问题」：下一次提问就按结构问题查，不再追问。"""
+    from factory_issue_module.config import files
+
+    files._cache.clear()  # 假环境的版本号都是 1，缓存按（文件名, 版本）存
+    reply = plan(step("list_issues", domains={"value": ["国内"], "from": "user"},
+                      filters=[{"field": "问题类型", "op": "是", "value": "外观问题", "from": "user"}]))
+    table = "| 说法 | 对到的问题类型 |\n|---|---|\n| 外观 | 结构问题 |\n"
+    h = make_harness(scopes.GREEN, llm_replies=[reply, "共 1 张。"], config_files={"type_sayings.md": table})
+    s3_data.load(h)
+    events = await run(h, "国内的外观问题有哪些")
+    files._cache.clear()
+    assert EventType.CLARIFY not in _types(events)
+    assert "问题类型：结构问题" in _text(events)
+
+
 async def test_type_only_elsewhere_excludes_domestic():
     """点名的类型国内没有（「设计问题」）：国内不计入并写明，不再把国内全部单算进来。"""
     reply = plan(step("aggregate", time=T30, filters=[{"field": "问题类型", "op": "是", "value": "设计问题",

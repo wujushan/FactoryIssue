@@ -199,6 +199,7 @@ TOPIC_TERMS = "topic_terms.md"
 SEGMENTATION = "segmentation.toml"
 DEPT_ALIASES = "dept_aliases.md"
 FACTORY_REGIONS = "factory_regions.md"
+TYPE_SAYINGS = "type_sayings.md"
 ANSWER_PARAMS = "answer_params.toml"
 LINK_SITES = "link_sites.toml"
 
@@ -228,6 +229,14 @@ CONFIG_FILES: list[ConfigFileSpec] = [
     ConfigFileSpec(
         name=FACTORY_REGIONS,
         description="国内工厂的地区说法。Markdown 两列表：地区说法 | 对到的工厂；工厂之间用「、」分隔",
+    ),
+    ConfigFileSpec(
+        name=TYPE_SAYINGS,
+        description=(
+            "问题类型的说法（用户说的不是类型名称时对到哪个类型）。Markdown 两列表：说法 | 对到的问题类型；"
+            "对到几个类型时用「、」分隔，用户这样说时请他选一类。说法写核心词，末尾的「问题」「不良」「毛病」等不用写；"
+            "类型名称本身与省掉「问题」的写法已经认得，不用写进表。改了下一次提问生效"
+        ),
     ),
     ConfigFileSpec(
         name=ANSWER_PARAMS,
