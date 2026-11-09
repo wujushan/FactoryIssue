@@ -58,3 +58,35 @@ def test_type_suffix_rule_stays_narrow():
     assert _type_in(Domain.DOMESTIC, "软件类") == ["软件问题"]
     assert _type_in(Domain.DOMESTIC, "结构类问题") == ["结构问题"]
     assert _type_in(Domain.BRAZIL, "其他类") == ["其他"]
+
+
+@pytest.mark.parametrize(("said", "want"), [
+    ("硬件毛病", "硬件问题"), ("结构毛病", "结构问题"), ("结构方面的问题", "结构问题"), ("软件方面的毛病", "软件问题"),
+    ("软件相关", "软件问题"), ("软件相关的单", "软件问题"), ("软件bug", "软件问题"), ("BUG", "软件问题"),
+    ("软件BUG单", "软件问题"), ("软件缺陷", "软件问题"), ("物料方面", "物料问题"),
+])
+def test_type_colloquial_sayings(said, want):
+    """问题类型的口语说法（决策 2026-11-09「问题类型的口语说法」）：程序固定认，不靠规划器改写。"""
+    assert _type_in(Domain.DOMESTIC, said) == [want]
+
+
+def test_type_colloquial_brazil_has_no_software():
+    step = base.DomainStep(domain=Domain.BRAZIL)
+    assert base.problem_types(["软件bug"], _TYPES[Domain.BRAZIL], "巴西", False, step) == []
+    assert step.excluded == ["巴西无「软件问题」类型，未计入"]
+
+
+@pytest.mark.parametrize("said", ["毛病", "制程相关", "电池毛病"])
+def test_type_colloquial_still_asks_when_core_is_not_a_type(said):
+    got = base.problem_types([said], _TYPES[Domain.DOMESTIC], "国内", False, base.DomainStep(domain=Domain.DOMESTIC))
+    assert isinstance(got, base.Ask) and got.question.startswith(f"没有「{said}」这个问题类型")
+
+
+@pytest.mark.parametrize("domain", list(_TYPES))
+@pytest.mark.parametrize("said", ["电子料问题", "电子料不良", "电子料"])
+def test_electronic_parts_asks_material_or_hardware(domain, said):
+    """「电子料问题」不是类型、单上不区分电子料：追问按物料问题还是硬件问题查，选项直填回计划。"""
+    got = base.problem_types([said], _TYPES[domain], domain.label, False, base.DomainStep(domain=domain))
+    assert isinstance(got, base.Ask)
+    assert got.options == ["物料问题", "硬件问题"] and got.said == said and got.fill == base.FILL_VALUE
+    assert "不是问题类型" in got.question

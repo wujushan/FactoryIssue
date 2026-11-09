@@ -1187,7 +1187,7 @@ def _type_core(value: str) -> str:
 
 def has_basis(field_name: str, value: object, query: str, levels: set[str] | None = None) -> bool:
     """这一个取值在问句里有没有依据：取值本身，或对库时认的说法（状态 `enums.status_sayings`、等级
-    `levels_in`、问题类型去掉末尾「问题」「类」后的说法）。"""
+    `levels_in`、问题类型去掉末尾「问题」「类」后的说法与 `enums.type_sayings`）。"""
     q = norm(query)
     text = str(value)
     if field_name == "问题等级":
@@ -1196,7 +1196,8 @@ def has_basis(field_name: str, value: object, query: str, levels: set[str] | Non
     if field_name == "状态":
         return any(norm(w) and norm(w) in q for w in enums.status_sayings(text))
     core = norm(_type_core(text))
-    return norm(text) in q or (len(core) >= 2 and core in q)
+    return (norm(text) in q or (len(core) >= 2 and core in q)
+            or any(norm(w) in q for w in enums.type_sayings(text)))
 
 
 def _add_inferred(inferred: list[Inferred], item: Inferred) -> None:

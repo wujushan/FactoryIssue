@@ -585,18 +585,27 @@ def time_conditions(step: dict, spans: Sequence[Any], out: DomainStep, *, label:
 
 
 def _type_keys(k: str) -> list[str]:
-    """一个问题类型说法（已归一）依次试的写法：原样；「X 类」「X 类问题」去掉「类」；末尾补上「问题」。
+    """一个问题类型说法（已归一）依次试的写法：直接认作某个类型的说法（「软件bug」→ 软件问题）；原样与去掉口语
+    尾巴后（「硬件毛病」「结构方面的问题」「软件相关」→ 硬件、结构、软件）各自的：原样；「X 类」「X 类问题」去掉
+    「类」；末尾补上「问题」。说法与尾巴见 `enums.type_saying`、`enums.type_core`（决策 2026-11-09「问题类型的口语
+    说法」）。
 
     只在末尾补「问题」，不做包含匹配：「制程」补成「制程问题」也对不上任何类型，照旧追问（总述「三域共用的说法」：
     制程不是问题类型）。
     """
-    out = [k]
-    if k.endswith("类问题"):
-        out.append(k[:-3] + "问题")
-    if k.endswith("类"):
-        out += [k[:-1], k[:-1] + "问题"]
-    if not k.endswith("问题"):
-        out.append(k + "问题")
+    from factory_issue_module.domains import enums
+    from factory_issue_module.plan import names
+
+    saying = enums.type_saying(k)
+    out = [names.key(saying)] if saying else []
+    for c in dict.fromkeys([k, names.key(enums.type_core(k))]):
+        out.append(c)
+        if c.endswith("类问题"):
+            out.append(c[:-3] + "问题")
+        if c.endswith("类"):
+            out += [c[:-1], c[:-1] + "问题"]
+        if not c.endswith("问题"):
+            out.append(c + "问题")
     return out
 
 
@@ -606,9 +615,11 @@ def problem_types(values: Sequence[str], known: Sequence[str], label: str, neg: 
 
     只在别的域有的类型：本域不计入这一项并写明（「巴西无『工厂制程』类型，未计入」）；点名的类型本域一个都没有时
     整域不计入。三域都没有的说法，列出本域的类型请用户选。类型名称可以省掉末尾的「问题」、带「类」
-    （「软件、硬件、结构三类」即软件问题、硬件问题、结构问题），见 `_type_keys`。
+    （「软件、硬件、结构三类」即软件问题、硬件问题、结构问题），也可以是口语说法（「硬件毛病」「软件bug」），见
+    `_type_keys`。「电子料问题」不是类型，追问按物料问题还是硬件问题查（`enums.is_electronic`）。
     """
     from factory_issue_module import landed
+    from factory_issue_module.domains import enums
     from factory_issue_module.plan import names
 
     keys = {names.key(t): t for t in known}
@@ -626,6 +637,10 @@ def problem_types(values: Sequence[str], known: Sequence[str], label: str, neg: 
             if not neg:
                 out.skipped.append(f"{label}无「{other}」类型，未计入")
             continue
+        if enums.is_electronic(v):
+            options = [t for t in enums.ELECTRONIC_OPTIONS if t in known]
+            return Ask(f"「{v}」不是问题类型，单上也不区分电子料与结构料、五金等。想按哪一类查？", options,
+                       reason="类型对不上", said=v)
         return Ask(f"没有「{v}」这个问题类型，{label}的问题类型有：{join(known)}。", list(known)[:4],
                    reason="类型对不上", said=v)
     if not hit and not neg:

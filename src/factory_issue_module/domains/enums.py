@@ -173,6 +173,51 @@ def code_of(table: dict[int, str], said: object) -> list[int]:
     return [k for k, v in table.items() if _key(v) == want]
 
 
+# ---------------------------------------------------------------------------- 问题类型说法（三域）
+
+#: 口语说法的尾巴（总述「三域共用的说法」，决策 2026-11-09「问题类型的口语说法」）：「硬件毛病」「结构方面的问题」
+#: 「软件相关的单」去掉尾巴后再按类型名对。只在规划器已写成问题类型条件时用；「X 相关」按文字找还是按类型，
+#: 由规划提示按 X 是不是类型定
+_TYPE_TAIL = re.compile(r"的?(?:毛病|方面的问题|方面问题|方面|相关的问题|相关问题|相关的单|相关单|相关)$")
+#: 直接认作某个类型的说法
+_TYPE_SAYING_WORDS: dict[str, str] = {
+    "bug": "软件问题", "软件bug": "软件问题", "软件的bug": "软件问题", "软件缺陷": "软件问题",
+}
+_TYPE_SAYINGS = {_key(k): v for k, v in _TYPE_SAYING_WORDS.items()}
+#: 不是问题类型、要追问按哪一类查的说法：单上不区分电子料与结构料、五金、塑胶等
+_ELECTRONIC_WORDS = ("电子料", "电子物料")
+ELECTRONIC_OPTIONS = ("物料问题", "硬件问题")
+
+
+def type_core(said: object) -> str:
+    """去掉口语尾巴（可叠用：「软件方面的毛病」→「软件」）；去完为空时保留原样（只说「毛病」认不出）。"""
+    k = _key(said)
+    while True:
+        nxt = _TYPE_TAIL.sub("", k)
+        if nxt == k or not nxt:
+            return k
+        k = nxt
+
+
+def _bare(said: object) -> str:
+    return re.sub(r"(问题|不良|类|单)$", "", type_core(said))
+
+
+def type_saying(said: object) -> str | None:
+    """直接认作某个类型的说法 → 类型名（「软件bug」「bug单」→ 软件问题）；不是返回 None。"""
+    return _TYPE_SAYINGS.get(_bare(said)) or _TYPE_SAYINGS.get(_key(said))
+
+
+def is_electronic(said: object) -> bool:
+    """「电子料问题」「电子料不良」一类：不是问题类型，追问按物料问题还是硬件问题查。"""
+    return _bare(said) in {_key(w) for w in _ELECTRONIC_WORDS}
+
+
+def type_sayings(value: object) -> tuple[str, ...]:
+    """一个类型名在问句里还可能怎么说（规整第 20 条找依据）：`_TYPE_SAYING_WORDS` 里认作它的说法。"""
+    return tuple(k for k, v in _TYPE_SAYING_WORDS.items() if v == str(value))
+
+
 # ---------------------------------------------------------------------------- 状态说法（国内）
 
 #: 「状态」条件的说法 → 判据。判据由沙箱按派生字段算（`stats/lib/derive_domestic.py::status_match`）。
