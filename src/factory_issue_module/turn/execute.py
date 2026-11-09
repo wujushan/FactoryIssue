@@ -266,7 +266,8 @@ def _resolve(run: StepRun, T: Turn, refs: Mapping[str, Any]) -> Ask | None:
             if not hard:
                 return asks[0][1]
             d0, a0 = hard[0]
-            if len(run.domains) == 1 or a0.reason == base.ME_UNKNOWN_REASON:  # 认不出当前用户与哪个域无关
+            # 认不出当前用户、说法对到几个问题类型要用户选，都与哪个域无关：不加域名前缀
+            if len(run.domains) == 1 or a0.reason in (base.ME_UNKNOWN_REASON, base.TYPE_PICK_REASON):
                 return a0
             soft = [f"{d.label}{a.missing}" for d, a in asks if a.missing is not None]
             head = "，".join(soft) + "。" if soft else ""
@@ -311,9 +312,13 @@ def merge_details(plan: dict) -> dict:
 
 
 def _fold_reasons(runs: Sequence[StepRun]) -> None:
-    """第 5 条前半：详情引用前一步清单的 `issues`、只要原因或措施时并进清单（清单加「原因与措施」一列）。"""
+    """第 5 条前半：详情引用前一步清单的 `issues`、只要原因或措施时并进清单（清单加「原因与措施」一列）。清单自己
+    点名了原因、措施时同样加这一列（第 21 条与 `list_issues.wants_reasons`）。"""
     by_id = {r.sid: r for r in runs}
     for r in runs:
+        if r.skill == "list_issues" and list_issues.wants_reasons(r.step):
+            r.add_reasons = True  # 清单点名了原因、措施（§5.3 第 21 条）
+            continue
         if r.skill != "issue_detail" or not issue_detail.only_reasons(r.step):
             continue
         value = issue_detail.issue_value(r.step)
@@ -1209,6 +1214,10 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
         targets = list(run.targets)
     named = _named(run.step)
     aspects = issue_detail.aspects_of(run.step)
+    # 问完整信息：给整张详情，模型列出、用户没点到的项不给（决策 2026-11-06「问完整信息时给整张详情」）
+    full = bool(aspects) and issue_detail.asks_everything(T.query)
+    if full:
+        aspects = issue_detail.named_aspects(aspects, T.query)
     lines: list[str] = []
     allowed = [t for t in targets if T.access.can(t.domain)]
     for t in targets:
@@ -1243,9 +1252,9 @@ async def _run_detail(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Cal
             out.events.append(Event.delta(f"{errors.issue_not_found(str(t.number or ''))}。"))
             out.ok = True
             continue
-        keys, notes, labels = issue_detail.blocks_for(ticket, aspects)
+        keys, notes, labels = issue_detail.blocks_for(ticket, aspects, full=full)
         out.events += issue_detail.render(ticket, keys, notes, labels, aspects, T.sites,
-                                          issue_detail.prefix_note(t, named))
+                                          issue_detail.prefix_note(t, named), full=full)
         items += issue_detail.caliber_items(ticket, keys)
         out.ok = out.found_any = True
         shown.append({"domain": str(ticket["domain"]), "number": str(ticket["number"]), "id": int(ticket["id"])})

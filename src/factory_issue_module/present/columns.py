@@ -314,6 +314,11 @@ DEBIT = BR_VIEW_COLUMNS["debit"]
 
 #: 第 5 条前半：详情只要原因或措施时并进前一步的清单，清单加这一列（总述「原因与措施怎么给」）
 REASONS = _derived("原因与措施")
+#: 清单问到原因、措施时给的也是「原因与措施」这一列（总述「原因与措施怎么给」：清单接着问原因、措施时加这一列；
+#: 设计 §5.3 第 21 条）：问句或点名的列里说到这几个词就算
+REASON_WORDS = ("原因", "措施", "对策")
+#: 含这几个词、意思却不同的说法，先去掉再看（「原因分类」是单上的一列，「可能问题原因」是详情里的一块）
+REASON_SHADOWED = ("原因分类", "可能的问题原因", "可能问题原因", "可能原因")
 #: 几个问题编号合成一张表时另加的一列（总述「按编号查单」一次给多个号）
 OWNER_DOMAIN = _derived("所属域")
 #: 按文字找单的表格另加的两列与「分组」一列的说法（总述「表格列名」、「涉及某个话题怎么找」）
@@ -370,6 +375,20 @@ def _aliases() -> dict[str, str]:
 def resolve(said: str) -> str | None:
     """用户点名的列 → 内部键；对不上返回 None（回答开头写「制程问题单上没有『X』这项信息」）。"""
     return _aliases().get(_norm(said))
+
+
+def says_reasons(text: object) -> bool:
+    """文字里说到原因、措施（`REASON_WORDS`，先去掉 `REASON_SHADOWED`）：清单给「原因与措施」一列。"""
+    t = _norm(text)
+    for w in REASON_SHADOWED:
+        t = t.replace(_norm(w), "")
+    return any(_norm(w) in t for w in REASON_WORDS)
+
+
+def reason_column(said: str) -> bool:
+    """点名的一列是原因、措施（「改善措施」「原因分析」「原因与措施」）：单上的列里没有它（`resolve` 对不上），
+    清单照总述「原因与措施怎么给」加「原因与措施」一列，不说本助手没有这项信息。"""
+    return resolve(said) is None and says_reasons(said)
 
 
 def shown(key: str, domain: Domain | None = None) -> str:

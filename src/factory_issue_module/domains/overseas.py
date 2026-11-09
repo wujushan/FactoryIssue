@@ -216,7 +216,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             out.conds.append({"kind": "contains", "col": "_ven_names_text", "values": values, "neg": neg})
             out.echo.append(("供应商", shown))
         elif fld == "问题类型":
-            got_t = base.problem_types(values, list(enums.OS_PROBLEM_TYPES.values()), LABEL, neg, out)
+            got_t = base.problem_types(values, list(enums.OS_PROBLEM_TYPES.values()), LABEL, neg, out, R.type_sayings)
             if isinstance(got_t, Ask):
                 return got_t
             codes = [c for t in got_t for c in enums.code_of(enums.OS_PROBLEM_TYPES, t)]

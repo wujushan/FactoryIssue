@@ -41,6 +41,11 @@ FILL_NUMBER = "number"        # 选项替换号码（手填订单号的候选号
 FILL_TIME = "time"            # 选项替换时间原话（时间说法认不出）
 FILL_NONE = ""                # 没有可填的（单号位数不对）
 
+#: 用户的说法在问题类型说法表里对到几个类型、请他选一类时的追问原因（总述「问题类型怎么对」第 2 步，决策
+#: 2026-11-09「问题类型的口语说法」）。与「类型对不上」分开：这是口径定下的追问，不是执行层没认出规划器的写法
+#: （`scripts/planner_spike/replay_exec.py` 只把后者算作执行层的问题）
+TYPE_PICK_REASON = "问题类型要选"
+
 
 @dataclass
 class Ask:
@@ -147,6 +152,8 @@ class Resolver:
     rest: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     #: 本轮按 `rest` 查了的（`rest_of` 追加）：写进本轮 `turn.steps`，下一轮质疑、换图重放时还认得
     used: list[dict[str, Any]] = field(default_factory=list)
+    #: 问题类型的说法表（模块配置 `type_sayings.md`，`config/files.py::TypeSayings`）；None 用内置默认
+    type_sayings: Any = None
 
 
 def cond(field: str, operator: str, value: Any = None, *, include_nulls: bool = False) -> dict[str, Any]:
@@ -584,48 +591,56 @@ def time_conditions(step: dict, spans: Sequence[Any], out: DomainStep, *, label:
         out.compare = [{"label": period_label(sp), "times": [c]} for sp, c in ordered]
 
 
-def _type_keys(k: str) -> list[str]:
-    """一个问题类型说法（已归一）依次试的写法：原样；「X 类」「X 类问题」去掉「类」；末尾补上「问题」。
-
-    只在末尾补「问题」，不做包含匹配：「制程」补成「制程问题」也对不上任何类型，照旧追问（总述「三域共用的说法」：
-    制程不是问题类型）。
-    """
-    out = [k]
-    if k.endswith("类问题"):
-        out.append(k[:-3] + "问题")
-    if k.endswith("类"):
-        out += [k[:-1], k[:-1] + "问题"]
-    if not k.endswith("问题"):
-        out.append(k + "问题")
-    return out
-
-
 def problem_types(values: Sequence[str], known: Sequence[str], label: str, neg: bool,
-                  out: DomainStep) -> list[str] | Ask:
-    """问题类型说法 → 本域的类型名（总述「跨域归并」「三域共用的说法」）。
+                  out: DomainStep, sayings: Any = None) -> list[str] | Ask:
+    """问题类型说法 → 本域的类型名（总述「问题类型怎么对」「跨域归并」，决策 2026-11-09「问题类型的口语说法」）。
 
-    只在别的域有的类型：本域不计入这一项并写明（「巴西无『工厂制程』类型，未计入」）；点名的类型本域一个都没有时
-    整域不计入。三域都没有的说法，列出本域的类型请用户选。类型名称可以省掉末尾的「问题」、带「类」
-    （「软件、硬件、结构三类」即软件问题、硬件问题、结构问题），见 `_type_keys`。
+    按顺序对，前一步对上就不再往下：
+    1. 类型名称（`enums.type_by_name`）：省掉「问题」、带「类」、口语后半截（「硬件毛病」「软件相关」）都认。
+    2. 类型说法表（`sayings`，模块配置 `type_sayings.md`，没给用内置默认）：对到一个类型按它查（「软件bug」）；
+       对到几个类型时追问按哪一类查（「电子料问题」），选项是其中本域有的类型，点了直填回计划。
+    3. 都对不上：列出本域的类型请用户选。
+
+    对到的类型只在别的域有：本域不计入这一项并写明（「巴西无『工厂制程』类型，未计入」）；点名的类型本域一个都
+    没有时整域不计入。
     """
     from factory_issue_module import landed
-    from factory_issue_module.plan import names
+    from factory_issue_module.config import files as config_files
+    from factory_issue_module.declarations import TYPE_SAYINGS
+    from factory_issue_module.domains import enums
 
-    keys = {names.key(t): t for t in known}
-    elsewhere = {names.key(t): t for t in landed.problem_types()}
+    table = sayings if sayings is not None else config_files.default(TYPE_SAYINGS)
+    every = list(landed.problem_types())
     hit: list[str] = []
+
+    def skip(t: str) -> None:
+        if not neg:
+            out.skipped.append(f"{label}无「{t}」类型，未计入")
+
     for v in values:
-        tries = _type_keys(names.key(v))
-        got = next((keys[k] for k in tries if k in keys), None)
+        got = enums.type_by_name(v, known)
         if got is not None:
             if got not in hit:
                 hit.append(got)
             continue
-        other = next((elsewhere[k] for k in tries if k in elsewhere), None)
+        other = enums.type_by_name(v, every)
         if other is not None:
-            if not neg:
-                out.skipped.append(f"{label}无「{other}」类型，未计入")
+            skip(other)
             continue
+        listed = table.types_of(v)
+        if listed and len(listed) == 1:
+            if listed[0] in known:
+                if listed[0] not in hit:
+                    hit.append(listed[0])
+            else:
+                skip(listed[0])
+            continue
+        if listed:
+            options = [t for t in listed if t in known]
+            if not options:
+                skip("」「".join(listed))
+                continue
+            return Ask(f"「{v}」可能指{join(options)}，想按哪一类查？", options, reason=TYPE_PICK_REASON, said=v)
         return Ask(f"没有「{v}」这个问题类型，{label}的问题类型有：{join(known)}。", list(known)[:4],
                    reason="类型对不上", said=v)
     if not hit and not neg:

@@ -304,6 +304,43 @@ def test_rule11_safety_splits_in_two_unless_aplus() -> None:
 # ---------------------------------------------------------------- 第 12 条 格式
 
 
+_BR005 = "巴西需要回 8D 的物料问题有哪些？改善措施写了什么？"
+_BR = {"value": ["巴西"], "from": "user"}
+
+
+def test_rule21_list_missing_the_named_measures_gets_the_reasons_column() -> None:
+    """BR-005 p2.8 的计划：`columns` 漏了改善措施 → 接上「原因与措施」；没写列的加进 `add_columns`。"""
+    p = params(apply([lst(domains=_BR, columns=["问题编号", "机型", "物料名称", "当前状态"])], _BR005))
+    assert p["columns"] == ["问题编号", "机型", "物料名称", "当前状态", "原因与措施"] and "add_columns" not in p
+    p = params(apply([lst(time=T)], "近 30 天国内的单各是什么原因？"))
+    assert p["add_columns"] == ["原因与措施"]
+
+
+@pytest.mark.parametrize(("steps", "query"), [
+    ([lst(domains=_BR, add_columns=["改善措施"])], _BR005),  # 已经点名了措施
+    ([lst(domains=_BR), {"id": "s2", "skill": "issue_detail", "when": None,  # 第 5 条前半会并进清单
+                         "params": {"issue": {"value": {"ref": "s1.issues"}, "from": "previous"}, "aspects": ["措施"]}}],
+     _BR005),
+    ([lst(filters=[{"field": "原因分类", "op": "是", "value": "人为工作疏忽"}])], "原因分类为人为工作疏忽的单"),
+    ([lst(time=T)], "国内可能问题原因里写了虚焊的单"),  # 「可能问题原因」是详情的一块，不是原因与措施
+    ([lst(time=T)], "上个月国内的单有哪些"),
+    ([agg(time=T, group_by=["原因分类"])], "今年各原因的单数"),  # 不是清单
+    ([txt(mode="话题", topic="非接")], "非接相关问题的原因"),  # 文字查找本来就带回原因与措施
+])
+def test_rule21_leaves_plans_alone(steps: list[dict], query: str) -> None:
+    before = json.loads(json.dumps(steps))
+    plan = apply(steps, query)
+    for got, old in zip(plan["steps"], before, strict=False):
+        assert got["params"].get("columns") == old["params"].get("columns")
+        assert got["params"].get("add_columns") == old["params"].get("add_columns")
+
+
+def test_rule21_records_a_hit() -> None:
+    hits: list[RuleHit] = []
+    apply([lst(domains=_BR, columns=["问题编号"])], _BR005, hits=hits)
+    assert [h.rule for h in hits] == [21]
+
+
 def test_rule12_format() -> None:
     wrapped = {"steps": [lst(domains=None, params={"domains": {"value": ["国内"], "from": "user"}})]}
     assert any("格式之外的键" in e for e in schema.check_format(wrapped))

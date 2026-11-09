@@ -138,6 +138,16 @@ uv run python scripts/planner_spike/spike.py --run --confirm-local
   uv run python scripts/planner_spike/spike.py --run --confirm-local --parts plan --groups 现状+校验 --out runtime/planner_spike/<日期>-p2.6
   ```
 
+- **问题类型的口语说法**（2026-11-09，p2.7 → p2.8，对照集 c11）：先只跑新加的 V-79–V-84、两句按文字找的「X 相关」（XC-031「非接相关问题」、CN-020「电池卡扣相关的问题」，看新提示有没有把话题带偏成问题类型）与 BR-005（p2.7 新出 3/5 漏改善措施一列），再全量跑一次：
+
+  ```powershell
+  uv run python scripts/planner_spike/spike.py --run --confirm-local --parts plan --groups 现状+校验 --only V-79,V-80,V-81,V-82,V-83,V-84,XC-031,CN-020,BR-005 --out runtime/planner_spike/<日期>-p2.8-口语类型
+  uv run python scripts/planner_spike/spike.py --run --confirm-local --parts plan --groups 现状+校验 --out runtime/planner_spike/<日期>-p2.8
+  uv run python scripts/planner_spike/replay_exec.py --raw runtime/planner_spike/<日期>-p2.8-口语类型/raw.jsonl
+  ```
+
+  第三条把跑出来的计划交执行层回放：取值照原话写（「软件bug」「硬件毛病」）时执行层要认得，出现「类型对不上」就是执行层没认出；V-80 应写成类型条件、由执行层追问，原因是「问题类型要选」，不算执行层的问题。p2.7 的结果（`20261109-p2.7*`）：V-80 5/5 是模型自己追问，其余新句全对，见决策 2026-11-09「问题类型的口语说法」补记。
+
 - **中断了可以续跑**：同一天再运行同一条命令，已完成的跳过，调用出错的重跑。换一天运行要用 `--out runtime/planner_spike/<原目录名>` 指回原目录。某一项出了工具自己的错时，只跳过这一项并打 ⚠ 行，其余照跑，再运行一次会补跑。
 - **换模型要换目录**：临时换模型可在同一个 PowerShell 窗口里先执行 `$env:FI_LLM_MODEL = "<模型名>"`（优先于 `.env`），再加 `--out runtime/planner_spike/<新目录名>`。目录里已有别的模型或提示词版本的结果时，脚本拒绝运行，免得新旧结果混在一起。
 - **临时统计的沙箱同时只跑 2 个**：Windows 上同时跑十几个沙箱子进程时，偶有子进程直接崩掉（exit=3221227274），与脚本内容无关。参考结果在调模型之前先逐题算好；遇到这类崩溃会自动重试两次。

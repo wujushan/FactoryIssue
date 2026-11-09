@@ -277,6 +277,11 @@ def dept_aliases_section() -> str:
     return section(read(_SUMMARY), "### 部门名称怎么对", where=f"{_SUMMARY}「部门名称怎么对」")
 
 
+def type_sayings_section() -> str:
+    """总述「问题类型怎么对」整节（含问题类型的说法表），`type_sayings.md` 的内置默认值从这里解析。"""
+    return section(read(_SUMMARY), "### 问题类型怎么对", where=f"{_SUMMARY}「问题类型怎么对」")
+
+
 def factory_regions_section() -> str:
     """国内「加工厂」整节（含地区说法表），`factory_regions.md` 的内置默认值从这里解析。"""
     rel = "domestic/business_description.md"

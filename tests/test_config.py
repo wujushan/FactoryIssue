@@ -19,6 +19,7 @@ from factory_issue_module.declarations import (
     LINK_SITES,
     SEGMENTATION,
     TOPIC_TERMS,
+    TYPE_SAYINGS,
 )
 from factory_issue_module.module import FactoryIssueModule
 
@@ -33,9 +34,9 @@ def validate(name: str, text: str) -> None:
 # ---------------------------------------------------------------- 内置默认值与源文件一致
 
 
-def test_declared_config_files_are_the_six_slots():
+def test_declared_config_files_are_the_seven_slots():
     assert [s.name for s in MANIFEST.config_files] == [
-        TOPIC_TERMS, SEGMENTATION, DEPT_ALIASES, FACTORY_REGIONS, ANSWER_PARAMS, LINK_SITES,
+        TOPIC_TERMS, SEGMENTATION, DEPT_ALIASES, FACTORY_REGIONS, TYPE_SAYINGS, ANSWER_PARAMS, LINK_SITES,
     ]
     assert set(files.SLOTS) == {s.name for s in MANIFEST.config_files}
     # 只有站点地址标必填：它随环境不同、没有内置默认值，没传时平台启动告警一次（不阻断）
@@ -73,6 +74,37 @@ def test_factory_regions_default_is_the_landed_table():
     table = files.default(FACTORY_REGIONS)
     assert table.items_of("惠州") == ("柯洱斯", "亮亮", "惠州百富")
     assert table.items_of("深圳") is None
+
+
+def test_type_sayings_default_is_the_landed_table():
+    table = files.default(TYPE_SAYINGS)
+    assert [s for s, _ in table.entries] == ["bug", "软件bug", "软件缺陷", "电子料", "电子物料"]
+    assert table.types_of("BUG单") == ("软件问题",)
+    assert table.types_of("电子料不良") == ("物料问题", "硬件问题")
+    assert table.types_of("外观问题") is None
+    assert table.sayings_of("软件问题") == ("bug", "软件bug", "软件缺陷")
+    assert table.sayings_of("物料问题") == ()  # 对到几类的说法不算某一类的依据
+    validate(TYPE_SAYINGS, landed.type_sayings_section())
+
+
+TYPE_HEAD = "| 说法 | 对到的问题类型 |\n|---|---|\n"
+
+
+def test_type_sayings_accepts_and_rejects():
+    validate(TYPE_SAYINGS, TYPE_HEAD + "| 外观 | 结构问题 |\n| 来料 | 物料问题、工厂制程 |\n")
+    validate(TYPE_SAYINGS, TYPE_HEAD)  # 清空也行
+    with pytest.raises(ConfigFormatError, match="「外观问题」不是问题类型"):
+        validate(TYPE_SAYINGS, TYPE_HEAD + "| 外观 | 外观问题 |\n")
+    with pytest.raises(ConfigFormatError, match="按类型名称就能对上「硬件问题」"):
+        validate(TYPE_SAYINGS, TYPE_HEAD + "| 硬件毛病 | 硬件问题 |\n")
+    with pytest.raises(ConfigFormatError, match="同一个说法"):
+        validate(TYPE_SAYINGS, TYPE_HEAD + "| 外观 | 结构问题 |\n| 外观不良 | 硬件问题 |\n")
+    with pytest.raises(ConfigFormatError, match="「、」分隔"):
+        validate(TYPE_SAYINGS, TYPE_HEAD + "| 来料 | 物料问题，工厂制程 |\n")
+    with pytest.raises(ConfigFormatError, match="没有写"):
+        validate(TYPE_SAYINGS, TYPE_HEAD + "| 外观 | — |\n")
+    with pytest.raises(ConfigFormatError, match="是空的"):
+        validate(TYPE_SAYINGS, TYPE_HEAD + "| 问题 | 结构问题 |\n")
 
 
 def test_segmentation_default_matches_g2_and_comparison_scope():

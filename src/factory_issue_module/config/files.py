@@ -1,4 +1,4 @@
-"""配置文件（设计 §11）：六份 `config_files` 的解析、校验、缓存与回退。
+"""配置文件（设计 §11）：七份 `config_files` 的解析、校验、缓存与回退。
 
 `link_sites.toml`（本环境 INFO 站点地址）随环境不同，没有内置默认值，没传时不生成链接；
 传了就必须写出 `issue`，否则保存时拒绝。
@@ -31,7 +31,9 @@ from factory_issue_module.declarations import (
     LINK_SITES,
     SEGMENTATION,
     TOPIC_TERMS,
+    TYPE_SAYINGS,
 )
+from factory_issue_module.domains import enums
 from factory_issue_module.textnorm import compact, has_cjk
 
 logger = structlog.get_logger(__name__)
@@ -128,6 +130,27 @@ class NameTable:
 
 
 @dataclass(frozen=True)
+class TypeSayings:
+    """问题类型的说法（总述「问题类型怎么对」第 2 步）：说法 → 对到的类型，一个或几个（几个时请用户选）。
+    按 `enums.saying_key` 比：用户说的末尾带「问题」「不良」或口语后半截时照样对上。"""
+
+    entries: tuple[tuple[str, tuple[str, ...]], ...]
+    _index: dict[str, tuple[str, ...]] = field(default_factory=dict, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        for said, types in self.entries:
+            self._index.setdefault(enums.saying_key(said), types)
+
+    def types_of(self, said: object) -> tuple[str, ...] | None:
+        """用户的说法对到的类型（表里的顺序）；表里没有返回 None。"""
+        return self._index.get(enums.saying_key(said))
+
+    def sayings_of(self, type_name: str) -> tuple[str, ...]:
+        """只对到这一个类型的说法（规整第 20 条找依据：问句里说「bug」、计划写软件问题，算有依据）。"""
+        return tuple(said for said, types in self.entries if types == (type_name,))
+
+
+@dataclass(frozen=True)
 class LinkSites:
     """本环境 INFO 站点的地址（`link_rules.md`）：`https://主机名[:端口]` 形式，没配为 None（不生成链接）。"""
 
@@ -169,6 +192,7 @@ class AnswerParams:
 _TOPIC_HEADER = ("话题", "一句话说明", "算的说法（＊ = 有歧义）", "不算的说法")
 _DEPT_HEADER = ("正式部门名称", "简称、日常说法")
 _REGION_HEADER = ("地区说法", "对到的工厂")
+_TYPE_SAYING_HEADER = ("说法", "对到的问题类型")
 
 
 def _table(text: str, header: tuple[str, ...], *, scope: str = "") -> landed.MdTable:
@@ -302,6 +326,39 @@ def parse_factory_regions(text: str) -> NameTable:
             raise ConfigFormatError(f"地区「{region}」没有写对到的工厂")
         entries.append((region, tuple(factories)))
     return NameTable(entries=tuple(entries))
+
+
+def parse_type_sayings(text: str) -> TypeSayings:
+    """类型名必须是三域的问题类型（总述「跨域归并」）；说法不重复，也不能是按类型名称就能对上的写法（那一步在前，
+    写进表也用不上，多半是写错了）。表可以没有行（管理员清空说法表）。"""
+    table = _table(text, _TYPE_SAYING_HEADER)
+    known = list(landed.problem_types())
+    seen: dict[str, str] = {}
+    entries: list[tuple[str, tuple[str, ...]]] = []
+    for n, (said, cell) in enumerate(table.rows, start=1):
+        if not said:
+            raise ConfigFormatError(f"第 {n} 行缺说法")
+        key = enums.saying_key(said)
+        if not key:
+            raise ConfigFormatError(f"说法「{said}」去掉末尾的「问题」「不良」等之后是空的")
+        if key in seen:
+            raise ConfigFormatError(f"说法「{said}」与「{seen[key]}」是同一个说法，只写一行")
+        seen[key] = said
+        named = enums.type_by_name(said, known)
+        if named is not None:
+            raise ConfigFormatError(f"说法「{said}」按类型名称就能对上「{named}」，不用写进表")
+        if any(sep in cell for sep in ("，", ",", "/", "；", ";")):
+            raise ConfigFormatError(f"说法「{said}」对到的问题类型之间请用「、」分隔")
+        types = _split(cell)
+        if not types:
+            raise ConfigFormatError(f"说法「{said}」没有写对到的问题类型")
+        for t in types:
+            if t not in known:
+                raise ConfigFormatError(f"说法「{said}」：「{t}」不是问题类型；问题类型有：{'、'.join(known)}")
+        if len(set(types)) != len(types):
+            raise ConfigFormatError(f"说法「{said}」对到的问题类型有重复")
+        entries.append((said, tuple(types)))
+    return TypeSayings(entries=tuple(entries))
 
 
 # ---------------------------------------------------------------- TOML 两份
@@ -515,6 +572,7 @@ SLOTS: dict[str, _Slot] = {
     FACTORY_REGIONS: _Slot(
         parse_factory_regions, parse_factory_regions(defaults.factory_regions_text())
     ),
+    TYPE_SAYINGS: _Slot(parse_type_sayings, parse_type_sayings(defaults.type_sayings_text())),
     ANSWER_PARAMS: _Slot(parse_answer_params, answer_params_from({})),
     #: 站点地址随环境不同，没有内置默认值：没传时不生成链接（上传的内容必须写出 issue，见 link_sites_from）
     LINK_SITES: _Slot(parse_link_sites, LinkSites()),

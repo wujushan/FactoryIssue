@@ -255,7 +255,7 @@ def resolve(step: dict, spans: Sequence[Span], R: base.Resolver) -> DomainStep |
             out.sql.append(cond("m.VenCode", "NOT_IN" if neg else "IN", m.supplier_codes(got_v)))
             out.echo.append(("供应商", base.join(got_v)))
         elif fld == "问题类型":
-            got_t = base.problem_types(values, list(enums.CN_PROBLEM_TYPES.values()), LABEL, neg, out)
+            got_t = base.problem_types(values, list(enums.CN_PROBLEM_TYPES.values()), LABEL, neg, out, R.type_sayings)
             if isinstance(got_t, Ask):
                 return got_t
             codes_t = [c for t in got_t for c in enums.code_of(enums.CN_PROBLEM_TYPES, t)]

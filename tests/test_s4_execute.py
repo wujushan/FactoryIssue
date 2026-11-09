@@ -18,6 +18,7 @@ from forge_core.errors import TableDenied
 from forge_core.events import EventType
 
 from factory_issue_module.declarations import Domain
+from factory_issue_module.plan import schema
 from factory_issue_module.present import summaries
 from factory_issue_module.turn import errors
 
@@ -300,6 +301,79 @@ async def test_named_item_matching_nothing_says_no_such_information():
     assert "制程问题单上没有『手机号』这项信息" in _text(events)
 
 
+_EVERYTHING_Q = ("国内单{n}的完整信息，包括生产订单、料号、供应商、问题现象、可能问题原因、可能问题物料、CAR、IQC意见、"
+                 "库存和在线、SQE跟进、5Why等所有字段")
+#: 模型把整份 ASPECTS 抄上，再加用户点到的几项（2026-11-06 手动测试 ZC2607022 的写法）
+_EVERYTHING_ASPECTS = (*schema.ASPECTS, "其他:生产订单", "其他:料号", "其他:供应商", "其他:可能问题物料", "其他:IQC意见",
+                       "其他:库存和在线", "其他:SQE跟进")
+
+
+@pytest.mark.parametrize("number", ["ZC9901001", "ZC9901002"])
+async def test_everything_gives_whole_detail_without_unnamed_absent_items(number):
+    """问完整信息、所有字段：给整张详情；模型列出、用户没点到的项（发货单、费用、8D、补料、库存处理、驳回）不逐条说明；
+    点到的生产订单、可能问题物料对得上，库存和在线说明不在查询范围；说明另起一段，不接在上一块最后一项后面
+    （决策 2026-11-06「问完整信息时给整张详情」）。"""
+    _h, whole = await _go(f"{number} 这张单帮我查一下", [])
+    _h, events = await _go(_EVERYTHING_Q.format(n=number), [plan(detail(number, *_EVERYTHING_ASPECTS))])
+    text = _text(events)
+    for word in ("发货单", "费用", "8D", "补料", "库存处理", "驳回", _NOT_AVAILABLE):
+        assert word not in text, word
+    assert errors.CN_IQC_STOCK in text
+    assert [t["title"] for t in _tables(events)][:len(_tables(whole))] == [t["title"] for t in _tables(whole)]
+    for line in _text(whole).split("\n"):  # 整张详情里的每一行都在
+        assert line in text, line
+    assert text.index("**加工厂**") < text.index("**供应商名称**")  # 点到的栏排在整张详情之后
+    rows = text.split("\n")
+    i = next(i for i, x in enumerate(rows) if errors.CN_IQC_STOCK in x)
+    while rows[i - 1].startswith("- ") and "**" not in rows[i - 1]:
+        i -= 1
+    assert rows[i - 1] == "", rows[i - 3:i + 1]  # 说明另起一段
+
+
+async def test_everything_named_items_on_the_ticket():
+    """问完整信息时点到的块：有就给（可能的问题物料），没有就说这张单没有（物料单 ZC9901002 没有可能的问题物料、
+    5Why），列表里没点到的项照样不说。"""
+    _h, events = await _go(_EVERYTHING_Q.format(n="ZC9901001"), [plan(detail("ZC9901001", *_EVERYTHING_ASPECTS))])
+    assert "根据问题类别和现象，系统分析的可能涉及问题物料" in _text(events)
+    _h, events = await _go(_EVERYTHING_Q.format(n="ZC9901002"), [plan(detail("ZC9901002", *_EVERYTHING_ASPECTS))])
+    text = _text(events)
+    assert errors.DETAIL_ABSENT[("国内", "possible_inv")] in text
+    assert "其他在线订单 1 条" in text and "这张单没有其他在线订单" not in text
+
+
+async def test_other_online_orders_is_not_read_as_other_colon():
+    """「其他在线订单」是列表里的项，不当「其他:…」去对显示名。"""
+    _h, events = await _go("ZC9901002 的其他在线订单", [plan(detail("ZC9901002", "其他在线订单"))])
+    assert any("其他在线订单" in t["title"] for t in _tables(events)) and _NOT_AVAILABLE not in _text(events)
+    _h, events = await _go("ZC9901001 的其他在线订单", [plan(detail("ZC9901001", "其他在线订单"))])
+    assert errors.DETAIL_ABSENT[("国内", "other_orders")] in _text(events)
+
+
+@pytest.mark.parametrize(("number", "aspect", "expected"), [
+    ("ZC9901001", "其他:生产订单", None), ("ZC9901001", "其他:可能问题物料", "根据问题类别和现象"),
+    ("ZC9901001", "其他:库存和在线", errors.CN_IQC_STOCK), ("ZC9901001", "其他:风险订单", errors.CN_RISK_ORDERS),
+    ("ZC9901001", "其他:SQE跟进", "这张单上没有『SQE跟进』的内容"), ("ZC9901002", "其他:SQE跟进", "供应商来料不良"),
+    ("HW9901001", "其他:库存", errors.OS_OUT_OF_SCOPE),
+])
+async def test_named_blocks_and_out_of_scope_items(number, aspect, expected):
+    """「其他:X」说到块名、环节名与本域不在查询范围的项：对得上的给，不说制程问题单上没有这项信息。"""
+    said = aspect.partition(":")[2]
+    _h, events = await _go(f"{number} 的{said}", [plan(detail(number, aspect))])
+    text = _text(events)
+    assert _NOT_AVAILABLE not in text, text
+    if expected is None:
+        assert [t["columns"][0] for t in _tables(events)] == ["生产订单号"]
+    else:
+        assert expected in text, text
+
+
+async def test_notes_start_a_new_paragraph_after_bullets():
+    """说明不接在上一块最后一项后面（Markdown 里会被并进那一项）：前面是列表项时空一行，几句时列成要点。"""
+    _h, events = await _go("ZC9901001 的设计更改、发货单、费用", [plan(detail("ZC9901001", "设计更改", "发货单", "费用"))])
+    text = _text(events)
+    assert "\n\n- 国内单上没有发货单，发货单是海外的单上的。\n- 国内单上没有费用，费用只在巴西的单上。" in text, text
+
+
 async def test_material_unit_follow_up_written_as_out_of_scope_is_bounced():
     """CN-053（golden 实测）：上一轮打开了「物料」单，本轮「这张物料单为什么…」模型写成超出范围时，第 19 条打回，
     修后的详情照常取数作答。这里工作区里没有上一轮计划，从上一轮的用户问句认出那张单。"""
@@ -342,6 +416,34 @@ async def test_rule5_detail_with_only_reasons_folds_into_the_list():
     assert len(tables) == 1 and tables[0]["columns"][-1] == "原因与措施"
     assert tables[0]["rows"][0][0].startswith("[BR9901003]") and "最新的措施" in tables[0]["rows"][0][-1]
     assert "单张单详情" not in _text(events)
+
+
+_BR005 = "巴西需要回 8D 的物料问题有哪些？改善措施写了什么？"
+_BR005_FILTERS = [{"field": "问题类型", "op": "是", "value": "物料问题", "from": "user"},
+                  {"field": "是否需要回复8D", "op": "是", "value": "是", "from": "user"}]
+
+
+@pytest.mark.parametrize("cols", [
+    {"add_columns": ["改善措施"]},  # p2.6 及以前的写法：点名的列是措施，原先答成「制程问题单上没有『改善措施』」
+    {"columns": ["问题编号", "机型", "物料名称", "当前状态"]},  # p2.7、p2.8 的写法：漏了改善措施，第 21 条补上
+])
+async def test_br005_list_naming_measures_gets_the_reasons_column(cols):
+    """BR-005 一步清单的两种写法（设计 §5.3 第 21 条，总述「原因与措施怎么给」：清单接着问原因、措施时加「原因与措施」
+    一列）：都在表格最后加这一列，不说制程问题单上没有这项信息。"""
+    reply = plan(step("list_issues", domains={"value": ["巴西"], "from": "user"}, filters=_BR005_FILTERS, **cols))
+    _h, events = await _go(_BR005, [reply, "共 1 张。"])
+    tables = _tables(events)
+    assert len(tables) == 1 and tables[0]["columns"][-1] == "原因与措施"
+    assert "最新的措施" in tables[0]["rows"][0][-1]
+    assert _NOT_AVAILABLE not in _text(events)
+
+
+async def test_list_naming_reason_class_is_a_column_not_the_reasons():
+    """「原因分类」是单上的一列，不是「原因与措施」：照给原因分类一列，不加「原因与措施」。"""
+    reply = plan(step("list_issues", domains={"value": ["国内"], "from": "user"},
+                      filters=[{"field": "原因分类", "op": "是", "value": "人为工作疏忽", "from": "user"}]))
+    _h, events = await _go("原因分类为人为工作疏忽的国内单", [reply, "共 1 张。"])
+    assert all("原因与措施" not in t["columns"] for t in _tables(events))
 
 
 async def test_rule5_folded_cell_is_a_summary_of_five_why_and_keeps_car_link():
