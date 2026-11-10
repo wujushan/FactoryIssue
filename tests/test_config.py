@@ -17,6 +17,7 @@ from factory_issue_module.declarations import (
     DEPT_ALIASES,
     FACTORY_REGIONS,
     LINK_SITES,
+    POLISH_RULES,
     SEGMENTATION,
     TOPIC_TERMS,
     TYPE_SAYINGS,
@@ -34,9 +35,10 @@ def validate(name: str, text: str) -> None:
 # ---------------------------------------------------------------- 内置默认值与源文件一致
 
 
-def test_declared_config_files_are_the_seven_slots():
+def test_declared_config_files_are_the_eight_slots():
     assert [s.name for s in MANIFEST.config_files] == [
         TOPIC_TERMS, SEGMENTATION, DEPT_ALIASES, FACTORY_REGIONS, TYPE_SAYINGS, ANSWER_PARAMS, LINK_SITES,
+        POLISH_RULES,
     ]
     assert set(files.SLOTS) == {s.name for s in MANIFEST.config_files}
     # 只有站点地址标必填：它随环境不同、没有内置默认值，没传时平台启动告警一次（不阻断）

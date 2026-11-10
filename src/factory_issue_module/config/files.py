@@ -1,4 +1,5 @@
-"""配置文件（设计 §11）：七份 `config_files` 的解析、校验、缓存与回退。
+"""配置文件（设计 §11）：八份 `config_files` 的解析、校验、缓存与回退（第 8 份润色规则的解析在
+`config/polish_rules.py`，润色设计 §10）。
 
 `link_sites.toml`（本环境 INFO 站点地址）随环境不同，没有内置默认值，没传时不生成链接；
 传了就必须写出 `issue`，否则保存时拒绝。
@@ -23,12 +24,14 @@ import structlog
 from forge_core.errors import ConfigFileNotDeclared
 
 from factory_issue_module import landed
-from factory_issue_module.config import defaults
+from factory_issue_module.config import defaults, polish_rules
+from factory_issue_module.config.errors import ConfigFormatError
 from factory_issue_module.declarations import (
     ANSWER_PARAMS,
     DEPT_ALIASES,
     FACTORY_REGIONS,
     LINK_SITES,
+    POLISH_RULES,
     SEGMENTATION,
     TOPIC_TERMS,
     TYPE_SAYINGS,
@@ -39,10 +42,6 @@ from factory_issue_module.textnorm import compact, has_cjk
 logger = structlog.get_logger(__name__)
 
 _MARK = "＊"
-
-
-class ConfigFormatError(ValueError):
-    """配置内容不合格。消息直接给管理员看。"""
 
 
 # ---------------------------------------------------------------- 解析结果
@@ -576,6 +575,8 @@ SLOTS: dict[str, _Slot] = {
     ANSWER_PARAMS: _Slot(parse_answer_params, answer_params_from({})),
     #: 站点地址随环境不同，没有内置默认值：没传时不生成链接（上传的内容必须写出 issue，见 link_sites_from）
     LINK_SITES: _Slot(parse_link_sites, LinkSites()),
+    #: 润色规则（润色设计 §10）：内置默认取 `2_landed/domestic/ai_polish.md`「润色规则（初始版本）」
+    POLISH_RULES: _Slot(polish_rules.parse, polish_rules.parse(defaults.polish_rules_text())),
 }
 
 _cache: dict[tuple[str, int], Any] = {}

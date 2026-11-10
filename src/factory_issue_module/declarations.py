@@ -4,6 +4,7 @@ S6 起声明 mart 别名 `forge_mart_factory_issue`（9 张表：三域各文字
 （三张向量表，来源是各域按意思找的段表，G2「向量表」）。平台没登记这个别名、或连得上而向量表不存在时，
 本助手在那个环境整个被隔离下线（设计 §2），所以这一版只在测试环境建库、登记别名之后发。
 权限前置按 `Domain.mart_tables` 判断各域文字查找是否可用（`privileges.md`「域闸门」）。
+AI 润色的任务 `TASKS` 与第 8 个配置槽位 `POLISH_RULES` 见决策 2026-11-09「AI 润色技术设计」§2。
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from enum import StrEnum
 
 from forge_core.config_files import ConfigFileSpec
 from forge_core.dataquery import JoinType
-from forge_core.module import DataSourceRef, JoinEdge, VectorizeSpec
+from forge_core.module import DataSourceRef, JoinEdge, TaskSpec, VectorizeSpec
 
 from factory_issue_module import landed
 
@@ -202,6 +203,8 @@ FACTORY_REGIONS = "factory_regions.md"
 TYPE_SAYINGS = "type_sayings.md"
 ANSWER_PARAMS = "answer_params.toml"
 LINK_SITES = "link_sites.toml"
+#: 第 8 个槽位：国内填单内容润色的规则（润色设计 §2.2）
+POLISH_RULES = "polish_rules.md"
 
 CONFIG_FILES: list[ConfigFileSpec] = [
     ConfigFileSpec(
@@ -262,4 +265,64 @@ CONFIG_FILES: list[ConfigFileSpec] = [
         ),
         required=True,
     ),
+    ConfigFileSpec(
+        name=POLISH_RULES,
+        description=(
+            "国内填单内容润色的规则。Markdown，与随版本发布的 ai_polish.md「润色规则（初始版本）」一节格式相同，"
+            "可直接拿那一节改：「### 设置」（原文长度上限）、「### 栏目」（栏目代码 | 名称 | 这一栏写什么 | 原文格式 | "
+            "默认字数上限）、「### 共用要求」、「### 各栏要求」（每种栏目一个「#### 栏目名称」）。初始的六种栏目不能删、"
+            "原文格式不能改；新增栏目要通知 INFO 前端新的栏目代码。改了下一次润色生效"
+        ),
+    ),
 ]
+
+
+# ---------------------------------------------------------------- 任务（润色设计 §2.1）
+
+#: 任务码 = 页面发来的 `ext_param.task`（`2_landed/domestic/ai_polish_api.md`「常量」）
+POLISH_TASK_CODE = "domestic_polish"
+
+#: `ext_param` 的 JSON Schema：只作文档与 Console 展示，平台不据它校验（校验在 `polish/params.py`）
+POLISH_EXT_SCHEMA: dict = {
+    "type": "object",
+    "required": ["task", "field"],
+    "properties": {
+        "task": {"const": POLISH_TASK_CODE},
+        "field": {
+            "type": "string",
+            "description": "栏目代码：problem_desc、reason、five_why_question、five_why_answer、measures、prevention，管理员可加",
+        },
+        "max_length": {
+            "type": "integer", "minimum": 1,
+            "description": "这一栏最多能存多少字符，富文本连 HTML 标记一起数",
+        },
+        "issue_no": {"type": "string", "description": "问题编号（ZC 开头），建单页不传"},
+        "context": {
+            "type": "object",
+            "properties": {
+                "problem_type": {"type": "string"}, "model": {"type": "string"}, "material": {"type": "string"},
+                "problem_desc": {"type": "string"}, "reason": {"type": "string"},
+                "measures": {"type": "string"}, "prevention": {"type": "string"},
+                "five_why": {
+                    "type": "array",
+                    "description": "已有的 5Why，按先后排列；每项须含 question 与 answer（待答复的 answer 为空串）；"
+                                   "不含正在润色的这一条",
+                    "items": {
+                        "type": "object",
+                        "properties": {"question": {"type": "string"}, "answer": {"type": "string"}},
+                    },
+                },
+                "current_question": {"type": "string", "description": "field 为 five_why_answer 时必传"},
+            },
+        },
+    },
+}
+
+POLISH_TASK = TaskSpec(
+    code=POLISH_TASK_CODE,
+    name="国内制程问题填单润色",
+    description="INFO 管理页面国内制程问题单的【AI润色】：润色一栏的填写内容",
+    query="这一栏当前的内容：富文本栏放编辑器里的 HTML，5Why 的问或答放纯文字",
+    ext_param_schema=POLISH_EXT_SCHEMA,
+)  # data_scope 用默认的 "user"：按编号取参考内容时照调用人的权限
+TASKS: list[TaskSpec] = [POLISH_TASK]

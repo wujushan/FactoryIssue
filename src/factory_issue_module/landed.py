@@ -293,6 +293,12 @@ def topic_terms_text() -> str:
     return read("topic_terms.md")
 
 
+def polish_rules_section() -> str:
+    """国内「润色规则（初始版本）」整节，`polish_rules.md` 的内置默认值从这里解析（润色设计 §10）。"""
+    rel = "domestic/ai_polish.md"
+    return section(read(rel), "## 润色规则（初始版本）", where=f"{rel}「润色规则（初始版本）」")
+
+
 def comparison_scope_section() -> str:
     """总述「比对范围」整节（`segmentation.toml` 默认环节清单的单测对照原文）。"""
     return section(read(_SUMMARY), "### 比对范围", where=f"{_SUMMARY}「比对范围」")

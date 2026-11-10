@@ -35,7 +35,9 @@ dependencies = [
     # `VectorHit.rerank_score`、`RetrievalColumnNotDeclared`（切块检索，docs/dev/02、07 教了）。本模块
     # 按段向量化，按单限定 / 按字段找 / 按单去重 / 跨域按重排分比都靠它；低于它传这些参数即
     # TypeError，`metadata_columns` 声明被静默丢弃（向量表建不出这两列）。
-    "paxsz-forge-core>=0.3.8",
+    # core ≥0.3.9：`TaskSpec`、`manifest.tasks`、`find_task`（任务面 `/v2/tasks`，docs/dev/02 教了）。本模块的
+    # AI 润色任务 `domestic_polish` 靠它声明（润色设计 §2.4）；低于它 import `TaskSpec` 即 ImportError。
+    "paxsz-forge-core>=0.3.9",
     # openpyxl：导出每域一页的 xlsx（设计 §9.3，`present/export.py`；`ctx.files.save_dataframe` 只写一页）。
     # paxsz-forge-platform 0.3.7 已声明 openpyxl>=3.1，平台运行环境里有；本模块直接 import 它，照样写成自己的
     # 运行依赖，不靠传递依赖。
@@ -90,7 +92,9 @@ dev = [
     # - platform ≥0.3.3 才把 `manifest.collection_fields` 交给 ctx.data（权限协议 v1.3）。低于它，
     #   `forge dev serve` 本地取数时用了集合操作符的规则一律按「集合字段未登记」中断，线上却正常。
     # - platform ≥0.3.7 与 core 0.3.7 / data 0.3.2 配套（切块检索；docs/dev/02 写明的 dev 依赖下界）。
-    "paxsz-forge-platform>=0.3.7",  # dev harness + 轻量 dev console + forge release：uv run forge dev serve
+    # - platform ≥0.3.9 的 `forge dev serve` 才收任务面 `POST /v2/tasks`（与 core 0.3.9 的 `manifest.tasks` 配套，
+    #   润色设计 §2.4）。低于它本地只能经 `/v2/chat` 带 `ext_param` 测润色，测不到「任务码已声明」那一层。
+    "paxsz-forge-platform>=0.3.9",  # dev harness + 轻量 dev console + forge release：uv run forge dev serve
     # data ≥0.1.10：绑定参数会把 DataFrame 里取出来的 numpy 标量转回原生类型。低于它，
     # 拿 `df["id"].max()` 这种值去查 SQL Server 会报 `Invalid parameter type … (HY105)`，
     # 而同一个值写回 mart（PG）却不报错 —— 典型症状是「治理 job 首轮成功、第二轮起必炸」。
