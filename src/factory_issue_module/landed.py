@@ -76,6 +76,21 @@ def _content_lines(text: str) -> list[tuple[str, bool]]:
     return out
 
 
+def content_lines(text: str) -> list[tuple[str, bool]]:
+    """逐行给出 (行, 是否在代码块里)，供配置解析自己判断小标题时跳过代码块。"""
+    return _content_lines(text)
+
+
+def headings(text: str) -> list[tuple[int, str]]:
+    """代码块以外的标题：(级数, 去掉行尾空白的整行)，按出现先后。"""
+    out: list[tuple[int, str]] = []
+    for line, fenced in _content_lines(text):
+        m = None if fenced else _HEADING.match(line)
+        if m:
+            out.append((len(m.group(1)), line.rstrip()))
+    return out
+
+
 def section(text: str, heading: str, *, where: str = "") -> str:
     """取 `heading`（整行，如「## 常用查询场景」）下的正文，到同级或更高级的下一个标题为止。"""
     level = len(heading) - len(heading.lstrip("#"))

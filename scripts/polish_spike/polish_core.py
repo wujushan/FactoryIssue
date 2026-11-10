@@ -3,7 +3,9 @@
 做法 A（开发者 2026-11-09 同意）：G4a 期间这几部分先放在实测工具里，实测结果回填设计稿；G4b 移进
 `src/factory_issue_module/polish/` 与 `config/polish_rules.py`，本文件改成转接，规则只留一份。两边不一致时以设计稿为准。
 
-只用标准库与 `src` 里已有的 `landed`、`textnorm`；不连库、不调模型。
+G4b 进度：P1 起润色规则取 `src` 的 `config/polish_rules.py`；参数、拆拼、检查在 P2、提示在 P3 改调 `src`。
+
+只用标准库与 `src` 里已有的 `config`、`textnorm`；不连库、不调模型。
 """
 
 from __future__ import annotations
@@ -15,7 +17,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from factory_issue_module import landed
+from factory_issue_module.config import files as config_files
+from factory_issue_module.config.polish_rules import PolishField, PolishRules
+from factory_issue_module.declarations import POLISH_RULES
 from factory_issue_module.textnorm import strip_rich, to_halfwidth
 
 TASK_CODE = "domestic_polish"
@@ -41,68 +45,16 @@ def max_tokens(input_chars: int) -> int:
     return max(512, min(6000, input_chars * 2 + 256))
 
 
-# ---------------------------------------------------------------- 润色规则（设计 §10，实测只读内置默认）
+# ---------------------------------------------------------------- 润色规则（设计 §10，G4b P1 起取 src）
 
-
-@dataclass(frozen=True)
-class Field:
-    code: str
-    name: str
-    about: str
-    rich: bool
-    default_max: int | None
-    requirements: str = ""
-
-
-@dataclass(frozen=True)
-class Rules:
-    max_input: int
-    common: str
-    fields: dict[str, Field]
-
-
-_NONE = {"", "（没有）", "—", "-"}
-
-
-def _free(text: str) -> str:
-    t = text.strip()
-    return "" if t in _NONE else t
+#: 规则的解析与校验只在 `src/factory_issue_module/config/polish_rules.py`（任务单规矩第 2 条）
+Field = PolishField
+Rules = PolishRules
 
 
 def load_rules() -> Rules:
-    """`2_landed/domestic/ai_polish.md`「润色规则（初始版本）」。上传版的完整校验在 G4b（设计 §10）。"""
-    return parse_rules(landed.section(landed.read("domestic/ai_polish.md"), "## 润色规则（初始版本）"))
-
-
-def parse_rules(body: str) -> Rules:
-    setting = landed.table_with_header(landed.section(body, "### 设置"), ("项", "值"))
-    values = {row[0]: row[1] for row in setting.rows}
-    table = landed.table_with_header(
-        landed.section(body, "### 栏目"), ("栏目代码", "名称", "这一栏写什么", "原文格式", "默认字数上限"))
-    reqs = _field_requirements(landed.section(body, "### 各栏要求"))
-    fields: dict[str, Field] = {}
-    for code, name, about, fmt, limit in table.rows:
-        fields[code] = Field(code=code, name=name, about=about, rich=fmt == "富文本",
-                             default_max=None if limit == "不限" else int(limit), requirements=reqs.get(name, ""))
-    return Rules(max_input=int(values["原文长度上限"]), common=_free(landed.section(body, "### 共用要求")),
-                 fields=fields)
-
-
-def _field_requirements(body: str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    current: str | None = None
-    lines: list[str] = []
-    for line in body.splitlines():
-        m = re.match(r"^####\s+(.+?)\s*$", line)
-        if m:
-            if current is not None:
-                out[current] = _free("\n".join(lines))
-            current, lines = m.group(1), []
-        elif current is not None:
-            lines.append(line)
-    if current is not None:
-        out[current] = _free("\n".join(lines))
-    return out
+    """内置默认：`2_landed/domestic/ai_polish.md`「润色规则（初始版本）」，经 `src` 的同一个解析函数。"""
+    return config_files.default(POLISH_RULES)
 
 
 # ---------------------------------------------------------------- 请求参数（设计 §5）
@@ -127,7 +79,7 @@ def parse_request(ext: Any, rules: Rules) -> tuple[Request | None, str]:
     code = ext.get("field")
     if not isinstance(code, str) or not code.strip():
         return None, "field"
-    fld = rules.fields.get(code.strip())
+    fld = rules.field(code.strip())
     if fld is None:
         return None, "unknown_field"
     raw_max = ext.get("max_length")

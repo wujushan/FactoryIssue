@@ -408,8 +408,9 @@ def self_check() -> int:
     by_id = {c["id"]: c for c in cases}
     problems: list[str] = []
     six = {"problem_desc", "reason", "five_why_question", "five_why_answer", "measures", "prevention"}
-    if set(rules.fields) != six:
-        problems.append(f"润色规则的栏目不是初始的六种：{sorted(rules.fields)}")
+    codes = {f.code for f in rules.fields}
+    if codes != six:
+        problems.append(f"润色规则的栏目不是初始的六种：{sorted(codes)}")
     if rules.max_input != 3000:
         problems.append(f"原文长度上限不是 3000：{rules.max_input}")
 

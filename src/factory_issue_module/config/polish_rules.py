@@ -82,14 +82,27 @@ def _section(text: str, heading: str) -> str:
 def _table(body: str, header: tuple[str, ...], heading: str) -> landed.MdTable:
     where = f"「{_title(heading)}」一节里"
     try:
-        return landed.table_with_header(body, header, where=where)
-    except landed.LandedParseError as exc:
-        raise ConfigFormatError(f"{exc}；表头要逐字写成：| {' | '.join(header)} |") from exc
+        found = landed.tables(body, where=where)
+    except landed.LandedParseError as exc:  # 缺分隔行、某行列数不对
+        message = str(exc).replace(f"{where} ", where, 1)
+        if "缺表头分隔行" in message:
+            message = f"{where}有一张表缺表头分隔行：表头下面要有一行「| --- | --- |」"
+        elif "列，表头是" in message:
+            message += "；单元格里要写「|」时写成「\\|」"
+        raise ConfigFormatError(message) from exc
+    table = next((t for t in found if t.header == header), None)
+    if table is None:
+        raise ConfigFormatError(f"{where}要有一张表，表头逐字写成：| {' | '.join(header)} |")
+    return table
+
+
+#: 数字至多几位：再长的按不合格报，不交给 `int()`（4300 位以上它抛英文的原生错误）
+_DIGITS_MAX = 9
 
 
 def _positive(cell: str) -> bool:
-    """只认 ASCII 数字（`str.isdigit` 对「²」也为真，`int()` 却抛原生错误）。"""
-    return re.fullmatch(r"[0-9]+", cell) is not None and int(cell) > 0
+    """只认 ASCII 数字（`str.isdigit` 对「²」也为真，`int()` 却抛原生错误），至多 `_DIGITS_MAX` 位。"""
+    return re.fullmatch(rf"[0-9]{{1,{_DIGITS_MAX}}}", cell) is not None and int(cell) > 0
 
 
 def _free(text: str) -> str:
@@ -131,8 +144,9 @@ def _max_input(text: str) -> int:
         raise ConfigFormatError(f"「设置」里缺「{MAX_INPUT_KEY}」")
     raw = values[MAX_INPUT_KEY]
     if not _positive(raw) or int(raw) > MAX_INPUT_CEILING:
+        shown = raw if len(raw) <= 20 else raw[:20] + "…"
         raise ConfigFormatError(
-            f"「{MAX_INPUT_KEY}」要写 1 到 {MAX_INPUT_CEILING} 之间的整数（字），现在是「{raw}」"
+            f"「{MAX_INPUT_KEY}」要写 1 到 {MAX_INPUT_CEILING} 之间的整数（字），现在是「{shown}」"
         )
     return int(raw)
 
@@ -141,7 +155,10 @@ def _limit(cell: str, where: str) -> int | None:
     if cell == NO_LIMIT:
         return None
     if not _positive(cell):
-        raise ConfigFormatError(f"{where}的默认字数上限要写「{NO_LIMIT}」或正整数，现在是「{cell}」")
+        shown = cell if len(cell) <= 20 else cell[:20] + "…"
+        raise ConfigFormatError(
+            f"{where}的默认字数上限要写「{NO_LIMIT}」或正整数（至多 {_DIGITS_MAX} 位），现在是「{shown}」"
+        )
     return int(cell)
 
 
@@ -197,8 +214,8 @@ def _requirements(text: str, names: set[str]) -> dict[str, str]:
         if current is not None:
             out[current] = _check_free(f"「各栏要求」里「{current}」一节", "\n".join(lines))
 
-    for line in body.splitlines():
-        m = _SUB.match(line)
+    for line, fenced in landed.content_lines(body):
+        m = None if fenced else _SUB.match(line)  # 代码块里的「####」是举例，不是小标题
         if m:
             close()
             name = m.group(1)
@@ -219,7 +236,33 @@ def _requirements(text: str, names: set[str]) -> dict[str, str]:
     return out
 
 
+def _check_layout(text: str) -> None:
+    """四个小节各只许出现一次；从第一个小节起，正文里不能再有别的 `#`–`###` 标题。
+
+    `landed.section` 只取第一个同名标题、到下一个同级或更高级标题为止：重复的小节、小节里的 `##` 标题之后的文字
+    都会被悄悄丢掉，保存能通过、规则却不生效（P1 评审第 1 条）。第一个小节之前的标题不管：文件开头带
+    「## 润色规则（初始版本）」那一行、或整份 `ai_polish.md` 上传都照样可以。"""
+    heads = landed.headings(text)
+    for heading in _SECTIONS:
+        count = sum(1 for _, line in heads if line == heading)
+        if count == 0:
+            _section(text, heading)  # 抛「缺少某一节」：标题写错时先说缺哪一节，比说多了一个标题好懂
+        if count > 1:
+            raise ConfigFormatError(f"「{heading}」写了不止一节，只留一节")
+    first = next(i for i, (_, line) in enumerate(heads) if line in _SECTIONS)
+    current = heads[first][1]
+    for level, line in heads[first + 1:]:
+        if line in _SECTIONS:
+            current = line
+        elif level <= 3:
+            raise ConfigFormatError(
+                f"「{current}」之后出现了标题「{line}」：四个小节里只能写正文，"
+                "要分小标题请用「####」（「各栏要求」里「####」后写栏目名称）"
+            )
+
+
 def parse(text: str) -> PolishRules:
+    _check_layout(text)
     max_input = _max_input(text)
     rows = _fields(text)
     common = _check_free("「共用要求」", _section(text, "### 共用要求"))
