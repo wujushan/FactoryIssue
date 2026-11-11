@@ -211,6 +211,9 @@ POLISH_MESSAGES: dict[str, str] = {
     POLISH_FAILED_CODE: POLISH_FAILED,
 }
 
+#: 对话框里说「润色」（润色设计 §13.3；`2_landed/domestic/ai_polish.md`「边界」）
+POLISH_IN_CHAT = "对话框里不做润色。要润色国内制程问题单的填写内容，请在问题单页面点该栏旁的【AI润色】。"
+
 #: 巴西、海外问责任归属部门：按问题跟进部门给并写明（术语表「责任归属部门」）
 RESP_DEPT_AS_FOLLOW = "{domain}没有责任归属部门，按问题跟进部门给"
 #: 国内物料问题不展示责任归属部门（术语表「责任归属部门」）

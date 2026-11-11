@@ -54,6 +54,8 @@ SCENARIOS: list[tuple[str, dict | None, str]] = [
     ("只国内·空问句", scopes.account_jia(), "……"),
     ("只国内·规划层接上之前", scopes.account_jia(), "上个月国内的问题有哪些"),
     ("全放开·规划层接上之前", scopes.GREEN, "6 月总共发生多少制程问题？"),
+    ("对话框里说润色", scopes.account_jia(), "帮我润色这段原因分析：治具松动"),
+    ("三域都无权·说润色", scopes.no_domain(), "帮我润色一下"),
 ]
 
 
