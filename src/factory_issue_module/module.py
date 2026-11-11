@@ -9,6 +9,7 @@ S6 起声明 mart 别名、`vectorize` 与 `jobs()`（两个治理任务，`jobs
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
 
@@ -75,9 +76,11 @@ class FactoryIssueModule(ForgeModule):
     async def handle(self, request: ModuleRequest, ctx: ModuleContext) -> AsyncIterator[Event]:
         # 润色设计 §3：按任务码分派，润色不走查询编排、不经打字机分段（结果一次发出）
         if polish.is_polish(request):
-            async for event in polish.run(self.manifest, request, ctx):
-                if self.live or event.type is not EventType.PROGRESS:
-                    yield event
+            # aclosing：用户停止时平台关闭本生成器，要立刻关掉润色的生成器，它的 finally 才会取消还在等的模型调用
+            async with aclosing(polish.run(self.manifest, request, ctx)) as events:
+                async for event in events:
+                    if self.live or event.type is not EventType.PROGRESS:
+                        yield event
             return
         task = polish.task_of(request)
         if task:  # 别的任务码：照常走查询流程，ext_param 不用（经 /v2/tasks 来的平台已按 UNKNOWN_TASK 拒了）

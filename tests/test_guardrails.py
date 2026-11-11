@@ -15,6 +15,8 @@
   站点地址来自模块配置 `link_sites.toml`，不是凭据。
 - 临时统计（S7）：模型起的列名、图表轴同样过「不露字段名」；英文列名在运行时被形状检查拦下、修一次（`S7_SCENARIOS`）。
   包装脚本与口径函数在 `stats/` 下，`handle()` 一侧不算数，上面「不直算」那条照查 `skills/custom_stats.py`、`stats/custom.py`。
+- AI 润色（润色设计 §12.1）：一次过、修一次、两次都不过、模型出错、5Why 的答、原文为空、太长、参数有误各走一遍
+  （`POLISH_SCENARIOS`），同样查不露表名字段名、只有一条 system。
 """
 
 from __future__ import annotations
@@ -32,8 +34,9 @@ import scopes
 import structlog
 from fakes import MANIFEST, FakeLLM, Harness, make_harness, run
 from forge_core.events import Event, EventType
+from forge_core.module import ModuleRequest
 
-from factory_issue_module import landed
+from factory_issue_module import landed, polish
 from factory_issue_module.declarations import DOMAINS, ERP, INFO, MART, Domain
 from factory_issue_module.skills import custom_stats
 from factory_issue_module.turn import gate, greeting
@@ -347,12 +350,41 @@ async def _collect() -> list[tuple[str, Harness | None, list[Event]]]:
         events = await run(h, query)
         assert events and not any(e.type is EventType.ERROR for e in events), name
         out.append((name, h, events))
+    for name, query, ext, replies, want in POLISH_SCENARIOS:
+        h = make_harness(scopes.account_jia(), llm_replies=replies)
+        request = ModuleRequest(query=query, conversation_id=h.ctx.conversation_id,
+                                inputs={"ext_param": {"task": polish.TASK_CODE, **ext}})
+        events = [e async for e in h.module.handle(request, h.ctx)]
+        got = [("delta" if e.type is EventType.DELTA else e.data["code"]) for e in events]
+        assert got == [want], (name, got)
+        assert not h.llm.replies, name  # 准备的回放都用上了：调用次数对
+        out.append((name, h, events))
     for domains in ([], [Domain.DOMESTIC], list(DOMAINS)):
         access = gate.DomainAccess(
             domains=frozenset(domains), car=False, text_search=frozenset(domains)
         )
         out.append((f"能力介绍·{len(domains)} 域", None, greeting.introduce(MANIFEST, access)))
     return out
+
+
+#: AI 润色（润色设计 §12.1）：（说明, 原文, ext_param 里 task 以外的键, 模型回复, 最终结果）。最终结果是 "delta" 或错误
+#: 代码：模型调用违规（比如多一条 system）时假模型抛的错会被润色吞成 POLISH_FAILED，所以要断言结果（P3 评审第 2 条）
+_P_IMG = '<img src="https://example.test/a.png">'
+POLISH_SCENARIOS: list[tuple[str, str, dict, list, str]] = [
+    ("润色·一次过", f"<p>治具松动导致定位偏移{_P_IMG}</p>", {"field": "reason"},
+     [{"text": "治具松动，导致定位偏移[[图1]]"}], "delta"),
+    ("润色·修一次", "<p>更换治具并全检库存</p>", {"field": "measures", "max_length": 2000},
+     ["以下是润色后的内容：\n更换治具并全检库存。", {"text": "更换治具，并全检库存。"}], "delta"),
+    ("润色·两次都不过", "<p>更换治具</p>", {"field": "prevention"},
+     [{"text": "更换治具，另有999台"}, {"text": "更换治具，另有999台"}], "POLISH_FAILED"),
+    ("润色·模型出错", "为啥扭力不够", {"field": "five_why_question"}, [RuntimeError("x")], "POLISH_FAILED"),
+    ("润色·5Why 的答", "扭力枪设定没改回来", {"field": "five_why_answer",
+                                    "context": {"current_question": "为什么扭力不够？"}},
+     [{"text": "扭力枪的设定没有改回来。"}], "delta"),
+    ("润色·原文为空", "<p>&nbsp;</p>", {"field": "reason"}, [], "POLISH_EMPTY"),
+    ("润色·太长", "<p>" + "字" * 3001 + "</p>", {"field": "reason"}, [], "POLISH_TOO_LONG"),
+    ("润色·参数有误", "测试", {"field": "remark"}, [], "POLISH_BAD_PARAM"),
+]
 
 
 def _visible_strings(event: Event) -> list[str]:

@@ -19,6 +19,7 @@ from factory_issue_module.config import files as config_files
 from factory_issue_module.config import polish_rules
 from factory_issue_module.declarations import POLISH_RULES, TASKS
 from factory_issue_module.polish import params
+from factory_issue_module.polish.prompt import POLISH_MARKER
 from factory_issue_module.turn import errors
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,21 +66,20 @@ def _forbid_query_path(harness, monkeypatch) -> list[str]:
 
 
 async def test_polish_task_goes_to_polish_without_touching_query_path(monkeypatch):
-    harness = make_harness(FULL)
+    harness = make_harness(FULL, llm_replies=[{"text": "测试原文。"}])
     touched = _forbid_query_path(harness, monkeypatch)
     events = await _handle(harness, "<p>测试原文</p>", _ext(field="measures"))
     assert touched == []
-    assert harness.queries == []
-    assert harness.llm.calls == []  # P0 还不调模型
-    assert [e.type for e in events] == [EventType.ERROR]
-    assert events[0].data["code"] == errors.POLISH_FAILED_CODE  # P0：校验过了暂答 POLISH_FAILED
+    assert harness.queries == []  # 不带编号：一条 SQL 都不发
+    assert len(harness.llm.calls) == 1 and POLISH_MARKER in harness.llm.calls[0][0]["content"]
+    assert [(e.type, e.data.get("text")) for e in events] == [(EventType.DELTA, "<p>测试原文。</p>")]
 
 
 async def test_task_code_with_spaces_still_polishes(monkeypatch):
-    harness = make_harness(FULL)
+    harness = make_harness(FULL, llm_replies=[{"text": "测试。"}])
     touched = _forbid_query_path(harness, monkeypatch)
-    await _handle(harness, "测试", {"task": f" {polish.TASK_CODE} ", "field": "reason"})
-    assert touched == []
+    events = await _handle(harness, "测试", {"task": f" {polish.TASK_CODE} ", "field": "reason"})
+    assert touched == [] and [e.data.get("text") for e in events] == ["<p>测试。</p>"]
 
 
 @pytest.mark.parametrize("ext", [None, {"task": "polish_issue", "field": "measures"}, {"task": ""}, "domestic_polish"])
@@ -107,7 +107,7 @@ async def test_query_flow_unchanged_without_ext_param(monkeypatch):
 
 async def test_live_polish_skips_pacing_and_history(monkeypatch):
     """面向前端（`live=True`）时润色同样不经打字机分段（§3），也不读多轮历史。"""
-    harness = make_harness(FULL, history=[("上一问", "上一答")])
+    harness = make_harness(FULL, history=[("上一问", "上一答")], llm_replies=[{"text": "测试原文。"}])
     harness.module.live = True
     touched = _forbid_query_path(harness, monkeypatch)
 
@@ -123,7 +123,7 @@ async def test_live_polish_skips_pacing_and_history(monkeypatch):
     monkeypatch.setattr(harness.ctx.session, "history", history)
     events = await _handle(harness, "<p>测试原文</p>", _ext(field="measures"))
     assert touched == []
-    assert [e.data["code"] for e in events] == [errors.POLISH_FAILED_CODE]
+    assert [e.type for e in events] == [EventType.PROGRESS, EventType.DELTA]  # 结果一次发出，不分段
 
 
 async def test_unknown_task_is_logged(monkeypatch):
@@ -140,14 +140,14 @@ async def test_unknown_task_is_logged(monkeypatch):
 async def test_polish_logs_shape_only():
     """§14：结束记 `factory_issue_polish`；参数有误另记 `factory_issue_polish_bad_param`（含 `issue_no` 不是字符串）。
     不记原文与问题编号。"""
-    harness = make_harness(FULL)
+    harness = make_harness(FULL, llm_replies=[{"text": "测试原文乙。"}])
     with structlog.testing.capture_logs() as logs:
         await _handle(harness, "测试原文甲", _ext(field="remark"))
         await _handle(harness, "测试原文乙", _ext(field="reason", issue_no=99, context={"x": 1, "reason": "y"}))
     bad = [e["reason"] for e in logs if e["event"] == "factory_issue_polish_bad_param"]
     assert bad == [params.REASON_UNKNOWN_FIELD, params.REASON_ISSUE_NO_IGNORED]
     done = [e for e in logs if e["event"] == "factory_issue_polish"]
-    assert [e["outcome"] for e in done] == [errors.POLISH_BAD_PARAM_CODE, errors.POLISH_FAILED_CODE]
+    assert [e["outcome"] for e in done] == [errors.POLISH_BAD_PARAM_CODE, "ok"]
     assert done[1]["field"] == "reason" and done[1]["rich"] is True and done[1]["context_dropped"] == 1
     assert done[1]["limit"] is None and isinstance(done[1]["ms"], int)
     assert not any("测试原文" in repr(e) or "issue_no" in e for e in logs)
@@ -320,6 +320,7 @@ async def test_uploaded_rules_drive_known_fields():
         "| prevention | 预防对策 | 说明怎样防止同类问题再次发生 | 富文本 | 900 |\n"
         "| remark | 备注 | 补充说明 | 纯文字 | 不限 |",
     )
-    harness = make_harness(FULL, config_files={POLISH_RULES: text})
+    harness = make_harness(FULL, config_files={POLISH_RULES: text}, llm_replies=[{"text": "测试。"}])
     events = await _handle(harness, "测试", _ext(field="remark"))
-    assert [e.data["code"] for e in events] == [errors.POLISH_FAILED_CODE]  # 校验过了（P0 暂答 FAILED）
+    assert [e.data.get("text") for e in events] == ["测试。"]  # 纯文字栏
+    assert "【这一栏】备注：补充说明" in harness.llm.calls[0][1]["content"]
