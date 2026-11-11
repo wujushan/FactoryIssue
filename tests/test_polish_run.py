@@ -176,6 +176,7 @@ async def test_no_llm_answers_polish_failed():
 
 
 @pytest.mark.parametrize("query, code", [
+    ("", errors.POLISH_EMPTY_CODE),  # 真空串（润色样例 PL-26；/test/chat 的 query 有 min_length=1，靠这里兜底）
     ("<p>&nbsp;</p>" + IMG, errors.POLISH_EMPTY_CODE),
     ("<p>" + "字" * 3001 + "</p>", errors.POLISH_TOO_LONG_CODE),
 ])
