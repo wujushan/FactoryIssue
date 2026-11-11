@@ -27,6 +27,8 @@
 |---|---|
 | `business_description.md` | 总述：定位、三域边界、跨域规则、共用说法、常用场景、澄清项、分析维度、数据量声明 |
 | `domestic/business_description.md` | 国内口径与表关联 |
+| `domestic/ai_polish.md` | 国内填单内容润色：INFO 管理页面【AI润色】按钮调用本助手时怎么润色 |
+| `domestic/ai_polish_api.md` | 国内填单内容润色的 INFO 前端对接说明：任务码、请求参数、返回事件与错误 |
 | `brazil/business_description.md` | 巴西口径与表关联 |
 | `overseas/business_description.md` | 海外口径与表关联 |
 | `link_rules.md` | 制程单跳转链接、附件预览链接的生成规则 |

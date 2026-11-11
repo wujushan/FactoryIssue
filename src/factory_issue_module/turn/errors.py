@@ -194,6 +194,26 @@ def ticket_lacks(item: str) -> str:
     return f"这张单上没有『{item}』的内容"
 
 
+# 国内填单内容润色（润色设计 §11）：代码与文案与 `2_landed/domestic/ai_polish_api.md`「错误」逐字一致，单测核对
+POLISH_EMPTY_CODE = "POLISH_EMPTY"
+POLISH_EMPTY = "请先填写内容再润色"
+POLISH_TOO_LONG_CODE = "POLISH_TOO_LONG"
+POLISH_TOO_LONG = "内容较长，请分段润色"
+POLISH_BAD_PARAM_CODE = "POLISH_BAD_PARAM"
+POLISH_BAD_PARAM = "润色参数有误，请联系系统管理员"
+POLISH_FAILED_CODE = "POLISH_FAILED"
+POLISH_FAILED = "这次没有润色成功，请稍后重试或手动修改"
+#: 代码 → 文案（`polish.run` 按代码发 `error` 事件）
+POLISH_MESSAGES: dict[str, str] = {
+    POLISH_EMPTY_CODE: POLISH_EMPTY,
+    POLISH_TOO_LONG_CODE: POLISH_TOO_LONG,
+    POLISH_BAD_PARAM_CODE: POLISH_BAD_PARAM,
+    POLISH_FAILED_CODE: POLISH_FAILED,
+}
+
+#: 对话框里说「润色」（润色设计 §13.3；`2_landed/domestic/ai_polish.md`「边界」）
+POLISH_IN_CHAT = "对话框里不做润色。要润色国内制程问题单的填写内容，请在问题单页面点该栏旁的【AI润色】。"
+
 #: 巴西、海外问责任归属部门：按问题跟进部门给并写明（术语表「责任归属部门」）
 RESP_DEPT_AS_FOLLOW = "{domain}没有责任归属部门，按问题跟进部门给"
 #: 国内物料问题不展示责任归属部门（术语表「责任归属部门」）

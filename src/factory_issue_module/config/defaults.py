@@ -4,7 +4,7 @@
 是代码常量。解析交给 `config/files.py` 里与上传内容同一套函数，所以内置默认值本身也过一遍校验。
 
 - 说法清单 = `topic_terms.md`；部门简称 = 总述「部门名称怎么对」的简称表；地区说法 = 国内「加工厂」
-  的地区说法表；问题类型的说法 = 总述「问题类型怎么对」的说法表。
+  的地区说法表；问题类型的说法 = 总述「问题类型怎么对」的说法表；润色规则 = 国内 `ai_polish.md`「润色规则（初始版本）」。
 - 分段规则取自决策 2026-10-20「G2 数据源与治理决策」的「整理规则」，环节清单取自总述「比对范围」；
   单测对照这两处原文。
 - 回答参数取自决策 2026-10-26「回答组织方式默认值」与 G2（重排上限按单数计，见 G2 补记）。
@@ -31,6 +31,10 @@ def factory_regions_text() -> str:
 
 def type_sayings_text() -> str:
     return landed.type_sayings_section()
+
+
+def polish_rules_text() -> str:
+    return landed.polish_rules_section()
 
 
 SEGMENTATION: dict[str, Any] = {

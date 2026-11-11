@@ -117,6 +117,23 @@ def introduce(manifest: ModuleManifest, access: DomainAccess) -> list[Event]:
     return events
 
 
+#: 对话框里要求润色（润色设计 §13.3）：只认这两个字，「改写」「优化措辞」照常规划（答超出范围或只读请求）
+POLISH_WORD = "润色"
+
+
+def asks_to_polish(query: str) -> bool:
+    return POLISH_WORD in query
+
+
+def polish_in_chat(access: DomainAccess) -> list[Event]:
+    """引导到问题单页面的【AI润色】，附能力介绍的按钮（同「超出范围」的答法）；不规划、不取数、不调模型。"""
+    events = [Event.delta(errors.POLISH_IN_CHAT)]
+    recs = buttons(access)
+    if recs:
+        events.append(Event.suggestions(recs))
+    return events
+
+
 def not_understood(access: DomainAccess) -> list[Event]:
     """§14：规划超时或修一次仍不合格、以及空问句（§4.2 第 2 步）的答法。
 

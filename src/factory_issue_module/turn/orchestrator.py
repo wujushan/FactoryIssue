@@ -3,9 +3,10 @@ S3 接上巴西、海外与跨域合并；S4 接上详情与按号查单（含�
 质疑重查与换图；S6b 接上文字查找；S7 接上临时统计（`skills/custom_stats.py`）。
 
 1. 权限前置（`gate.resolve`）；拿不到可用的权限判断时按「没拿到权限」答，三个域都不出数。
-2. 代码先接住的两种，都不调模型、不取数：
+2. 代码先接住的三种，都不调模型、不取数：
    - 问句去掉标点与空白后为空：答「没能理解这个问题，可以换个说法」，有可查的域时附能力介绍的
      3 个按钮；三域都无权时同样这一句，不当寒暄，也不答请先申请。
+   - 问句里有「润色」：对话框里不做润色，引导到问题单页面的【AI润色】，附能力介绍的按钮（润色设计 §13.3）。
    - 三域都无权：代码规则判断是不是寒暄或问能力，是就做能力介绍，不是就只答请先申请。
 3. 读最近几轮对话与工作区（`turn/workspace.py`）：上一轮的计划与结局交给规划器。本轮问句与上一轮代码追问的某个
    选项的 `query` 完全相同时，把选项直接填进上一轮的计划，跳过第 4、5 步（§4.4）；填好的计划照常过第 6 步。
@@ -130,6 +131,12 @@ async def run_turn(
 
     if greeting.is_blank(request.query):
         for event in greeting.not_understood(access):
+            yield event
+        return
+
+    # 对话框里不做润色（润色设计 §13.3）：引导到问题单页面；三域都无权时同样这样答（不给按钮）
+    if greeting.asks_to_polish(request.query):
+        for event in greeting.polish_in_chat(access):
             yield event
         return
 
