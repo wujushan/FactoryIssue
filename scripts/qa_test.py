@@ -20,6 +20,10 @@
 单元格包含、图表类型、正文包含/排除、建议按钮形状。合计＝分项之和这类关系
 若还要对表内数字验算，请在 `check()` 里加分支。
 
+润色样例（`docs/testcases/polish/cases.json`，与 golden 分开跑）另用：用例上的 `ext_param` 原样带上；
+`q_pad` 载入时展开；`error_code`（比 `error.code`）、`answer_preserves`、`answer_max_chars` 三个断言。
+润色一轮最坏约 4 分钟，跑润色样例时加 `--timeout 300`。
+
 ⚠️ 它打的是真实模型与真实库：慢、有并发上限，别拿它当压测工具。
 """
 
@@ -50,7 +54,20 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     cases = payload.get("cases", payload) if isinstance(payload, dict) else payload
     if not isinstance(cases, list):
         raise SystemExit(f"用例集格式不对：{path} 应是数组或 {{\"cases\": [...]}}")
-    return cases
+    return [expand_pad(case) for case in cases]
+
+
+def expand_pad(case: dict[str, Any]) -> dict[str, Any]:
+    """`q_pad: [一段文字, 次数]`：把 query 里的 `{pad}` 换成这段文字重复若干次（润色样例的超长原文，免得在 JSON 里
+    抄几千字；与 `scripts/polish_spike/spike.py::load_cases` 同一写法）。"""
+    if "q_pad" not in case:
+        return case
+    pad = case["q_pad"]
+    if not (isinstance(pad, list) and len(pad) == 2 and isinstance(pad[0], str) and type(pad[1]) is int
+            and pad[1] > 0 and "{pad}" in str(case.get("query") or "")):
+        raise SystemExit(f"用例 {case.get('id')!r} 的 q_pad 要写成 [文字, 正整数]，query 里要有 {{pad}}")
+    text, times = pad
+    return {**case, "query": case["query"].replace("{pad}", text * times)}
 
 
 def skip_reason(case: dict[str, Any]) -> str:
@@ -127,8 +144,15 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
     expect = case.get("expect") or {}
     failures: list[str] = []
 
-    if expect.get("no_error", True) and body.get("error"):
+    want_code = expect.get("error_code")
+    # 写了 error_code 就是预期报错：不再按「不许报错」判
+    if expect.get("no_error", not want_code) and body.get("error"):
         failures.append(f"模块报错：{body['error']}")
+    if want_code:
+        error = body.get("error")
+        got_code = error.get("code") if isinstance(error, dict) else None
+        if got_code != want_code:
+            failures.append(f"错误代码是 {got_code!r}，预期 {want_code!r}")
     if (want := expect.get("module")) and body.get("module") != want:
         failures.append(f"路由到 {body.get('module')!r}，预期 {want!r}")
     if expect.get("clarify") is True:
@@ -215,6 +239,13 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
             failures.append(f"答案不该出现 {needle!r}（呈现规范，见 docs/dev/09）")
     if (least_len := expect.get("answer_min_length")) is not None and len(answer) < least_len:
         failures.append(f"答案仅 {len(answer)} 字，预期至少 {least_len} 字（数据之外要给分析）")
+    # 润色样例（docs/testcases/polish/）：在结果全文里做子串匹配，不解析 HTML。富文本栏的结果是拼回后的 HTML，
+    # 文字里的 & < > 已被转义，所以断言的文字串不含这几个字符；要断言的就是 HTML 片段时照原样写
+    for needle in expect.get("answer_preserves") or []:
+        if needle not in answer:
+            failures.append(f"结果里没有原样保留 {needle!r}")
+    if (most_chars := expect.get("answer_max_chars")) is not None and len(answer) > most_chars:
+        failures.append(f"结果 {len(answer)} 个字符，预期至多 {most_chars} 个")
 
     if expect.get("suggestions") is True:
         raw = body.get("suggestions")
@@ -238,12 +269,16 @@ def check(case: dict[str, Any], body: dict[str, Any]) -> list[str]:
     return failures
 
 
+#: 每轮原样带上的字段。`ext_param` 是客户端定制参数（润色样例的任务码与栏目），测试通道照收（docs/dev/02）
+TURN_FIELDS = ("target", "user_id", "ext_param")
+
+
 def case_turns(case: dict[str, Any]) -> list[dict[str, Any]]:
     """一条用例要依次发送的轮次。没有 `turns` 时就是本条 `query` 一轮。"""
     raw = case.get("turns")
     if not raw:
         turn: dict[str, Any] = {"query": case["query"]}
-        for field in ("target", "user_id"):
+        for field in TURN_FIELDS:
             if case.get(field):
                 turn[field] = case[field]
         return [turn]
@@ -252,7 +287,7 @@ def case_turns(case: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(item, str):
             item = {"query": item}
         turn = {"query": item["query"]}
-        for field in ("target", "user_id"):
+        for field in TURN_FIELDS:
             value = item.get(field, case.get(field))
             if value:
                 turn[field] = value
@@ -296,12 +331,18 @@ def run_case(client: httpx.Client, case: dict[str, Any], trace: bool, stop: thre
             problems = ["已中断，后面的轮次没发"]
             break
         payload: dict[str, Any] = {"query": turn["query"], "include_trace": trace}
-        for field in ("target", "user_id"):
+        for field in TURN_FIELDS:
             if turn.get(field):
                 payload[field] = turn[field]
         if conversation_id:
             payload["conversation_id"] = conversation_id
-        resp = client.post("/test/chat", json=payload)
+        try:
+            resp = client.post("/test/chat", json=payload)
+        except httpx.TimeoutException:
+            # 一条超时只算这一条失败，不中断整次回归（润色一轮最坏约 4 分钟，见润色设计 §4）
+            problems = [f"第 {index + 1} 轮超过 {client.timeout.read} 秒没有返回（可用 --timeout 放宽）"]
+            body = None
+            break
         if resp.status_code != 200:
             problems = [f"第 {index + 1} 轮 HTTP {resp.status_code}: {resp.text[:300]}"]
             body = None
@@ -333,11 +374,12 @@ def _result_of(future: Future[CaseResult]) -> CaseResult:
     return future.result()
 
 
-def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool, jobs: int, skipped: int = 0) -> int:
+def run(cases: list[dict[str, Any]], *, base: str, key: str, trace: bool, jobs: int, skipped: int = 0,
+        timeout: float = DEFAULT_TIMEOUT) -> int:
     client = httpx.Client(
         base_url=base.rstrip("/"),
         headers={"Authorization": f"Bearer {key}"},
-        timeout=DEFAULT_TIMEOUT,
+        timeout=timeout,
     )
     # 先确认凭据与可测模块：凭据问题当场暴露，而不是等第一条用例莫名 401
     probe = client.get("/test/modules")
@@ -410,6 +452,13 @@ def main() -> int:
         metavar="N",
         help=f"同时发出去的用例数，1 到 {MAX_JOBS}，默认 1（串行）。同一条用例的多轮仍按顺序发；输出始终按用例顺序打印",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        metavar="秒",
+        help=f"一轮最多等几秒，默认 {DEFAULT_TIMEOUT:.0f}。润色样例建议 300（一轮最坏约 4 分钟）；超时只记这一条失败",
+    )
     args = parser.parse_args()
 
     cases = load_cases(args.cases)
@@ -431,7 +480,8 @@ def main() -> int:
         )
     try:
         return run(
-            cases, base=args.base_url, key=args.api_key, trace=args.trace, jobs=args.jobs, skipped=len(skipped)
+            cases, base=args.base_url, key=args.api_key, trace=args.trace, jobs=args.jobs, skipped=len(skipped),
+            timeout=args.timeout,
         )
     except KeyboardInterrupt:
         print("\n已中断：不再发还没开始的用例和后面的轮次，正在进行的请求返回后退出", file=sys.stderr)

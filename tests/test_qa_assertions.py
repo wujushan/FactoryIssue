@@ -192,3 +192,134 @@ def test_golden_files_stay_inside_g3_rules():
         assert "TRY_CONVERT" not in upper
         assert "PAXBASE" not in upper
         assert "1_user_input" not in text
+
+
+# ---------------------------------------------------------------- 润色样例（润色设计 §12.2）
+
+_POLISH_OK = {"error": None, "clarify": None, "query_count": 0, "tables": [], "suggestions": None,
+              "answer": '<p>测试机型A999开机花屏，共200台。</p><p><img src="https://info.example.invalid/a.png"></p>'}
+
+
+def test_ext_param_is_sent_with_each_turn():
+    ext = {"task": "domestic_polish", "field": "reason"}
+    assert qa.case_turns({"query": "x", "target": "FACTORY_ISSUE", "ext_param": ext}) == [
+        {"query": "x", "target": "FACTORY_ISSUE", "ext_param": ext}]
+    multi = qa.case_turns({"query": "b", "ext_param": ext, "turns": ["a", {"query": "b", "ext_param": {"task": "t"}}]})
+    assert [t["ext_param"] for t in multi] == [ext, {"task": "t"}]
+
+
+def test_run_case_posts_ext_param():
+    sent: list[dict] = []
+
+    class Resp:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {**_POLISH_OK, "conversation_id": "c1"}
+
+    class Client:
+        def post(self, path, json):
+            sent.append(json)
+            return Resp()
+
+    import threading
+
+    ext = {"task": "domestic_polish", "field": "reason"}
+    result = qa.run_case(Client(), {"id": "PL-X", "query": "x", "target": "FACTORY_ISSUE", "ext_param": ext,
+                                    "expect": {"answer_preserves": ["A999"]}}, False, threading.Event())
+    assert result.passed and sent == [{"query": "x", "include_trace": False, "target": "FACTORY_ISSUE",
+                                       "ext_param": ext}]
+
+
+def test_q_pad_expands_and_rejects_bad_shapes():
+    case = {"id": "PL-28", "query": "<p>{pad}</p>", "q_pad": ["测试", 3]}
+    assert qa.expand_pad(case)["query"] == "<p>测试测试测试</p>"
+    assert qa.expand_pad({"id": "a", "query": "x"}) == {"id": "a", "query": "x"}
+    import pytest
+
+    for bad in (["测试"], ["测试", "3"], ["测试", 0], [3, 3]):
+        with pytest.raises(SystemExit):
+            qa.expand_pad({"id": "b", "query": "{pad}", "q_pad": bad})
+    with pytest.raises(SystemExit):
+        qa.expand_pad({"id": "c", "query": "没有占位", "q_pad": ["测试", 2]})
+    with pytest.raises(SystemExit):  # 写了 q_pad 却是 null：不把字面的 {pad} 发出去
+        qa.expand_pad({"id": "d", "query": "{pad}", "q_pad": None})
+
+
+def test_timeout_fails_only_that_case():
+    """润色一轮最坏约 4 分钟：一条超时只记这一条失败，不中断整次回归。"""
+    import threading
+
+    import httpx
+
+    class Client:
+        timeout = httpx.Timeout(180.0)
+
+        def post(self, path, json):
+            raise httpx.ReadTimeout("x")
+
+    result = qa.run_case(Client(), {"id": "PL-X", "query": "x"}, False, threading.Event())
+    assert not result.passed and "180.0 秒没有返回" in result.problems[0] and result.body is None
+
+
+def test_error_code_assertion():
+    case = {"expect": {"no_error": False, "error_code": "POLISH_EMPTY"}}
+    err = {**_POLISH_OK, "answer": "", "error": {"code": "POLISH_EMPTY", "message": "请先填写内容再润色", "fatal": True}}
+    assert qa.check(case, err) == []
+    other = {**err, "error": {**err["error"], "code": "POLISH_FAILED"}}
+    assert any("POLISH_FAILED" in p and "POLISH_EMPTY" in p for p in qa.check(case, other))
+    assert any("None" in p for p in qa.check(case, _POLISH_OK))  # 预期报错却润色成功
+    # 只写 error_code 不写 no_error：不按「不许报错」判
+    assert qa.check({"expect": {"error_code": "POLISH_EMPTY"}}, err) == []
+
+
+def test_answer_preserves_and_max_chars():
+    case = {"expect": {"answer_preserves": ["A999", "200", "https://info.example.invalid/a.png"],
+                       "answer_max_chars": 200}}
+    assert qa.check(case, _POLISH_OK) == []
+    lost = {**_POLISH_OK, "answer": "<p>测试机型开机花屏。</p>"}
+    problems = qa.check(case, lost)
+    assert any("A999" in p for p in problems) and any("200" in p for p in problems)
+    long = {**_POLISH_OK, "answer": _POLISH_OK["answer"] * 3}
+    assert any("至多 200" in p for p in qa.check(case, long))
+
+
+def test_answer_not_contains_applies_to_polish_results():
+    case = {"expect": {"answer_not_contains": ["3个", "<p>原因分析"]}}
+    assert qa.check(case, {**_POLISH_OK, "answer": "<p>有三个原因。</p>"}) == []
+    assert any("<p>原因分析" in p for p in qa.check(case, {**_POLISH_OK, "answer": "<p>原因分析：</p><p>x</p>"}))
+
+
+def test_polish_cases_stay_synthetic_and_on_the_polish_task():
+    """润色样例：编号都是 99 年号、任务码都是 domestic_polish、错误代码都是四个之一；与 golden 分开放。"""
+    import re
+
+    from factory_issue_module.polish import TASK_CODE
+    from factory_issue_module.turn import errors
+
+    path = ROOT / "docs/testcases/polish/cases.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    cases = qa.load_cases(path)
+    assert len(cases) == len(raw) >= 30
+    ids = [c["id"] for c in cases]
+    assert len(ids) == len(set(ids)) and all(i.startswith("PL-") for i in ids)
+    numbers = re.compile(r"(?:ZC|BR|HW)\s*-?\s*\d[\d\s-]*", re.IGNORECASE)
+    seen = 0
+    for case in cases:
+        assert case["target"] == "FACTORY_ISSUE", case["id"]
+        assert case["ext_param"]["task"] == TASK_CODE, case["id"]
+        assert "{pad}" not in case["query"], case["id"]
+        blob = json.dumps({k: case.get(k) for k in ("query", "ext_param", "expect")}, ensure_ascii=False)
+        for m in numbers.finditer(blob):
+            digits = re.sub(r"\D", "", m.group(0))
+            assert digits[:2] == "99", (case["id"], m.group(0))
+            seen += 1
+        code = case["expect"].get("error_code")
+        if code:
+            assert code in errors.POLISH_MESSAGES and case["expect"].get("no_error") is False, case["id"]
+    assert seen >= 2  # PL-17 的 issue_no、PL-09 的 ZC99 等：守卫真的看到了编号
+    golden = json.loads((ROOT / "docs/testcases/golden/cases.json").read_text(encoding="utf-8"))["cases"]
+    assert not {c["id"] for c in golden} & set(ids)
+    assert not any((c.get("ext_param") or {}).get("task") == TASK_CODE for c in golden)

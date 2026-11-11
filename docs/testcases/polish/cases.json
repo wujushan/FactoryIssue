@@ -2,7 +2,7 @@
   "_comment": [
     "AI 润色的合成样例（决策 2026-11-09「AI 润色技术设计」§12.2；open-questions D53）。全部是编写的内容，不含真实业务数据：",
     "单号用不存在的 99 年号（ZC99…），图片与链接用保留域名 info.example.invalid，人名写「李某」「张工」，机型写 A999、B998。",
-    "两处用到它：scripts/polish_spike/（内网实测，现在就用）与 scripts/qa_test.py（测试环境回归，G4b 补上 ext_param、error_code、answer_preserves、answer_max_chars、q_pad 之后用）。",
+    "两处用到它：scripts/polish_spike/（内网实测）与 scripts/qa_test.py（测试环境回归，G4b P6 起认 ext_param、q_pad、error_code、answer_preserves、answer_max_chars）。",
     "q_pad：[一段文字, 次数]，载入时把 query 里的 {pad} 换成这段文字重复若干次，免得在这里抄几千字。",
     "expect：error_code = 不调模型就该报的错；answer_preserves = 润色结果里必须原样出现的串；answer_not_contains = 不该出现的串；answer_max_chars = 结果整段（富文本连标记）最多几个字符。"
   ],
