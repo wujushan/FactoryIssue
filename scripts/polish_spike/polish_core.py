@@ -4,14 +4,13 @@
 `src/factory_issue_module/polish/` 与 `config/polish_rules.py`，本文件改成转接，规则只留一份。两边不一致时以设计稿为准。
 
 G4b 进度：P1 起润色规则取 `src` 的 `config/polish_rules.py`；P2 起参数（`polish/params.py`）、拆拼与判空判长
-（`polish/rich.py`）、检查（`polish/check.py`）取 `src`；P3 起提示（`polish/prompt.py`）与调用参数（`polish/steps.py`）取 `src`；本文件只剩页面发来的参考内容（P4 换成 `src`）与转接。
+（`polish/rich.py`）、检查（`polish/check.py`）取 `src`；P3 起提示（`polish/prompt.py`）与调用参数（`polish/steps.py`）取 `src`；P4 起页面发来的参考内容（`polish/reference.py`）取 `src`；本文件只剩转接。
 
 只用标准库与 `src`；不连库、不调模型。
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +20,7 @@ from factory_issue_module.declarations import POLISH_RULES, POLISH_TASK_CODE
 from factory_issue_module.polish import check as _check
 from factory_issue_module.polish import params as _params
 from factory_issue_module.polish import prompt as _prompt
+from factory_issue_module.polish import reference as _reference
 from factory_issue_module.polish import rich as _rich
 from factory_issue_module.polish import steps as _steps
 from factory_issue_module.polish.check import (  # noqa: F401 —— spike.py 经本模块取这几个名字
@@ -34,7 +34,6 @@ from factory_issue_module.polish.check import (  # noqa: F401 —— spike.py �
     Verdict,
 )
 from factory_issue_module.polish.rich import ALT, BRACKET, Split  # noqa: F401
-from factory_issue_module.textnorm import strip_rich
 from factory_issue_module.turn import errors
 
 TASK_CODE = POLISH_TASK_CODE
@@ -126,34 +125,14 @@ def prepare(query: str, ext: Any, rules: Rules, *, ignore_cap: bool = False) -> 
     return Prepared(request=req, core=core), "", ""
 
 
-# ---------------------------------------------------------------- 同单参考内容（设计 §7.1；实测不查库）
-
-_LABELS = {"problem_type": "问题类型", "model": "机型", "material": "物料", "problem_desc": "问题描述",
-           "reason": "原因分析", "measures": "改善措施", "prevention": "预防对策"}
-_LONG = {"problem_desc", "reason", "measures", "prevention"}
-
-
-def _cut(text: str, n: int) -> str:
-    text = re.sub(r"\s+", " ", text).strip()
-    return text if len(text) <= n else text[:n] + "…"
+# ---------------------------------------------------------------- 同单参考内容（设计 §7，G4b P4 起取 src；实测不查库）
 
 
 def reference(req: Request) -> dict[str, Any]:
-    """页面发来的同单内容 → 提示里的「同一张单的其他内容」。正在润色的这一栏不放（设计 §7.3）。"""
-    out: dict[str, Any] = {}
-    for key, label in _LABELS.items():
-        if key == req.field.code or key not in req.context:
-            continue
-        text = strip_rich(req.context[key])
-        if text:
-            out[label] = _cut(text, 800 if key in _LONG else 100)
-    five = req.context.get("five_why") or []
-    if five:
-        out["已有的 5Why"] = [{"问": _cut(strip_rich(x["question"]), 200),
-                             "答": _cut(strip_rich(x["answer"]), 200) or "（待答复）"} for x in five[:10]]
-    if req.field.code == "five_why_answer":
-        out["这一答对应的问"] = _cut(strip_rich(req.context.get("current_question") or ""), 200)
-    return out
+    """页面发来的同单内容 → 提示里的「同一张单的其他内容」（`src` 的 `polish/reference.py`，不带编号查库）。"""
+    values = _reference.page_values(req.context)
+    items, _used = _reference.render(values, req.field.code, str(req.context.get("current_question") or ""))
+    return items
 
 
 # ---------------------------------------------------------------- 提示（设计 §8，G4b P3 起取 src）

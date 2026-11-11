@@ -4,7 +4,7 @@
 
 ① 校验参数 → ② 读规则 → ③ 拆富文本、判空判长 → 进度「正在润色」→ ④ 参考内容 → ⑤ 组提示 → ⑥ 调模型（每
 `HEARTBEAT` 秒补一个进度）→ ⑦ 检查，不过修一次 → ⑧ 拼回，结果作为一条 `delta` 发出。
-第 ④ 步 P4 接上（任务单）；P3 期间参考内容为空。
+第 ④ 步见 `polish/reference.py`。
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from forge_core.module import ModuleManifest, ModuleRequest
 
 from factory_issue_module.config import files as config_files
 from factory_issue_module.declarations import POLISH_RULES
-from factory_issue_module.polish import check, params, prompt, rich
+from factory_issue_module.polish import check, params, prompt, reference, rich
 from factory_issue_module.turn import errors
 
 logger = structlog.get_logger(__name__)
@@ -177,11 +177,14 @@ async def _steps(request: ModuleRequest, ctx: Any, log: _Log) -> AsyncIterator[E
     shape.update(input_chars=prep.input_chars, placeholders=len(prep.split.tokens))
     yield _progress()
 
-    # ④ 同单参考内容：P4 接上（§7）
-    reference: dict[str, Any] = {}
+    # ④ 同单参考内容（§7）：页面发来的为准，带编号时再查库补；查不到、没权限、出错都照样润色
+    ref = await reference.build(ctx, req.context, req.issue_no, req.field)
+    shape.update(reference=ref.source, db=ref.db)
+    if ref.missing:
+        shape["db_missing"] = list(ref.missing)
 
     # ⑤ 组提示（§8）
-    messages = prompt.first_messages(prep, fld, rules, reference)
+    messages = prompt.first_messages(prep, fld, rules, ref.items)
     llm = getattr(ctx, "llm", None)
     if llm is None:  # 算作第 1 次调用就失败，日志两处都记 1
         shape["attempts"] = 1

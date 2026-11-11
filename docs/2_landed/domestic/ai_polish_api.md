@@ -35,7 +35,7 @@ Content-Type: application/json
     "task": "domestic_polish",
     "field": "measures",
     "max_length": 2000,
-    "issue_no": "ZC2026110001",
+    "issue_no": "ZC2611001",
     "context": { "reason": "<同一表单里刚写的原因分析，纯文字>" }
   }
 }
@@ -52,7 +52,7 @@ Content-Type: application/json
 | `task` | ✅ | string | 固定 `domestic_polish` |
 | `field` | ✅ | string | 栏目种类，见下表 |
 | `max_length` | 建议传 | 正整数 | 这一栏最多能存多少字符，润色结果不会超过它。按内容原样数字符，富文本栏连 HTML 标记一起数。没传时用下表的默认值 |
-| `issue_no` | ✕ | string | 问题编号（`ZC` 开头）。传了，本助手按编号查这张单已保存的内容作参考；建单页还没有编号时不传 |
+| `issue_no` | ✕ | string | 问题编号，`ZC` + 年 2 位 + 月 2 位 + 3 位序号，如 `ZC2611001`。传了，本助手按编号查这张单已保存的内容作参考；建单页还没有编号时不传。格式不对或不是国内单时不查，照样润色 |
 | `context` | ✕ | object | 同一张单其他栏的当前内容，见下文；和按编号查到的内容冲突时以它为准 |
 
 其余的键本助手忽略。整个 `ext_param` 序列化后不能超过 64KB、嵌套不能超过 6 层，否则平台在开流前返回 `400 invalid_param`。
@@ -73,6 +73,8 @@ Content-Type: application/json
 ### `context` 的键
 
 都可选，只传页面上有的；正在润色的这一栏不用传。内容请传纯文字（TinyMCE `getContent({format: "text"})`）：参考用不到图片，带 HTML 容易超过 64KB。
+
+传了某个键，本助手就以它为准：传空串（或 `five_why` 传空列表）表示这一栏现在是空的，不再按 `issue_no` 用库里保存的内容补上。页面上没有加载的栏目不要传，留给按编号补。`five_why` 里问与答都为空的项会被忽略，全是这种项时等于传了空列表。
 
 | 键 | 类型 | 说明 |
 |---|---|---|

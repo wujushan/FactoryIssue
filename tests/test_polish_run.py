@@ -217,7 +217,7 @@ async def test_log_fields_shape_only():
     assert {k: e[k] for k in ("field", "rich", "input_chars", "output_chars", "limit", "placeholders",
                               "reference", "db", "attempts", "outcome", "failed_checks", "context_dropped")} == {
         "field": "reason", "rich": True, "input_chars": 19, "output_chars": 21, "limit": None,
-        "placeholders": 1, "reference": "none", "db": "skipped", "attempts": 1, "outcome": "ok",
+        "placeholders": 1, "reference": "none", "db": "not_found", "attempts": 1, "outcome": "ok",
         "failed_checks": [], "context_dropped": 0,
     }
     assert isinstance(e["ms"], int)

@@ -429,7 +429,8 @@ def _main_filter(dstep: DomainStep) -> dict[str, Any]:
     return {"logic": "AND", "groups": [{"logic": "AND", "conditions": [NOT_DELETED, *dstep.sql]}]}
 
 
-def _child(table: str, select: Sequence[str], dstep: DomainStep, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+def child_spec(table: str, select: Sequence[str], dstep: DomainStep, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """子表取数（INNER JOIN 主表、带主表的条件）。公开给润色按编号取参考内容用（润色设计 §7.2）。"""
     flt = _main_filter(dstep)
     if extra is not None:
         flt["groups"].append(extra)
@@ -448,17 +449,17 @@ def specs(dstep: DomainStep) -> dict[str, tuple[dict[str, Any], str | None]]:
     """第一轮的取数（主表与子表，都带主表条件）：名字 → (spec, 翻页主键)。"""
     out: dict[str, tuple[dict[str, Any], str | None]] = {
         "cn_main": (main_spec(dstep), "m.ID"),
-        "cn_models": (_child(MODELS, ("ID", "ProblemId", "ProductName", "Series"), dstep), "c.ID"),
+        "cn_models": (child_spec(MODELS, ("ID", "ProblemId", "ProductName", "Series"), dstep), "c.ID"),
     }
     if "steps" in dstep.needs:
         wanted = {"logic": "OR", "conditions": [cond("c.Step", "IN", list(enums.CN_STEPS_NEEDED)),
                                                 cond("c.StepStr", "EQ", enums.CN_STEP_RECLASSIFY)]}
-        out["cn_steps"] = (_child(STEPS, ("ID", "ProblemId", "Step", "StepStr", "Result", "AddUser", "AddDate"),
+        out["cn_steps"] = (child_spec(STEPS, ("ID", "ProblemId", "Step", "StepStr", "Result", "AddUser", "AddDate"),
                                   dstep, wanted), "c.ID")
     if "state" in dstep.needs:
-        out["cn_risk"] = (_child(RISK, ("ID", "ProblemId", "Step", "Status", "UserID"), dstep), "c.ID")
+        out["cn_risk"] = (child_spec(RISK, ("ID", "ProblemId", "Step", "Status", "UserID"), dstep), "c.ID")
     if "orders" in dstep.needs:
-        out["cn_orders"] = (_child(ORDERS, ("ID", "ProblemId", "PartNumber", "PartName"), dstep), "c.ID")
+        out["cn_orders"] = (child_spec(ORDERS, ("ID", "ProblemId", "PartNumber", "PartName"), dstep), "c.ID")
     return out
 
 
@@ -572,7 +573,7 @@ async def detail_fetch(ctx: Any, dstep: DomainStep, master: MasterData, *, car: 
     人员；有 CAR 报告权限、物料问题且 CAR 报告 ID 有值时才读 CAR 报告（`privileges.md`「CAR 报告」）。"""
     first: dict[str, Any] = {"cn_main": base.fetch(ctx, {**main_spec(dstep), "select": [f"m.{c}" for c in DETAIL_COLUMNS]})}
     for name, (table, select) in _DETAIL_CHILDREN.items():
-        first[name] = base.fetch_all(ctx, _child(table, select, dstep), "c.ID")
+        first[name] = base.fetch_all(ctx, child_spec(table, select, dstep), "c.ID")
     frames = dict(zip(first, await asyncio.gather(*first.values()), strict=True))
     main, steps, checks = frames["cn_main"], frames["cn_steps"], frames["cn_check"]
     second: dict[str, Any] = {
@@ -634,11 +635,11 @@ async def lookup_fetch(ctx: Any, lookups: Sequence[Any], master: MasterData) -> 
     order_conds += [cond("c.PartNumber", "IN", by["pn_code"])] if by.get("pn_code") else []
     order_conds += [cond("c.PartName", "IN", by["pn_name"])] if by.get("pn_name") else []
     if order_conds:
-        tasks["cn_hit_orders"] = base.fetch_all(ctx, _child(ORDERS, ("ID", "ProblemId", "OrderNumber", "PartNumber",
+        tasks["cn_hit_orders"] = base.fetch_all(ctx, child_spec(ORDERS, ("ID", "ProblemId", "OrderNumber", "PartNumber",
                                                                      "PartName", "OrderQty"), DomainStep(domain=DOMAIN),
                                                             _any_of(order_conds)), "c.ID")
     if by.get("xb_order"):
-        tasks["cn_hit_xb"] = base.fetch_all(ctx, _child(XB, ("ID", "ProblemId", "OrderNumber", "InvCode", "InvStd", "Qty"),
+        tasks["cn_hit_xb"] = base.fetch_all(ctx, child_spec(XB, ("ID", "ProblemId", "OrderNumber", "InvCode", "InvStd", "Qty"),
                                                         DomainStep(domain=DOMAIN),
                                                         _any_of([cond("c.OrderNumber", "IN", by["xb_order"])])), "c.ID")
     frames |= dict(zip(tasks, await asyncio.gather(*tasks.values()), strict=True))
