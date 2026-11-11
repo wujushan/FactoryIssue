@@ -3,7 +3,7 @@
 设计稿（决策 2026-11-09「AI 润色技术设计」）有几个数要靠实测定：原文长度上限、单次超时、`max_tokens` 系数，以及程序检查的门槛能不能达到。本工具用内网本地模型服务，把合成样例照线上的请求跑一遍，量检查通过率与耗时。结果回填设计稿 §4、§10、§12.3。
 
 - **不是模块代码**：`src/` 不引用它，不随 wheel 发布。
-- **做法 A**（开发者 2026-11-09 同意）：润色的规则读取、参数、富文本拆拼、提示与程序检查暂放在 `polish_core.py`，G4b 移进 `src/factory_issue_module/polish/`，本工具改成转接，规则只留一份。两边不一致时以设计稿为准。G4b P1 起规则读取已改取 `src` 的 `config/polish_rules.py`（内置默认，经上传校验同一个解析函数）。
+- **做法 A**（开发者 2026-11-09 同意）：润色的规则读取、参数、富文本拆拼、提示与程序检查暂放在 `polish_core.py`，G4b 移进 `src/factory_issue_module/polish/`，本工具改成转接，规则只留一份。两边不一致时以设计稿为准。G4b P1 起规则读取已改取 `src` 的 `config/polish_rules.py`（内置默认，经上传校验同一个解析函数）；P2 起参数、富文本拆拼与判空判长、程序检查改取 `src` 的 `polish/params.py`、`polish/rich.py`、`polish/check.py`。
 - **不连库，不用真实业务数据**。发给模型的只有：
   - 由 `docs/2_landed/domestic/ai_polish.md` 生成的提示（栏目名称与说明）；
   - `docs/testcases/polish/cases.json` 的合成样例（p2 共 34 条：27 条调模型，7 条不调模型就该报错）；
