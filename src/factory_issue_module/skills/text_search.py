@@ -459,6 +459,21 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
     out.truncated = any(s.get("truncated") for s in segs)
     out.refs = {f"{run.sid}.{k}": v for k, v in (res.get("refs") or {}).items()}
     out.refs[f"{run.sid}.issues"] = X.issues_from_frames(outcome_frames)
+    out.digest["focus"] = list((res.get("insights") or {}).get("focus") or [])
+    out.digest["analysis_stats"] = [
+        {key: seg.get(key) for key in ("domain", "found", "facts") if key in seg}
+        for seg in segs if isinstance(seg, Mapping)
+    ]
+    selected_ids: dict[str, list[int]] = {}
+    for seg in segs:
+        if not isinstance(seg, Mapping):
+            continue
+        ids = list(seg.get("ids_shown") or [])
+        if tp.mode != "类似问题":
+            direct_count = int(seg.get("shown_g1") or 0) + int(seg.get("shown_g2") or 0)
+            ids = ids[:direct_count]
+        selected_ids[str(seg.get("domain") or "")] = [int(x) for x in ids]
+    out.digest["analysis_issues"] = selected_ids
     out.extra = {"text": {"key": terms.key(run.step), "terms": list(dict.fromkeys(tp.used + tp.used_approach)),
                           "judged": tp.semantic is not None}}
     if not present:

@@ -428,6 +428,12 @@ async def run_step(run: Any, T: Any, refs: Mapping[str, Any], C: cal.Caliber, no
         else:
             out.ok = bool(out.refs)  # 重放：张数与结果单照比，图没有
         return out
+    out.digest["focus"] = list((res.get("insights") or {}).get("focus") or [])
+    out.digest["analysis_stats"] = {
+        "计入单数": total,
+        "各域单数": dict(res.get("found") or {}),
+        "临时统计结果": {key: result.get(key) for key in ("columns", "rows") if key in result},
+    }
     out.extra["custom"] = {"describe": describe, "script": code}
     ds = [d.label for d in executed]
     for text in _caliber_items(code, ds, res.get("caliber") or {}):

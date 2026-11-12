@@ -78,7 +78,7 @@ from factory_issue_module.present import (
 from factory_issue_module.skills import aggregate, custom_stats, issue_detail, list_issues, lookup_numbers, text_search
 from factory_issue_module.stats import runner
 from factory_issue_module.text import terms as text_terms
-from factory_issue_module.turn import errors, greeting, workspace
+from factory_issue_module.turn import deep_analysis as record_analysis, errors, greeting, workspace
 from factory_issue_module.turn.gate import DomainAccess
 
 logger = structlog.get_logger(__name__)
@@ -890,7 +890,8 @@ async def run_step(run: StepRun, T: Turn, refs: Mapping[str, Any], C: cal.Calibe
     out.limited = any(s.get("limited") for s in segs)
     out.found_total = int(res.get("found_total") or 0)
     out.digest = {"segs": [{k: s.get(k) for k in ("domain", "kind", "title", "name", "found", "empty", "facts")}
-                           for s in segs]}
+                           for s in segs],
+                  "focus": list((res.get("insights") or {}).get("focus") or [])}
     out.refs = {f"{run.sid}.{k}": v for k, v in (res.get("refs") or {}).items()}
     out.refs[f"{run.sid}.issues"] = issues_from_frames(getattr(outcome, "frames", None) or {})
     all_dims = [d for dims in dims_by.values() for d in dims]
@@ -1679,6 +1680,8 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     由编排写 `pending_clarify` 并发 `clarify`。"""
     C = cal.Caliber()
     refs: dict[str, Any] = {}
+    analysis_request = record_analysis.present_deep.requested(T.query)
+    analysis_candidate: tuple[StepRun, StepOut] | None = None
     for r in runs:  # 递进筛选：上一轮那次按号查单、文字查找直接用存下的单 ID，不单独成段
         if r.stored is not None:
             stored = stored_out(r)
@@ -1760,6 +1763,9 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
             for ev in spaced(out.events):
                 yield ev
             return
+        if analysis_request.active and out.ok and r.skill in record_analysis.ANALYZABLE_SKILLS:
+            # 只分析本轮最后一个成功执行的可分析步骤；失败步骤不覆盖已有结果，也不读取上轮暂存记录。
+            analysis_candidate = (r, out)
         if not relaxed and can_relax(r, out):  # 结果为空：只放宽一个条件、预查张数，说一句卡在哪（§5.4）
             relaxed = True
             tried = await _relax_neighbors(r, T)
@@ -1808,6 +1814,10 @@ async def run(plan: dict, runs: Sequence[StepRun], T: Turn) -> AsyncIterator[Eve
     tail = ([Event.delta(layout.foot(C.text()))] if C.counted else []) + [Event.delta(t) for t in T.record.exports]
     for ev in spaced(tail):
         yield ev
+    if analysis_request.active and analysis_candidate is not None:
+        analysis_events = await record_analysis.events_for(T, *analysis_candidate, analysis_request)
+        for ev in spaced(analysis_events):
+            yield ev
     # 有结果、只说「最近」：另给两个时间范围；结果为空时的放宽走接着问（上面的 `_relax_neighbors`）
     widened = _recent_buttons(runs, T) if any_found and not any_empty else []
     if no_conditions:  # 不带任何条件的清单：不给接着问，给能力介绍的 3 个按钮（§9.4）
